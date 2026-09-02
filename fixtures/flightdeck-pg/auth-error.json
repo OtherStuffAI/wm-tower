@@ -1,0 +1,48 @@
+{
+  "contract_name": "flightdeck_pg.auth_error",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/me",
+  "method": "GET",
+  "required_nip98_actor": "missing_or_invalid_nip98",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": [],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "headers": {
+      "Authorization": "missing, malformed, expired, or wrong-method NIP-98 event"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["error", "code", "status", "identity"],
+    "properties": {
+      "error": "human-readable auth failure",
+      "code": "nip98_missing | nip98_invalid | nip98_expired | nip98_url_mismatch | nip98_method_mismatch",
+      "status": 401,
+      "identity": "FlightDeckPgIdentityFields"
+    }
+  },
+  "example": {
+    "request": {
+      "headers": {}
+    },
+    "response": {
+      "error": "NIP-98 Authorization header is required",
+      "code": "nip98_missing",
+      "status": 401,
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      }
+    }
+  }
+}

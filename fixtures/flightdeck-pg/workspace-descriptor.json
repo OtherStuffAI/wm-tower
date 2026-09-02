@@ -1,0 +1,55 @@
+{
+  "contract_name": "flightdeck_pg.workspace_descriptor",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor",
+  "method": "GET",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["workspace.read"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": null,
+  "response_shape": {
+    "type": "object",
+    "required": ["type", "version", "identity", "label", "description", "metadata", "capabilities", "links", "created_at"],
+    "properties": {
+      "type": "wingman_workspace_locator",
+      "identity": "FlightDeckPgIdentityFields",
+      "metadata": "workspace-level Flight Deck metadata such as shared Autopilot launch settings",
+      "capabilities": "typed backend capability flags",
+      "links": "route templates for the workspace"
+    }
+  },
+  "example": {
+    "request": null,
+    "response": {
+      "type": "wingman_workspace_locator",
+      "version": 1,
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "label": "Other Stuff",
+      "description": "Other Stuff Flight Deck workspace",
+      "metadata": {
+        "wingman_harness_url": "https://agent.example.invalid",
+        "wingman_harness_agent_npub": "npub1pu8mngjy45c6x60wq2m6h7amp0arsy4e5w0djv6x6q7k04qj69mszac3f7"
+      },
+      "capabilities": ["pg_scopes", "pg_channels", "pg_channel_grants", "pg_tasks", "pg_chat", "realtime_events"],
+      "relays": ["wss://relay.example.com"],
+      "links": {
+        "me": "/api/v4/flightdeck-pg/workspaces/11111111-1111-4111-8111-111111111111/me",
+        "scopes": "/api/v4/flightdeck-pg/workspaces/11111111-1111-4111-8111-111111111111/scopes"
+      },
+      "created_at": "2026-06-02T12:00:00.000Z"
+    }
+  }
+}

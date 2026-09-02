@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sql.gz
+*.dump
+*.backup
+data/
+
+# Build output
+dist/
+out/
+
+# Bun
+.bun/
+
+# Temporary files
+tmp/
+docs/handoffs/
+.public-source-denylist
+*.tmp
+*.log
+logs/
+*.pid
+*.pid.lock
+.runtime/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+.mcp.json
+**/.mcp.json
+ecosystem.config.cjs
+ecosystem.config.js
+*.pm2.json
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/

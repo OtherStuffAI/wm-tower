@@ -1,0 +1,52 @@
+{
+  "contract_name": "flightdeck_pg.permission_denied",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/grants",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["channel.grants.manage"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": ["principal_type", "principal_id", "access_level"]
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["error", "code", "status", "required_permission", "identity"],
+    "properties": {
+      "error": "human-readable authorization failure",
+      "code": "permission_denied",
+      "status": 403,
+      "required_permission": "permission the actor lacks",
+      "identity": "FlightDeckPgIdentityFields"
+    }
+  },
+  "example": {
+    "request": {
+      "principal_type": "group",
+      "principal_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "access_level": "view"
+    },
+    "response": {
+      "error": "Actor does not have permission to manage channel grants",
+      "code": "permission_denied",
+      "status": 403,
+      "required_permission": "channel.grants.manage",
+      "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89",
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented non-secret deployment placeholders"
+regexTarget = "match"
+regexes = ['''GIT_OIDC_SIGNING_KEY=REPLACE_WITH_PKCS8_RSA_PRIVATE_KEY_PEM''']
+
+[[rules]]
+id = "nostr-nsec"
+description = "Nostr bech32 private key"
+regex = '''\bnsec1[023456789acdefghjklmnpqrstuvwxyz]{20,}\b'''
+keywords = ["nsec1"]

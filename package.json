@@ -1,0 +1,38 @@
+{
+  "name": "coworker-superbased-be",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; export PORT=\"${COWORKER_BE_PORT:-3100}\"; bun run --watch src/index.ts'",
+    "start": "sh -c 'set -a; [ -f .env ] && . ./.env; set +a; export PORT=\"${COWORKER_BE_PORT:-3100}\"; bun run src/index.ts'",
+    "test": "bun test",
+    "privacy:check": "sh scripts/check-public-source.sh",
+    "backup": "bash scripts/tower-backup.sh backup",
+    "backup:verify": "bash scripts/tower-backup.sh verify",
+    "backup:restore-disposable": "bash scripts/tower-backup.sh restore",
+    "db:init": "bun run src/schema/run-migrations.ts",
+    "graph:init": "bun run src/graph/run-migrations.ts",
+    "flightdeck-pg:setup": "bun run src/scripts/setup-flightdeck-pg-workspace.ts",
+    "flightdeck-pg:smoke": "DB_USER=postgres DB_PASSWORD=postgres bun test tests/flightdeck-pg-smoke.test.ts",
+    "billing:audit": "bun run src/billing-audit.ts",
+    "db:migrate-plaintext": "bun run src/schema/migrate-plaintext-records.ts",
+    "db:replay-v3-open-tasks": "bun run src/schema/replay-v3-open-tasks.ts",
+    "db:cleanup-wapp-activity": "bun run src/schema/cleanup-wapp-activity.ts",
+    "git:gateway": "bun run src/git-gateway.ts",
+    "git:issues": "bun run src/forgejo/issue-broker.ts",
+    "git:reconcile": "bun run src/forgejo/reconcile.ts",
+    "git:reconcile-organizations": "bun run src/forgejo/reconcile-organizations.ts",
+    "git:reconcile-identities": "bun run src/forgejo/reconcile-identities.ts"
+  },
+  "dependencies": {
+    "hono": "^4.7.0",
+    "nostr-tools": "^2.17.0",
+    "postgres": "^3.4.5",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/web-push": "^3.6.4",
+    "typescript": "^5.7.0"
+  }
+}

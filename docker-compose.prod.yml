@@ -1,0 +1,372 @@
+name: ${COMPOSE_PROJECT_NAME:-wingman-tower}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wingman-tower-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-coworker_v4}
+      POSTGRES_USER: ${DB_USER:?set DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    volumes:
+      - tower-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:?set DB_USER} -d ${DB_NAME:-coworker_v4}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  graph-postgres:
+    image: apache/age:release_PG16_1.6.0
+    container_name: wingman-tower-graph-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${GRAPH_DB_NAME:-tower_graph}
+      POSTGRES_USER: ${GRAPH_DB_ADMIN_USER:?set GRAPH_DB_ADMIN_USER}
+      POSTGRES_PASSWORD: ${GRAPH_DB_ADMIN_PASSWORD:?set GRAPH_DB_ADMIN_PASSWORD}
+    volumes:
+      - tower-graph-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GRAPH_DB_ADMIN_USER:?set GRAPH_DB_ADMIN_USER} -d ${GRAPH_DB_NAME:-tower_graph}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: wingman-tower-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_S3_ACCESS_KEY:?set STORAGE_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${STORAGE_S3_SECRET_KEY:?set STORAGE_S3_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_HOST_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_HOST_PORT:-9000}:9000"
+      - "${MINIO_HOST_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - tower-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: wingman-tower-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $$STORAGE_S3_ACCESS_KEY $$STORAGE_S3_SECRET_KEY; do
+        echo 'waiting for minio...';
+        sleep 2;
+      done &&
+      mc mb -p local/$$STORAGE_S3_BUCKET || true &&
+      mc anonymous set none local/$$STORAGE_S3_BUCKET || true
+      "
+    environment:
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:?set STORAGE_S3_ACCESS_KEY}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:?set STORAGE_S3_SECRET_KEY}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-superbased-storage}
+
+  tower:
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    container_name: wingman-tower-b3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      graph-postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      git-issue-broker:
+        condition: service_healthy
+    env_file:
+      - ${TOWER_ENV_FILE:-.env.prod}
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-coworker_v4}
+      DB_USER: ${DB_USER:?set DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-10}
+      GRAPH_ENABLED: ${GRAPH_ENABLED:-false}
+      GRAPH_DB_HOST: ${GRAPH_DB_HOST:-graph-postgres}
+      GRAPH_DB_PORT: ${GRAPH_DB_PORT:-5432}
+      GRAPH_DB_NAME: ${GRAPH_DB_NAME:-tower_graph}
+      GRAPH_DB_ADMIN_USER: ${GRAPH_DB_ADMIN_USER:?set GRAPH_DB_ADMIN_USER}
+      GRAPH_DB_ADMIN_PASSWORD: ${GRAPH_DB_ADMIN_PASSWORD:?set GRAPH_DB_ADMIN_PASSWORD}
+      GRAPH_DB_APP_USER: ${GRAPH_DB_APP_USER:?set GRAPH_DB_APP_USER}
+      GRAPH_DB_APP_PASSWORD: ${GRAPH_DB_APP_PASSWORD:?set GRAPH_DB_APP_PASSWORD}
+      GRAPH_DB_MAX_CONNECTIONS: ${GRAPH_DB_MAX_CONNECTIONS:-10}
+      GRAPH_AGE_GRAPH_NAME: ${GRAPH_AGE_GRAPH_NAME:-tower_memory}
+      GRAPH_ALLOWED_NPUBS: ${GRAPH_ALLOWED_NPUBS:-}
+      PORT: ${TOWER_PORT:-3100}
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-http://minio:9000}
+      STORAGE_S3_ENDPOINT_PUBLIC: ${STORAGE_S3_ENDPOINT_PUBLIC:-http://127.0.0.1:9000}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:?set STORAGE_S3_ACCESS_KEY}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:?set STORAGE_S3_SECRET_KEY}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-superbased-storage}
+      STORAGE_S3_FORCE_PATH_STYLE: ${STORAGE_S3_FORCE_PATH_STYLE:-true}
+      STORAGE_PRESIGN_UPLOAD_TTL_SECONDS: ${STORAGE_PRESIGN_UPLOAD_TTL_SECONDS:-900}
+      STORAGE_PRESIGN_DOWNLOAD_TTL_SECONDS: ${STORAGE_PRESIGN_DOWNLOAD_TTL_SECONDS:-900}
+      SUPERBASED_DIRECT_HTTPS_URL: ${SUPERBASED_DIRECT_HTTPS_URL:?set SUPERBASED_DIRECT_HTTPS_URL}
+      ADMIN_NPUB: ${ADMIN_NPUB:?set ADMIN_NPUB}
+      FLIGHT_DECK_PG_APP_NPUB: ${FLIGHT_DECK_PG_APP_NPUB:?set FLIGHT_DECK_PG_APP_NPUB}
+      SUPERBASED_SERVICE_NSEC: ${SUPERBASED_SERVICE_NSEC:?set SUPERBASED_SERVICE_NSEC}
+      SUPERBASED_SERVICE_PUBKEY_HEX: ${SUPERBASED_SERVICE_PUBKEY_HEX:-}
+      SUPERBASED_SERVICE_NPUB: ${SUPERBASED_SERVICE_NPUB:-}
+      GIT_CAPABILITY_HASH_KEY: ${GIT_CAPABILITY_HASH_KEY:-}
+      GIT_CAPABILITY_HASH_KEY_FILE: ${GIT_CAPABILITY_HASH_KEY_FILE:-/run/tower-git-secrets/git-capability-hash-key}
+      GIT_INTERNAL_SERVICE_TOKEN: ${GIT_INTERNAL_SERVICE_TOKEN:-}
+      GIT_INTERNAL_SERVICE_TOKEN_FILE: ${GIT_INTERNAL_SERVICE_TOKEN_FILE:-/run/tower-git-secrets/git-internal-service-token}
+      GIT_SERVICE_AUDIENCE: ${GIT_SERVICE_AUDIENCE:-}
+      GIT_CAPABILITY_TTL_SECONDS: ${GIT_CAPABILITY_TTL_SECONDS:-300}
+      GIT_FORGEJO_BASE_URL: ${GIT_FORGEJO_BASE_URL:-}
+      # The provider control token is intentionally never mounted into Tower.
+      GIT_FORGEJO_CONTROL_TOKEN: ""
+      GIT_FORGEJO_CONTROL_TOKEN_FILE: ""
+      GIT_FORGEJO_WEBHOOK_SECRET: ${GIT_FORGEJO_WEBHOOK_SECRET:-}
+      GIT_FORGEJO_WEBHOOK_SECRET_FILE: ${GIT_FORGEJO_WEBHOOK_SECRET_FILE:-/run/tower-git-secrets/git-forgejo-webhook-secret}
+      GIT_FORGEJO_WEBHOOK_URL: ${GIT_FORGEJO_WEBHOOK_URL:-}
+      GIT_ISSUE_BROKER_URL: ${GIT_ISSUE_BROKER_URL:-http://git-issue-broker:3190}
+      GIT_ISSUE_BROKER_TOKEN: ""
+      GIT_ISSUE_BROKER_TOKEN_FILE: ${GIT_ISSUE_BROKER_TOKEN_FILE:-/run/tower-git-secrets/git-issue-broker-token}
+      GIT_GATEWAY_TOWER_URL: ${GIT_GATEWAY_TOWER_URL:-}
+      GIT_GATEWAY_FIXED_USERNAME: ${GIT_GATEWAY_FIXED_USERNAME:-nostr}
+      GIT_GATEWAY_PORT: ${GIT_GATEWAY_PORT:-3180}
+      GIT_OIDC_ISSUER: ${GIT_OIDC_ISSUER:-}
+      GIT_OIDC_CLIENT_ID: ${GIT_OIDC_CLIENT_ID:-forgejo}
+      GIT_OIDC_CLIENT_SECRET: ""
+      GIT_OIDC_CLIENT_SECRET_FILE: /run/tower-git-secrets/git-oidc-client-secret
+      GIT_OIDC_SIGNING_KEY: ""
+      GIT_OIDC_SIGNING_KEY_FILE: /run/tower-git-secrets/git-oidc-signing-key.pem
+      GIT_OIDC_REDIRECT_URI: ${GIT_OIDC_REDIRECT_URI:-}
+      DB_WAIT_MAX_ATTEMPTS: ${DB_WAIT_MAX_ATTEMPTS:-40}
+    ports:
+      - "${TOWER_HOST_BIND_ADDRESS:-127.0.0.1}:${TOWER_HOST_PORT:-3100}:3100"
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-capability-hash-key:/run/tower-git-secrets/git-capability-hash-key:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-forgejo-webhook-secret:/run/tower-git-secrets/git-forgejo-webhook-secret:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-issue-broker-token:/run/tower-git-secrets/git-issue-broker-token:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-oidc-client-secret:/run/tower-git-secrets/git-oidc-client-secret:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-oidc-signing-key.pem:/run/tower-git-secrets/git-oidc-signing-key.pem:ro
+    networks:
+      default:
+      git-private:
+        ipv4_address: 10.253.91.30
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:3100/health');process.exit(r.ok?0:1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.3-rootless
+    container_name: wingman-tower-forgejo
+    restart: unless-stopped
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__ROOT_URL: ${GIT_GATEWAY_BROWSER_ORIGIN:-https://forgejo.otherstuff.studio}/
+      FORGEJO__server__HTTP_ADDR: 0.0.0.0
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES: 10.253.91.20/32,10.253.91.40/32,10.253.91.60/32
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_INTERNAL_SIGNIN: "false"
+      FORGEJO__service__ENABLE_BASIC_AUTHENTICATION: "false"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION_API: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION: "false"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_FULL_NAME: "true"
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      FORGEJO__oauth2_client__USERNAME: preferred_username
+      # Use auto only as a short migration window for existing proxy-auth users,
+      # then return to the fail-closed default.
+      FORGEJO__oauth2_client__ACCOUNT_LINKING: ${GIT_FORGEJO_OIDC_ACCOUNT_LINKING:-disabled}
+      FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES: profile email
+      FORGEJO__ui__DEFAULT_SHOW_FULL_NAME: "true"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "false"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_ORG: "false"
+      FORGEJO__security__DISABLE_GIT_HOOKS: "true"
+      FORGEJO__actions__ENABLED: "false"
+      FORGEJO__webhook__ALLOWED_HOST_LIST: private
+    volumes:
+      - tower-forgejo-data:/var/lib/gitea
+      - tower-forgejo-config:/etc/gitea
+    networks:
+      git-private:
+        ipv4_address: 10.253.91.10
+      oidc-egress:
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  git-gateway:
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    container_name: wingman-tower-git-gateway
+    restart: unless-stopped
+    command: ["bun", "run", "git:gateway"]
+    depends_on:
+      tower:
+        condition: service_healthy
+      forgejo:
+        condition: service_healthy
+    environment:
+      GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
+      GIT_SERVICE_AUDIENCE: ${GIT_SERVICE_AUDIENCE:-wingman-git}
+      GIT_FORGEJO_BASE_URL: http://forgejo:3000
+      GIT_GATEWAY_TOWER_URL: http://tower:3100
+      GIT_GATEWAY_FIXED_USERNAME: ${GIT_GATEWAY_FIXED_USERNAME:-nostr}
+      GIT_GATEWAY_BROWSER_ORIGIN: ${GIT_GATEWAY_BROWSER_ORIGIN:?set GIT_GATEWAY_BROWSER_ORIGIN}
+      GIT_GATEWAY_PORT: 3180
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
+    networks:
+      default:
+      git-private:
+        ipv4_address: 10.253.91.20
+    ports:
+      - "${GIT_GATEWAY_HOST_BIND_ADDRESS:-127.0.0.1}:${GIT_GATEWAY_HOST_PORT:-3180}:3180"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:3180/ready');process.exit(r.ok?0:1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  git-issue-broker:
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    container_name: wingman-tower-git-issue-broker
+    restart: unless-stopped
+    command: ["bun", "run", "git:issues"]
+    depends_on:
+      forgejo:
+        condition: service_healthy
+    environment:
+      GIT_FORGEJO_BASE_URL: http://forgejo:3000
+      GIT_ISSUE_BROKER_PORT: 3190
+      GIT_ISSUE_BROKER_TOKEN_FILE: /run/tower-git-secrets/git-issue-broker-token
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-issue-broker-token:/run/tower-git-secrets/git-issue-broker-token:ro
+    networks:
+      git-private:
+        ipv4_address: 10.253.91.60
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:3190/health');process.exit(r.ok?0:1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  git-reconciler:
+    profiles: ["tools"]
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    depends_on:
+      tower:
+        condition: service_healthy
+      forgejo:
+        condition: service_healthy
+    environment:
+      GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
+      GIT_FORGEJO_CONTROL_TOKEN_FILE: /run/tower-git-secrets/forgejo-control-token
+      GIT_FORGEJO_WEBHOOK_SECRET_FILE: /run/tower-git-secrets/git-forgejo-webhook-secret
+      GIT_FORGEJO_BASE_URL: http://forgejo:3000
+      GIT_FORGEJO_WEBHOOK_URL: http://tower:3100/api/v4/git/forgejo/webhooks
+      GIT_GATEWAY_TOWER_URL: http://tower:3100
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-forgejo-webhook-secret:/run/tower-git-secrets/git-forgejo-webhook-secret:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/forgejo-control-token:/run/tower-git-secrets/forgejo-control-token:ro
+    networks:
+      default:
+      git-private:
+        ipv4_address: 10.253.91.40
+    entrypoint: ["bun", "run", "src/forgejo/reconcile.ts"]
+
+  git-identity-reconciler:
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    container_name: wingman-tower-git-identity-reconciler
+    restart: unless-stopped
+    command: ["bun", "run", "git:reconcile-identities"]
+    depends_on:
+      tower:
+        condition: service_healthy
+      forgejo:
+        condition: service_healthy
+    environment:
+      GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
+      GIT_FORGEJO_IDENTITY_TOKEN_FILE: /run/tower-git-secrets/forgejo-identity-token
+      GIT_FORGEJO_BASE_URL: http://forgejo:3000
+      GIT_GATEWAY_TOWER_URL: http://tower:3100
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/forgejo-identity-token:/run/tower-git-secrets/forgejo-identity-token:ro
+    networks:
+      default:
+      git-private:
+        ipv4_address: 10.253.91.50
+
+  git-org-reconciler:
+    build:
+      context: .
+      args:
+        BUN_IMAGE: ${TOWER_BUN_IMAGE:-oven/bun:1.2.23}
+    container_name: wingman-tower-git-org-reconciler
+    restart: unless-stopped
+    command: ["bun", "run", "git:reconcile-organizations"]
+    depends_on:
+      tower:
+        condition: service_healthy
+      forgejo:
+        condition: service_healthy
+    environment:
+      GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
+      GIT_FORGEJO_CONTROL_TOKEN_FILE: /run/tower-git-secrets/forgejo-control-token
+      GIT_FORGEJO_BASE_URL: http://forgejo:3000
+      GIT_GATEWAY_TOWER_URL: http://tower:3100
+    volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/forgejo-control-token:/run/tower-git-secrets/forgejo-control-token:ro
+    networks:
+      default:
+      git-private:
+        ipv4_address: 10.253.91.70
+
+networks:
+  git-private:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.253.91.0/24
+  oidc-egress:
+
+volumes:
+  tower-postgres-data:
+  tower-graph-postgres-data:
+  tower-minio-data:
+  tower-forgejo-data:
+  tower-forgejo-config:

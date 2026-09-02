@@ -1,0 +1,121 @@
+{
+  "contract_name": "flightdeck_pg.channel_audio_notes.create",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/audio-notes",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["audio_note.write", "channel.write"],
+  "stable_identity_fields": ["tower_service_npub", "workspace_service_npub", "workspace_owner_npub", "workspace_id", "app_npub"],
+  "request_shape": {
+    "type": "object",
+    "required": ["storage_object_id", "mime_type"],
+    "properties": {
+      "storage_object_id": "existing Tower v4 storage object UUID",
+      "mime_type": "audio MIME type",
+      "target_type": "optional typed PG target",
+      "target_id": "optional typed PG target UUID",
+      "thread_id": "optional thread UUID; inferred from threaded targets when omitted",
+      "media_encryption": "optional audio encryption metadata object",
+      "waveform_preview": "optional waveform preview array",
+      "transcript_status": "optional transcript lifecycle state",
+      "transcript_preview": "optional transcript preview text",
+      "summary": "optional audio summary text",
+      "metadata": "optional client metadata object",
+      "record_state": "active or archived"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "audio_note", "storage_link", "audit", "outbox"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "audio_note": "created canonical audio note metadata row",
+      "storage_link": "Tower storage link metadata only",
+      "audit": "write audit metadata",
+      "outbox": "audio note event cursor row"
+    }
+  },
+  "example": {
+    "request": {
+      "title": "Daily standup audio",
+      "storage_object_id": "88888888-8888-4888-8888-888888888888",
+      "target_type": "message",
+      "target_id": "44444444-4444-4444-8444-444444444444",
+      "thread_id": "55555555-5555-4555-8555-555555555555",
+      "mime_type": "audio/webm;codecs=opus",
+      "duration_seconds": 8.5,
+      "size_bytes": 1536,
+      "media_encryption": {
+        "algorithm": "xchacha20poly1305",
+        "key_id": "audio-key-1"
+      },
+      "waveform_preview": [0, 0.25, 0.5, 0.25, 0],
+      "transcript_status": "pending",
+      "transcript_preview": "Daily standup",
+      "summary": "Short standup note",
+      "metadata": {
+        "source": "test"
+      },
+      "record_state": "active"
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "audio_note": {
+        "id": "12121212-1212-4121-8121-121212121212",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "33333333-3333-4333-8333-333333333333",
+        "channel_id": "66666666-6666-4666-8666-666666666666",
+        "thread_id": "55555555-5555-4555-8555-555555555555",
+        "storage_object_id": "88888888-8888-4888-8888-888888888888",
+        "target_type": "message",
+        "target_id": "44444444-4444-4444-8444-444444444444",
+        "title": "Daily standup audio",
+        "mime_type": "audio/webm;codecs=opus",
+        "duration_seconds": 8.5,
+        "size_bytes": 1536,
+        "media_encryption": {
+          "algorithm": "xchacha20poly1305",
+          "key_id": "audio-key-1"
+        },
+        "waveform_preview": [0, 0.25, 0.5, 0.25, 0],
+        "transcript_status": "pending",
+        "transcript_preview": "Daily standup",
+        "transcript": null,
+        "summary": "Short standup note",
+        "metadata": {
+          "source": "test"
+        },
+        "record_state": "active",
+        "row_version": 1,
+        "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "created_at": "2026-06-03T01:00:00.000Z",
+        "updated_at": "2026-06-03T01:00:00.000Z",
+        "media": {
+          "object_id": "88888888-8888-4888-8888-888888888888",
+          "route": "/api/v4/flightdeck-pg/workspaces/11111111-1111-4111-8111-111111111111/audio-notes/12121212-1212-4121-8121-121212121212/media"
+        }
+      },
+      "storage_link": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "storage_object_id": "88888888-8888-4888-8888-888888888888"
+      },
+      "audit": {
+        "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "operation": "audio_note.create",
+        "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89"
+      },
+      "outbox": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "row_version": 20
+      }
+    }
+  }
+}

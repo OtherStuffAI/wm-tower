@@ -1,0 +1,113 @@
+{
+  "contract_name": "flightdeck_pg.channel_messages.create",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/messages",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["channel.write"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": ["body"],
+    "properties": {
+      "body": "string; may be empty only for an attachment-only message",
+      "thread_id": "optional same-channel thread UUID",
+      "create_thread": "optional boolean; when true, response also includes thread",
+      "thread_title": "optional title when create_thread is true",
+      "client_request_id": "optional caller-scoped idempotency key",
+      "mentions": "optional typed alias for metadata.mentions",
+      "metadata": "optional object; metadata.mentions accepts structured agent mentions",
+      "message_signature": "validated instruction signature; metadata provenance cannot override authorship"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "message", "created", "replayed"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "message": "created canonical message row",
+      "thread": "created canonical thread row when create_thread is true",
+      "audit": "write audit metadata",
+      "outbox": "message event cursor row for visible channel readers",
+      "thread_outbox": "thread event cursor row when create_thread is true"
+      ,"created": "true for a new write and false for a replay"
+      ,"replayed": "true only when an existing idempotent write is returned"
+    }
+  },
+  "example": {
+    "request": {
+      "body": "Let's ship PH4-1A today.",
+      "create_thread": true,
+      "thread_title": "Daily plan",
+      "client_request_id": "agentdirect:routing-key:turn-1",
+      "metadata": {
+        "client_id": "local-draft-1"
+      }
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "message": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "33333333-3333-4333-8333-333333333333",
+        "channel_id": "66666666-6666-4666-8666-666666666666",
+        "thread_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "body": "Let's ship PH4-1A today.",
+        "client_request_id": "agentdirect:routing-key:turn-1",
+        "mentions": [],
+        "attachments": [],
+        "metadata": {
+          "client_id": "local-draft-1"
+        },
+        "row_version": 1,
+        "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "created_at": "2026-06-03T01:00:00.000Z",
+        "updated_at": "2026-06-03T01:00:00.000Z"
+      },
+      "thread": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "33333333-3333-4333-8333-333333333333",
+        "channel_id": "66666666-6666-4666-8666-666666666666",
+        "source_message_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "title": "Daily plan",
+        "latest": "Let's ship PH4-1A today.",
+        "metadata": {},
+        "row_version": 2,
+        "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "created_at": "2026-06-03T01:00:00.000Z",
+        "updated_at": "2026-06-03T01:00:00.000Z"
+      },
+      "audit": {
+        "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "operation": "message.create",
+        "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89"
+      },
+      "outbox": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "row_version": 12
+      },
+      "thread_outbox": {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "row_version": 13
+      },
+      "created": true,
+      "replayed": false
+    }
+  }
+}

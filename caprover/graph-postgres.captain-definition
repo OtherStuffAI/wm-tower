@@ -1,0 +1,4 @@
+{
+  "schemaVersion": 2,
+  "imageName": "apache/age:release_PG16_1.6.0"
+}

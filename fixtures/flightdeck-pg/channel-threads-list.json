@@ -1,0 +1,67 @@
+{
+  "contract_name": "flightdeck_pg.channel_threads.list",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/threads",
+  "method": "GET",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["channel.read"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "query": {
+      "cursor": "optional opaque cursor",
+      "limit": "optional integer, 1-200"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "channel_id", "threads", "next_cursor"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "channel_id": "authorization anchor for listed threads",
+      "threads": "array of visible typed channel thread rows",
+      "next_cursor": "opaque cursor or null"
+    }
+  },
+  "example": {
+    "request": {
+      "query": {
+        "limit": 50
+      }
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "channel_id": "66666666-6666-4666-8666-666666666666",
+      "threads": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "workspace_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "33333333-3333-4333-8333-333333333333",
+          "channel_id": "66666666-6666-4666-8666-666666666666",
+          "source_message_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "title": "Daily plan",
+          "latest": "Let's ship PH4-1A today.",
+          "metadata": {},
+          "row_version": 2,
+          "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+          "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+          "created_at": "2026-06-03T01:00:00.000Z",
+          "updated_at": "2026-06-03T01:01:00.000Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

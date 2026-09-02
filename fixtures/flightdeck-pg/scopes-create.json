@@ -1,0 +1,66 @@
+{
+  "contract_name": "flightdeck_pg.scopes.create",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["scope.create"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": ["name", "kind"],
+    "properties": {
+      "name": "non-empty string",
+      "description": "optional string",
+      "kind": "project | department | customer | dm | custom",
+      "owner_group_id": "optional group UUID"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "scope", "audit"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "scope": "created canonical scope row",
+      "audit": "write audit metadata"
+    }
+  },
+  "example": {
+    "request": {
+      "name": "Autopilot",
+      "description": "Autopilot product and agent runtime work",
+      "kind": "project"
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "scope": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "name": "Autopilot",
+        "description": "Autopilot product and agent runtime work",
+        "kind": "project",
+        "row_version": 1,
+        "created_at": "2026-06-02T12:10:00.000Z",
+        "updated_at": "2026-06-02T12:10:00.000Z"
+      },
+      "audit": {
+        "event_id": "55555555-5555-4555-8555-555555555555",
+        "operation": "scope.create",
+        "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89"
+      }
+    }
+  }
+}

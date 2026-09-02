@@ -1,0 +1,58 @@
+{
+  "contract_name": "flightdeck_pg.validation_error",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["scope.create"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": ["name", "kind"]
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["error", "code", "status", "details", "identity"],
+    "properties": {
+      "error": "human-readable validation failure",
+      "code": "validation_error",
+      "status": 400,
+      "details": "field error list",
+      "identity": "FlightDeckPgIdentityFields"
+    }
+  },
+  "example": {
+    "request": {
+      "name": "",
+      "kind": "project"
+    },
+    "response": {
+      "error": "Request body failed validation",
+      "code": "validation_error",
+      "status": 400,
+      "details": {
+        "fields": [
+          {
+            "path": "name",
+            "code": "required",
+            "message": "name must be a non-empty string"
+          }
+        ]
+      },
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      }
+    }
+  }
+}

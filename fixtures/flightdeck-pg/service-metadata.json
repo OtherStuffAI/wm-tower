@@ -1,0 +1,58 @@
+{
+  "contract_name": "flightdeck_pg.service_metadata",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/service",
+  "method": "GET",
+  "required_nip98_actor": "none_public_metadata",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": [],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": null,
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "service", "capabilities", "links"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "service": "public Tower service metadata",
+      "capabilities": "supported Flight Deck PG feature flags",
+      "links": "typed API discovery URLs"
+    }
+  },
+  "example": {
+    "request": null,
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": null,
+        "workspace_owner_npub": null,
+        "workspace_id": null,
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "service": {
+        "name": "Other Stuff Tower",
+        "base_url": "https://tower.example.invalid",
+        "version": "0.1.0",
+        "schema_version": 1
+      },
+      "capabilities": [
+        "pg_workspaces",
+        "pg_scopes",
+        "pg_channels",
+        "pg_channel_grants",
+        "pg_tasks",
+        "pg_chat",
+        "realtime_events"
+      ],
+      "links": {
+        "workspace_descriptor_template": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor",
+        "openapi": "/openapi.json"
+      }
+    }
+  }
+}

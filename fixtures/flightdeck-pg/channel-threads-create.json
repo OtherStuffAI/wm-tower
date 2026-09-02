@@ -1,0 +1,80 @@
+{
+  "contract_name": "flightdeck_pg.channel_threads.create",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/threads",
+  "method": "POST",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["channel.write"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": ["title"],
+    "properties": {
+      "title": "non-empty string",
+      "latest": "optional string preview",
+      "source_message_id": "optional same-channel message UUID",
+      "metadata": "optional object"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "thread", "audit", "outbox"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "thread": "created canonical thread row",
+      "audit": "write audit metadata",
+      "outbox": "event cursor row for visible channel readers"
+    }
+  },
+  "example": {
+    "request": {
+      "title": "Daily plan",
+      "source_message_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "thread": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "33333333-3333-4333-8333-333333333333",
+        "channel_id": "66666666-6666-4666-8666-666666666666",
+        "source_message_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "title": "Daily plan",
+        "latest": "Let's ship PH4-1A today.",
+        "metadata": {
+          "source": "chat"
+        },
+        "row_version": 1,
+        "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "created_at": "2026-06-03T01:00:00.000Z",
+        "updated_at": "2026-06-03T01:00:00.000Z"
+      },
+      "audit": {
+        "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "operation": "thread.create",
+        "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89"
+      },
+      "outbox": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "row_version": 12
+      }
+    }
+  }
+}

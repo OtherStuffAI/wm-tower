@@ -1,0 +1,60 @@
+{
+  "contract_name": "flightdeck_pg.reactions.delete",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/reactions/{reactionId}",
+  "method": "DELETE",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["channel.write"],
+  "stable_identity_fields": ["tower_service_npub", "workspace_service_npub", "workspace_owner_npub", "workspace_id", "app_npub"],
+  "request_shape": null,
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "reaction", "audit", "outbox"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "reaction": "deleted reaction row with record_state deleted",
+      "audit": "write audit metadata",
+      "outbox": "reaction deletion event cursor row"
+    }
+  },
+  "example": {
+    "request": null,
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "reaction": {
+        "id": "abababab-abab-4aba-8aba-abababababab",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "33333333-3333-4333-8333-333333333333",
+        "channel_id": "66666666-6666-4666-8666-666666666666",
+        "thread_id": "55555555-5555-4555-8555-555555555555",
+        "target_type": "message",
+        "target_id": "44444444-4444-4444-8444-444444444444",
+        "emoji": "thumbs_up",
+        "emoji_shortcode": ":thumbs_up:",
+        "reactor_actor_id": "99999999-9999-4999-8999-999999999999",
+        "record_state": "deleted",
+        "row_version": 2,
+        "created_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "updated_by_actor_id": "99999999-9999-4999-8999-999999999999",
+        "created_at": "2026-06-03T01:00:00.000Z",
+        "updated_at": "2026-06-03T01:03:00.000Z"
+      },
+      "audit": {
+        "event_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "operation": "reaction.delete",
+        "actor_npub": "npub1nzwqkakt2cuhrlwfhme3asrvx4s0xfyadm57tkpu2a39t9hqtahs7fsn89"
+      },
+      "outbox": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "row_version": 22
+      }
+    }
+  }
+}

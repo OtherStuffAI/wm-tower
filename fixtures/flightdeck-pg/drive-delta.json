@@ -1,0 +1,99 @@
+{
+  "contract_name": "flightdeck_pg.drive.delta",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/drive/delta",
+  "method": "GET",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": ["file.read or channel.read on changed item channels"],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "query": {
+      "cursor": "optional opaque event cursor returned as next_cursor",
+      "since": "optional alias for cursor",
+      "scope_id": "optional Flight Deck PG scope UUID",
+      "channel_id": "optional Flight Deck PG channel UUID",
+      "limit": "optional integer, 1-200"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": ["identity", "changes", "next_cursor", "has_more", "cursor_semantics"],
+    "properties": {
+      "identity": "FlightDeckPgIdentityFields",
+      "changes": "array of visible file/folder operations with canonical refetch routes and tombstone payloads for deleted rows",
+      "next_cursor": "opaque event cursor for the last returned change, or null",
+      "has_more": "true when the page reached the requested limit",
+      "cursor_semantics": "versioned description of outbox row_version greater-than semantics"
+    }
+  },
+  "example": {
+    "request": {
+      "query": {
+        "cursor": "eyJ2ZXJzaW9uIjoxLCJyb3dWZXJzaW9uIjo0MX0",
+        "channel_id": "44444444-4444-4444-8444-444444444444",
+        "limit": 50
+      }
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "changes": [
+        {
+          "type": "file",
+          "id": "66666666-6666-4666-8666-666666666666",
+          "operation": "updated",
+          "row_version": 3,
+          "event_row_version": 42,
+          "cursor": "eyJ2ZXJzaW9uIjoxLCJyb3dWZXJzaW9uIjo0Mn0",
+          "scope_id": "33333333-3333-4333-8333-333333333333",
+          "channel_id": "44444444-4444-4444-8444-444444444444",
+          "timestamp": "2026-06-03T01:10:00.000Z",
+          "refetch": "/api/v4/flightdeck-pg/workspaces/11111111-1111-4111-8111-111111111111/files/66666666-6666-4666-8666-666666666666"
+        },
+        {
+          "type": "folder",
+          "id": "55555555-5555-4555-8555-555555555555",
+          "operation": "deleted",
+          "row_version": 2,
+          "event_row_version": 43,
+          "cursor": "eyJ2ZXJzaW9uIjoxLCJyb3dWZXJzaW9uIjo0M30",
+          "scope_id": "33333333-3333-4333-8333-333333333333",
+          "channel_id": "44444444-4444-4444-8444-444444444444",
+          "timestamp": "2026-06-03T01:11:00.000Z",
+          "tombstone": {
+            "entity_type": "folder",
+            "entity_id": "55555555-5555-4555-8555-555555555555",
+            "workspace_id": "11111111-1111-4111-8111-111111111111",
+            "scope_id": "33333333-3333-4333-8333-333333333333",
+            "channel_id": "44444444-4444-4444-8444-444444444444",
+            "parent_folder_id": null,
+            "name": "Launch assets",
+            "row_version": 2,
+            "deleted_at": "2026-06-03T01:11:00.000Z",
+            "deleted_by_actor_id": "99999999-9999-4999-8999-999999999999"
+          },
+          "refetch": "/api/v4/flightdeck-pg/workspaces/11111111-1111-4111-8111-111111111111/file-folders/55555555-5555-4555-8555-555555555555"
+        }
+      ],
+      "next_cursor": "eyJ2ZXJzaW9uIjoxLCJyb3dWZXJzaW9uIjo0M30",
+      "has_more": false,
+      "cursor_semantics": {
+        "version": 1,
+        "order": "flightdeck_pg_outbox_events.row_version ASC, created_at ASC, id ASC",
+        "since": "returns visible file and folder events with row_version greater than the decoded cursor rowVersion"
+      }
+    }
+  }
+}

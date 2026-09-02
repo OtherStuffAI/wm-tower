@@ -1,0 +1,28 @@
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.3-rootless
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__ROOT_URL: http://forgejo:3000/
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_INTERNAL_SIGNIN: "false"
+      FORGEJO__service__ENABLE_BASIC_AUTHENTICATION: "false"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION: "true"
+      FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES: 127.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "false"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_ORG: "false"
+      FORGEJO__security__DISABLE_GIT_HOOKS: "true"
+      FORGEJO__actions__ENABLED: "false"
+      FORGEJO__webhook__ALLOWED_HOST_LIST: private,external
+    ports:
+      - "127.0.0.1:${FORGEJO_FIXTURE_PORT:-3300}:3000"
+    volumes:
+      - forgejo-fixture-data:/var/lib/gitea
+      - forgejo-fixture-config:/etc/gitea
+
+volumes:
+  forgejo-fixture-data:
+  forgejo-fixture-config:
