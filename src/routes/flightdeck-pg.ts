@@ -99,6 +99,7 @@ import {
   createFlightDeckPgTaskComment,
   createFlightDeckPgTaskOutboxEvent,
   createFlightDeckPgThread,
+  createFlightDeckPgThreadBranch,
   createFlightDeckPgTypedApproval,
   createFlightDeckPgWorkroom,
   createFlightDeckPgWorkroomEvent,
@@ -141,6 +142,7 @@ import {
   listFlightDeckPgFileVersions,
   listFlightDeckPgDriveTree,
   listFlightDeckPgChannelMessages,
+  listEffectiveFlightDeckPgThreadMessages,
   listFlightDeckPgChannelThreads,
   listFlightDeckPgDocVersions,
   listFlightDeckPgDocRecoveryVersions,
@@ -195,6 +197,7 @@ import {
   resolveFlightDeckPgMessageByClientRequestId,
   resolveFlightDeckPgTask,
   resolveFlightDeckPgThread,
+  resolveFlightDeckPgThreadByClientRequestId,
   resolveFlightDeckPgTypedApproval,
   resolveFlightDeckPgWorkroom,
   resolveFlightDeckPgWorkroomByThread,
@@ -228,6 +231,7 @@ import {
   serializeFlightDeckPgGrant,
   serializeFlightDeckPgGrantBundles,
   serializeFlightDeckPgMessage,
+  serializeFlightDeckPgEffectiveMessage,
   serializeFlightDeckPgReaction,
   serializeFlightDeckPgResponseActivity,
   serializeFlightDeckPgResourceViewState,
@@ -246,6 +250,7 @@ import {
   setFlightDeckPgThreadArchived,
   touchFlightDeckPgThreadAfterMessage,
   lockFlightDeckPgMessageIdempotencyKey,
+  lockFlightDeckPgThreadIdempotencyKey,
   serializeFlightDeckPgEvent,
   serializeFlightDeckPgEditLease,
   dailyNoteVersionContentFingerprint,
@@ -4435,6 +4440,128 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/threads', 
   }, 201);
 });
 
+flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/threads/:parentThreadId/branches', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const channelId = c.req.param('channelId');
+  const parentThreadId = c.req.param('parentThreadId');
+  const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+
+  const branchPointMessageId = typeof body.branch_point_message_id === 'string' ? body.branch_point_message_id.trim() : '';
+  const clientRequestId = typeof body.client_request_id === 'string' ? body.client_request_id.trim() : '';
+  const metadata = optionalObject(body.metadata);
+  const requestedTitle = body.title === undefined ? null : validateFlightDeckPgThreadTitle(body.title);
+  const fields: { path: string; code: string; message: string }[] = [];
+  if (!branchPointMessageId) fields.push({ path: 'branch_point_message_id', code: 'required', message: 'branch_point_message_id is required' });
+  if (!clientRequestId) fields.push({ path: 'client_request_id', code: 'required', message: 'client_request_id is required' });
+  if (clientRequestId.length > MESSAGE_CLIENT_REQUEST_ID_MAX_LENGTH) fields.push({ path: 'client_request_id', code: 'too_long', message: `client_request_id must be at most ${MESSAGE_CLIENT_REQUEST_ID_MAX_LENGTH} characters` });
+  if (metadata === null) fields.push({ path: 'metadata', code: 'invalid', message: 'metadata must be an object when provided' });
+  if (requestedTitle?.error) fields.push({ path: 'title', code: requestedTitle.title ? 'too_long' : 'required', message: requestedTitle.error });
+  if (fields.length) return validationError(c, identity, fields);
+
+  const decision = await authorizeFlightDeckPgOperation({
+    actorNpub: auth.userNpub,
+    appNpub: context.workspace.app_npub,
+    workspaceId: context.workspace.id,
+    permission: 'channel.write',
+    resource: { type: 'channel', channelId },
+  });
+  if (!decision.allowed) return authorizationError(c, decision, identity, 'channel.write');
+
+  const [channel, parentThread] = await Promise.all([
+    resolveFlightDeckPgChannel(context.workspace.id, channelId),
+    resolveFlightDeckPgThread(context.workspace.id, parentThreadId),
+  ]);
+  if (!channel) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
+  if (!parentThread || parentThread.channel_id !== channelId || parentThread.scope_id !== channel.scope_id) {
+    return jsonError(c, 404, 'parent_thread_not_found', 'Parent thread not found in this channel', identity);
+  }
+
+  let parentTranscript;
+  try {
+    parentTranscript = await listEffectiveFlightDeckPgThreadMessages({
+      workspaceId: context.workspace.id,
+      channelId,
+      threadId: parentThreadId,
+    });
+  } catch (error) {
+    return jsonError(c, 409, 'thread_lineage_invalid', error instanceof Error ? error.message : 'Parent thread lineage could not be resolved', identity);
+  }
+  const branchPoint = parentTranscript.find((message) => message.id === branchPointMessageId);
+  if (!branchPoint) {
+    return jsonError(c, 404, 'branch_point_not_found', 'Branch point is not in the parent thread effective transcript', identity);
+  }
+
+  const title = requestedTitle?.title || deriveFlightDeckPgThreadTitle(`Branch: ${parentThread.title}`);
+  const requestHash = createHash('sha256').update(JSON.stringify({
+    channel_id: channelId,
+    parent_thread_id: parentThreadId,
+    branch_point_message_id: branchPointMessageId,
+    title,
+    metadata: metadata ?? {},
+  })).digest('hex');
+
+  const payload = await getDb().begin(async (tx) => {
+    const sql = asDbClient(tx);
+    await lockFlightDeckPgThreadIdempotencyKey({ workspaceId: context.workspace.id, actorId: context.actor.id, clientRequestId }, sql);
+    const existing = await resolveFlightDeckPgThreadByClientRequestId({
+      workspaceId: context.workspace.id,
+      actorId: context.actor.id,
+      clientRequestId,
+    }, sql);
+    if (existing) {
+      return existing.client_request_hash === requestHash
+        ? { replayed: true as const, thread: existing, auditId: null, outbox: null }
+        : { conflict: true as const };
+    }
+    const thread = await createFlightDeckPgThreadBranch({
+      workspaceId: context.workspace.id,
+      channel,
+      parentThreadId,
+      branchPointMessageId,
+      title,
+      metadata: metadata ?? undefined,
+      actorId: context.actor.id,
+      clientRequestId,
+      clientRequestHash: requestHash,
+    }, sql);
+    const auditId = await writeFlightDeckPgAudit({
+      workspaceId: context.workspace.id,
+      actorId: context.actor.id,
+      action: 'thread.branch',
+      resourceType: 'thread',
+      resourceId: thread.id,
+      metadata: { channel_id: channelId, scope_id: channel.scope_id, parent_thread_id: parentThreadId, branch_point_message_id: branchPointMessageId, client_request_id: clientRequestId },
+    }, sql);
+    const outbox = await createFlightDeckPgChatOutboxEvent({
+      workspaceId: context.workspace.id,
+      scopeId: channel.scope_id,
+      channelId,
+      actorId: context.actor.id,
+      eventType: 'flightdeck_pg.thread.created',
+      entityType: 'thread',
+      entityId: thread.id,
+      operation: 'branched',
+      entityRowVersion: thread.row_version,
+      payload: { thread_id: thread.id, parent_thread_id: parentThreadId, branch_point_message_id: branchPointMessageId },
+    }, sql);
+    return { replayed: false as const, thread, auditId, outbox };
+  });
+  if ('conflict' in payload) return jsonError(c, 409, 'idempotency_conflict', 'client_request_id was already used for a different branch', identity);
+  return c.json({
+    identity,
+    thread: serializeFlightDeckPgThread(payload.thread),
+    replayed: payload.replayed,
+    created: !payload.replayed,
+    audit: payload.auditId ? { event_id: payload.auditId, operation: 'thread.branch', actor_npub: auth.userNpub } : null,
+    outbox: payload.outbox,
+  }, payload.replayed ? 200 : 201);
+});
+
 flightDeckPgRouter.get('/workspaces/:workspaceId/threads/:threadId', async (c) => {
   const auth = await requireNip98AuthResolved(c);
   if (auth instanceof Response) return auth;
@@ -4660,6 +4787,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/channels/:channelId/messages', 
   const { context, identity } = result;
   const channelId = c.req.param('channelId');
   const threadId = c.req.query('thread_id') || null;
+  const effectiveTranscript = c.req.query('effective_transcript') === 'true';
   const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
   if (!cursor) return validationError(c, identity, [{ path: 'query.cursor', code: 'invalid', message: 'cursor must be an opaque message cursor returned by this endpoint' }]);
 
@@ -4680,21 +4808,40 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/channels/:channelId/messages', 
   }
 
   const limit = parseLimit(c);
-  const rows = await listFlightDeckPgChannelMessages({
-    workspaceId: context.workspace.id,
-    channelId,
-    threadId,
-    limit: limit + 1,
-    afterCreatedAt: cursor.createdAt,
-    afterId: cursor.id,
-  });
+  if (effectiveTranscript && !threadId) {
+    return validationError(c, identity, [{ path: 'query.effective_transcript', code: 'requires_thread', message: 'effective_transcript=true requires thread_id' }]);
+  }
+  let rows;
+  try {
+    rows = effectiveTranscript
+      ? (await listEffectiveFlightDeckPgThreadMessages({
+          workspaceId: context.workspace.id,
+          channelId,
+          threadId: threadId!,
+          afterCreatedAt: cursor.createdAt,
+          afterId: cursor.id,
+        })).slice(0, limit + 1)
+      : await listFlightDeckPgChannelMessages({
+          workspaceId: context.workspace.id,
+          channelId,
+          threadId,
+          limit: limit + 1,
+          afterCreatedAt: cursor.createdAt,
+          afterId: cursor.id,
+        });
+  } catch (error) {
+    return jsonError(c, 409, 'thread_lineage_invalid', error instanceof Error ? error.message : 'Thread lineage could not be resolved', identity);
+  }
   const hasMore = rows.length > limit;
   const messages = hasMore ? rows.slice(0, limit) : rows;
   return c.json({
     identity,
     channel_id: channelId,
     thread_id: threadId,
-    messages: messages.map(serializeFlightDeckPgMessage),
+    effective_transcript: effectiveTranscript,
+    messages: effectiveTranscript
+      ? messages.map((message) => serializeFlightDeckPgEffectiveMessage(message as Parameters<typeof serializeFlightDeckPgEffectiveMessage>[0]))
+      : messages.map(serializeFlightDeckPgMessage),
     next_cursor: hasMore && messages.length ? encodeFlightDeckPgMessageCursor(messages[messages.length - 1]!) : null,
     cursor_semantics: { version: 1, order: 'created_at ASC, id ASC' },
   });

@@ -13,6 +13,7 @@
     "flightdeck_pg.channels.create": "fixtures/flightdeck-pg/channels-create.json",
     "flightdeck_pg.channel_threads.list": "fixtures/flightdeck-pg/channel-threads-list.json",
     "flightdeck_pg.channel_threads.create": "fixtures/flightdeck-pg/channel-threads-create.json",
+    "flightdeck_pg.channel_thread_branches.create": "fixtures/flightdeck-pg/channel-thread-branches-create.json",
     "flightdeck_pg.channel_messages.list": "fixtures/flightdeck-pg/channel-messages-list.json",
     "flightdeck_pg.channel_messages.create": "fixtures/flightdeck-pg/channel-messages-create.json",
     "flightdeck_pg.channel_docs.list": "fixtures/flightdeck-pg/channel-docs-list.json",

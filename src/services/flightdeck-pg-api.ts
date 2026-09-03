@@ -439,6 +439,15 @@ type FlightDeckPgTaskWithAssignments = FlightDeckPgTaskRow & {
 };
 export type FlightDeckPgThreadRow = FlightDeckPgThread;
 export type FlightDeckPgMessageRow = FlightDeckPgMessage;
+export type FlightDeckPgEffectiveMessageRow = FlightDeckPgMessageRow & {
+  cursor_created_at: string;
+  owning_thread_id: string;
+  effective_thread_id: string;
+  inherited: boolean;
+  created_by_actor_npub?: string | null;
+  created_by_actor_label?: string | null;
+  thread_source_message_id?: string | null;
+};
 export type FlightDeckPgDocRow = FlightDeckPgDoc;
 export type FlightDeckPgDocRecoveryVersionRow = FlightDeckPgDocRecoveryVersion;
 export type FlightDeckPgFileRow = FlightDeckPgFile;
@@ -1242,6 +1251,9 @@ export function serializeFlightDeckPgThread(thread: FlightDeckPgThreadRow) {
     scope_id: thread.scope_id,
     channel_id: thread.channel_id,
     source_message_id: thread.source_message_id,
+    parent_thread_id: thread.parent_thread_id,
+    branch_point_message_id: thread.branch_point_message_id,
+    client_request_id: thread.client_request_id,
     title: effectiveFlightDeckPgThreadTitle(thread.title, extended.source_message_body ?? thread.latest),
     latest: thread.latest,
     metadata: thread.metadata,
@@ -1304,6 +1316,21 @@ export function serializeFlightDeckPgMessage(message: FlightDeckPgMessageRow) {
     updated_by_actor_id: message.updated_by_actor_id,
     created_at: message.created_at,
     updated_at: message.updated_at,
+  };
+}
+
+export function serializeFlightDeckPgEffectiveMessage(message: FlightDeckPgEffectiveMessageRow) {
+  const serialized = serializeFlightDeckPgMessage(message);
+  return {
+    ...serialized,
+    body: message.deleted_at ? '' : serialized.body,
+    mentions: message.deleted_at ? [] : serialized.mentions,
+    attachments: message.deleted_at ? [] : serialized.attachments,
+    metadata: message.deleted_at ? {} : serialized.metadata,
+    owning_thread_id: message.owning_thread_id,
+    effective_thread_id: message.effective_thread_id,
+    inherited: message.inherited,
+    read_only: message.inherited || Boolean(message.deleted_at),
   };
 }
 
@@ -3353,6 +3380,93 @@ export async function listFlightDeckPgChannelMessages(
   `;
 }
 
+async function listFlightDeckPgOwnedThreadMessages(
+  workspaceId: string,
+  threadId: string,
+  sql: DbClient,
+): Promise<FlightDeckPgMessageRow[]> {
+  return sql<FlightDeckPgMessageRow[]>`
+    SELECT
+      m.*,
+      m.created_at::text AS cursor_created_at,
+      t.source_message_id AS thread_source_message_id,
+      creator.npub AS created_by_actor_npub,
+      creator.display_name AS created_by_actor_label
+    FROM flightdeck_pg_messages m
+    JOIN flightdeck_pg_threads t ON t.workspace_id = m.workspace_id AND t.id = m.thread_id
+    LEFT JOIN flightdeck_pg_actors creator ON creator.id = m.created_by_actor_id
+    WHERE m.workspace_id = ${workspaceId}
+      AND m.thread_id = ${threadId}
+    ORDER BY date_trunc('milliseconds', m.created_at) ASC, m.id ASC
+  `;
+}
+
+export function assembleEffectiveFlightDeckPgThreadMessages(
+  lineage: FlightDeckPgThreadRow[],
+  messagesByThreadId: Map<string, FlightDeckPgMessageRow[]>,
+): FlightDeckPgMessageRow[] {
+  let effective: FlightDeckPgMessageRow[] = [];
+  for (const thread of lineage) {
+    if (thread.parent_thread_id && thread.branch_point_message_id) {
+      const branchPointIndex = effective.findIndex((message) => message.id === thread.branch_point_message_id);
+      if (branchPointIndex < 0) throw new Error('thread_branch_point_missing');
+      effective = effective.slice(0, branchPointIndex + 1);
+    }
+    effective.push(...(messagesByThreadId.get(thread.id) ?? []));
+  }
+  return effective;
+}
+
+export async function listEffectiveFlightDeckPgThreadMessages(
+  input: {
+    workspaceId: string;
+    channelId: string;
+    threadId: string;
+    afterCreatedAt?: string | Date | null;
+    afterId?: string | null;
+  },
+  sql: DbClient = getDb(),
+): Promise<FlightDeckPgEffectiveMessageRow[]> {
+  const lineage: FlightDeckPgThreadRow[] = [];
+  const seen = new Set<string>();
+  let nextThreadId: string | null = input.threadId;
+  while (nextThreadId) {
+    if (seen.has(nextThreadId)) throw new Error('thread_lineage_cycle');
+    if (lineage.length >= 100) throw new Error('thread_lineage_too_deep');
+    seen.add(nextThreadId);
+    const [thread] = await sql<FlightDeckPgThreadRow[]>`
+      SELECT * FROM flightdeck_pg_threads
+      WHERE workspace_id = ${input.workspaceId} AND id = ${nextThreadId}
+      LIMIT 1
+    `;
+    if (!thread || thread.channel_id !== input.channelId) throw new Error('thread_lineage_invalid');
+    lineage.push(thread);
+    nextThreadId = thread.parent_thread_id;
+  }
+  lineage.reverse();
+
+  const messagesByThreadId = new Map<string, FlightDeckPgMessageRow[]>();
+  for (const thread of lineage) {
+    messagesByThreadId.set(thread.id, await listFlightDeckPgOwnedThreadMessages(input.workspaceId, thread.id, sql));
+  }
+  const effective = assembleEffectiveFlightDeckPgThreadMessages(lineage, messagesByThreadId);
+
+  const afterTime = input.afterCreatedAt ? new Date(input.afterCreatedAt).getTime() : null;
+  return effective
+    .filter((message) => {
+      if (afterTime === null) return true;
+      const messageTime = new Date(message.created_at).getTime();
+      return messageTime > afterTime || (messageTime === afterTime && message.id > String(input.afterId ?? ''));
+    })
+    .map((message) => ({
+      ...message,
+      cursor_created_at: String((message as FlightDeckPgMessageRow & { cursor_created_at?: string }).cursor_created_at ?? message.created_at.toISOString()),
+      owning_thread_id: String(message.thread_id),
+      effective_thread_id: input.threadId,
+      inherited: message.thread_id !== input.threadId,
+    }));
+}
+
 export async function resolveFlightDeckPgThread(
   workspaceId: string,
   threadId: string,
@@ -3443,6 +3557,56 @@ export async function createFlightDeckPgThread(
       ${sql.json(asDbJson(input.metadata ?? {}))},
       ${input.actorId},
       ${input.actorId}
+    )
+    RETURNING *
+  `;
+  return thread;
+}
+
+export async function resolveFlightDeckPgThreadByClientRequestId(
+  input: { workspaceId: string; actorId: string; clientRequestId: string },
+  sql: DbClient = getDb(),
+): Promise<FlightDeckPgThreadRow | null> {
+  const [thread] = await sql<FlightDeckPgThreadRow[]>`
+    SELECT * FROM flightdeck_pg_threads
+    WHERE workspace_id = ${input.workspaceId}
+      AND created_by_actor_id = ${input.actorId}
+      AND client_request_id = ${input.clientRequestId}
+    LIMIT 1
+  `;
+  return thread ?? null;
+}
+
+export async function lockFlightDeckPgThreadIdempotencyKey(
+  input: { workspaceId: string; actorId: string; clientRequestId: string },
+  sql: DbClient = getDb(),
+): Promise<void> {
+  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`thread:${input.workspaceId}:${input.actorId}:${input.clientRequestId}`}, 0))`;
+}
+
+export async function createFlightDeckPgThreadBranch(
+  input: {
+    workspaceId: string;
+    channel: FlightDeckPgChannelRow;
+    parentThreadId: string;
+    branchPointMessageId: string;
+    title: string;
+    metadata?: Record<string, unknown>;
+    actorId: string;
+    clientRequestId: string;
+    clientRequestHash: string;
+  },
+  sql: DbClient = getDb(),
+): Promise<FlightDeckPgThreadRow> {
+  const [thread] = await sql<FlightDeckPgThreadRow[]>`
+    INSERT INTO flightdeck_pg_threads (
+      workspace_id, scope_id, channel_id, source_message_id,
+      parent_thread_id, branch_point_message_id, client_request_id, client_request_hash,
+      title, latest, metadata, created_by_actor_id, updated_by_actor_id
+    ) VALUES (
+      ${input.workspaceId}, ${input.channel.scope_id}, ${input.channel.id}, NULL,
+      ${input.parentThreadId}, ${input.branchPointMessageId}, ${input.clientRequestId}, ${input.clientRequestHash},
+      ${input.title}, NULL, ${sql.json(asDbJson(input.metadata ?? {}))}, ${input.actorId}, ${input.actorId}
     )
     RETURNING *
   `;

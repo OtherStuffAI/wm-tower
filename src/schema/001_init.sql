@@ -1352,6 +1352,10 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_threads (
   scope_id UUID NOT NULL,
   channel_id UUID NOT NULL,
   source_message_id UUID,
+  parent_thread_id UUID,
+  branch_point_message_id UUID,
+  client_request_id TEXT,
+  client_request_hash TEXT,
   title TEXT NOT NULL DEFAULT '',
   latest TEXT,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -1377,6 +1381,12 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_threads (
     FOREIGN KEY (workspace_id, updated_by_actor_id)
     REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
     ON DELETE RESTRICT,
+  CONSTRAINT flightdeck_pg_threads_parent_fkey
+    FOREIGN KEY (workspace_id, scope_id, channel_id, parent_thread_id)
+    REFERENCES flightdeck_pg_threads(workspace_id, scope_id, channel_id, id)
+    ON DELETE RESTRICT,
+  CONSTRAINT flightdeck_pg_threads_branch_pair_check
+    CHECK ((parent_thread_id IS NULL) = (branch_point_message_id IS NULL)),
   UNIQUE (workspace_id, id),
   UNIQUE (workspace_id, scope_id, channel_id, id)
 );
@@ -1397,6 +1407,12 @@ CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_source_message
 CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_activity
   ON flightdeck_pg_threads(workspace_id, channel_id, activity_version DESC)
   WHERE deleted_at IS NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_parent
+  ON flightdeck_pg_threads(workspace_id, parent_thread_id)
+  WHERE parent_thread_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_branch_idempotency
+  ON flightdeck_pg_threads(workspace_id, created_by_actor_id, client_request_id)
+  WHERE client_request_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1449,6 +1465,12 @@ CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_messages_thread_created
 CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_messages_idempotency
   ON flightdeck_pg_messages(workspace_id, created_by_actor_id, client_request_id)
   WHERE client_request_id IS NOT NULL;
+
+ALTER TABLE flightdeck_pg_threads
+  ADD CONSTRAINT flightdeck_pg_threads_branch_point_fkey
+  FOREIGN KEY (workspace_id, scope_id, channel_id, branch_point_message_id)
+  REFERENCES flightdeck_pg_messages(workspace_id, scope_id, channel_id, id)
+  ON DELETE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

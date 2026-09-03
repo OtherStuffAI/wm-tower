@@ -16,6 +16,7 @@
   "request_shape": {
     "query": {
       "thread_id": "optional same-channel thread UUID",
+      "effective_transcript": "optional boolean; requires thread_id and includes lineage provenance",
       "cursor": "optional opaque cursor",
       "limit": "optional integer, 1-200"
     }

@@ -390,6 +390,7 @@ export const flightDeckPgContractNames = [
   'flightdeck_pg.channels.create',
   'flightdeck_pg.channel_threads.list',
   'flightdeck_pg.channel_threads.create',
+  'flightdeck_pg.channel_thread_branches.create',
   'flightdeck_pg.channel_messages.list',
   'flightdeck_pg.channel_messages.create',
   'flightdeck_pg.channel_docs.list',
@@ -433,6 +434,7 @@ export const flightDeckPgContractFixturePaths: Record<FlightDeckPgContractName, 
   'flightdeck_pg.channels.create': 'fixtures/flightdeck-pg/channels-create.json',
   'flightdeck_pg.channel_threads.list': 'fixtures/flightdeck-pg/channel-threads-list.json',
   'flightdeck_pg.channel_threads.create': 'fixtures/flightdeck-pg/channel-threads-create.json',
+  'flightdeck_pg.channel_thread_branches.create': 'fixtures/flightdeck-pg/channel-thread-branches-create.json',
   'flightdeck_pg.channel_messages.list': 'fixtures/flightdeck-pg/channel-messages-list.json',
   'flightdeck_pg.channel_messages.create': 'fixtures/flightdeck-pg/channel-messages-create.json',
   'flightdeck_pg.channel_docs.list': 'fixtures/flightdeck-pg/channel-docs-list.json',
@@ -874,6 +876,10 @@ export interface FlightDeckPgThread {
   scope_id: string;
   channel_id: string;
   source_message_id: string | null;
+  parent_thread_id: string | null;
+  branch_point_message_id: string | null;
+  client_request_id: string | null;
+  client_request_hash: string | null;
   title: string;
   latest: string | null;
   metadata: Record<string, unknown>;

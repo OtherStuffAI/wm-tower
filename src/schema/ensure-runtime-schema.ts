@@ -2222,6 +2222,10 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
       scope_id UUID NOT NULL,
       channel_id UUID NOT NULL,
       source_message_id UUID,
+      parent_thread_id UUID,
+      branch_point_message_id UUID,
+      client_request_id TEXT,
+      client_request_hash TEXT,
       title TEXT NOT NULL DEFAULT '',
       latest TEXT,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -2255,7 +2259,11 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(`
     ALTER TABLE flightdeck_pg_threads
     ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS activity_version BIGINT NOT NULL DEFAULT 0
+    ADD COLUMN IF NOT EXISTS activity_version BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS parent_thread_id UUID,
+    ADD COLUMN IF NOT EXISTS branch_point_message_id UUID,
+    ADD COLUMN IF NOT EXISTS client_request_id TEXT,
+    ADD COLUMN IF NOT EXISTS client_request_hash TEXT
   `);
 
   await sql.unsafe(`
@@ -2280,6 +2288,18 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_activity
     ON flightdeck_pg_threads(workspace_id, channel_id, activity_version DESC)
     WHERE deleted_at IS NULL AND archived_at IS NULL
+  `);
+
+  await sql.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_parent
+    ON flightdeck_pg_threads(workspace_id, parent_thread_id)
+    WHERE parent_thread_id IS NOT NULL
+  `);
+
+  await sql.unsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_threads_branch_idempotency
+    ON flightdeck_pg_threads(workspace_id, created_by_actor_id, client_request_id)
+    WHERE client_request_id IS NOT NULL
   `);
 
   await sql.unsafe(`
@@ -2358,6 +2378,34 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_messages_idempotency
     ON flightdeck_pg_messages(workspace_id, created_by_actor_id, client_request_id)
     WHERE client_request_id IS NOT NULL
+  `);
+
+  await sql.unsafe(`
+    DO $$ BEGIN
+      ALTER TABLE flightdeck_pg_threads
+        ADD CONSTRAINT flightdeck_pg_threads_parent_fkey
+        FOREIGN KEY (workspace_id, scope_id, channel_id, parent_thread_id)
+        REFERENCES flightdeck_pg_threads(workspace_id, scope_id, channel_id, id)
+        ON DELETE RESTRICT;
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$
+  `);
+
+  await sql.unsafe(`
+    DO $$ BEGIN
+      ALTER TABLE flightdeck_pg_threads
+        ADD CONSTRAINT flightdeck_pg_threads_branch_point_fkey
+        FOREIGN KEY (workspace_id, scope_id, channel_id, branch_point_message_id)
+        REFERENCES flightdeck_pg_messages(workspace_id, scope_id, channel_id, id)
+        ON DELETE RESTRICT;
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$
+  `);
+
+  await sql.unsafe(`
+    DO $$ BEGIN
+      ALTER TABLE flightdeck_pg_threads
+        ADD CONSTRAINT flightdeck_pg_threads_branch_pair_check
+        CHECK ((parent_thread_id IS NULL) = (branch_point_message_id IS NULL));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$
   `);
 
   await sql.unsafe(`
