@@ -1466,11 +1466,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_messages_idempotency
   ON flightdeck_pg_messages(workspace_id, created_by_actor_id, client_request_id)
   WHERE client_request_id IS NOT NULL;
 
-ALTER TABLE flightdeck_pg_threads
-  ADD CONSTRAINT flightdeck_pg_threads_branch_point_fkey
-  FOREIGN KEY (workspace_id, scope_id, channel_id, branch_point_message_id)
-  REFERENCES flightdeck_pg_messages(workspace_id, scope_id, channel_id, id)
-  ON DELETE RESTRICT;
+DO $$ BEGIN
+  ALTER TABLE flightdeck_pg_threads
+    ADD CONSTRAINT flightdeck_pg_threads_branch_point_fkey
+    FOREIGN KEY (workspace_id, scope_id, channel_id, branch_point_message_id)
+    REFERENCES flightdeck_pg_messages(workspace_id, scope_id, channel_id, id)
+    ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -138,6 +138,30 @@ async function expectSqlFailure(action: () => Promise<unknown>, code?: string) {
 }
 
 describe('Flight Deck PG schema foundation', () => {
+  test('replays the branch-point foreign key bootstrap after runtime schema installation', async () => {
+    const migration = readFileSync(
+      new URL('../src/schema/001_init.sql', import.meta.url),
+      'utf8',
+    );
+    const branchPointConstraint = splitSqlStatements(migration).find((statement) =>
+      statement.includes('ADD CONSTRAINT flightdeck_pg_threads_branch_point_fkey'),
+    );
+
+    expect(branchPointConstraint).toBeDefined();
+    expect(branchPointConstraint).toContain('EXCEPTION WHEN duplicate_object THEN NULL');
+
+    await sql.unsafe(branchPointConstraint!);
+    await sql.unsafe(branchPointConstraint!);
+
+    const [constraint] = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM pg_constraint
+      WHERE conrelid = 'flightdeck_pg_threads'::regclass
+        AND conname = 'flightdeck_pg_threads_branch_point_fkey'
+    `;
+    expect(Number(constraint.count)).toBe(1);
+  });
+
   test('adds nullable turn identity for legacy agent activity rows', async () => {
     const [column] = await sql<{ is_nullable: string; data_type: string }[]>`
       SELECT is_nullable, data_type
