@@ -105,7 +105,7 @@ type GitCapabilityRow = {
   signer_npub: string;
   scopes: GitCapabilityScope[];
   audience: string;
-  git_service: GitService;
+  git_service: GitService | null;
   policy_revision: number;
   current_policy_revision: number;
   ref_constraints: { prefixes?: unknown };
@@ -754,6 +754,40 @@ export async function listGitRepositories(workspaceId: string, actorNpub: string
   return rows.map(serializeRepository);
 }
 
+export async function resolveGitRepositoryPath(
+  workspaceId: string,
+  path: string,
+  actorNpub: string,
+  sql: DbClient = getDb(),
+): Promise<{ canonical_path: string; repository: GitRepository }> {
+  assertUuid(workspaceId, 'workspace_id');
+  const match = /^\/([a-z0-9][a-z0-9-]{0,38})\/([a-z0-9][a-z0-9._-]{0,62})\.git$/.exec(String(path || ''));
+  if (!match) throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
+  const actor = await resolveActorContext(workspaceId, actorNpub, sql);
+  if (!actor) throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
+  const [repository] = await sql<GitRepositoryRow[]>`
+    SELECT repository.id, repository.workspace_id, namespace.namespace AS git_namespace,
+           repository.scope_id, repository.slug, repository.display_name, repository.description,
+           repository.visibility, repository.default_branch, repository.state,
+           repository.policy_revision, repository.created_by_actor_id,
+           repository.created_at, repository.updated_at
+    FROM git_repositories repository
+    JOIN git_workspace_namespaces namespace ON namespace.workspace_id = repository.workspace_id
+    WHERE repository.workspace_id = ${workspaceId}
+      AND namespace.namespace = ${match[1]}
+      AND repository.slug = ${match[2]}
+      AND repository.archived_at IS NULL
+    LIMIT 1
+  `;
+  if (!repository || !await actorCanSeeRepository(repository.id, actor, sql)) {
+    throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
+  }
+  return {
+    canonical_path: `/${repository.git_namespace}/${repository.slug}.git`,
+    repository: serializeRepository(repository),
+  };
+}
+
 export async function readGitRepository(workspaceId: string, repositoryId: string, actorNpub: string, sql: DbClient = getDb()): Promise<GitRepository> {
   assertUuid(repositoryId, 'repository_id');
   const { repository } = await requireVisibleRepository(workspaceId, repositoryId, actorNpub, sql);
@@ -1098,6 +1132,56 @@ function permissionForScope(scope: GitCapabilityScope): GitRepositoryPermission 
   return 'git.repo.write';
 }
 
+function transportAuthorityForGrants(grants: GitGrantRow[]): {
+  scopes: GitCapabilityScope[];
+  prefixes: string[];
+} {
+  const scopes = new Set<GitCapabilityScope>();
+  const prefixes = new Set<string>();
+  for (const grant of grants) {
+    if (grant.permission === 'git.repo.read') scopes.add('git.fetch');
+    if (grant.permission === 'git.repo.write') {
+      scopes.add('git.fetch');
+      scopes.add('git.push.unprotected');
+      normalizeStoredPrefixes(grant.ref_constraints).forEach((prefix) => prefixes.add(prefix));
+    }
+    if (grant.permission === 'git.branch.create') {
+      scopes.add('git.fetch');
+      scopes.add('git.push.branch_create');
+      normalizeStoredPrefixes(grant.ref_constraints).forEach((prefix) => prefixes.add(prefix));
+    }
+    if (grant.permission === 'git.repo.admin') {
+      scopes.add('git.fetch');
+      scopes.add('git.push.unprotected');
+      scopes.add('git.push.branch_create');
+      permittedWorkPrefixes.forEach((prefix) => prefixes.add(prefix));
+    }
+  }
+  return {
+    scopes: [...scopes].sort(),
+    prefixes: [...prefixes].sort(),
+  };
+}
+
+async function signerIsActiveForActor(
+  signerNpub: string,
+  actor: GitActorContext,
+  sql: DbClient,
+): Promise<boolean> {
+  if (signerNpub === actor.actorNpub) return true;
+  const [binding] = await sql<{ active: boolean }[]>`
+    SELECT active
+    FROM user_workspace_keys
+    WHERE workspace_owner_npub = ${actor.workspaceOwnerNpub}
+      AND user_npub = ${actor.actorNpub}
+      AND ws_key_npub = ${signerNpub}
+      AND active = true
+      AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  return binding?.active === true;
+}
+
 function validateServiceScopes(service: GitService, scopes: GitCapabilityScope[]) {
   if (
     scopes.length === 0
@@ -1161,15 +1245,14 @@ export async function exchangeGitCredential(
 ): Promise<GitCredentialExchangeResponse> {
   assertGitRuntimeConfigured();
   const repositoryId = assertUuid(input.repository_id, 'repository_id');
-  const requestedActorId = assertUuid(input.actor_id, 'actor_id');
   if (input.audience !== config.git.audience) {
     throw new GitAuthorityError('git_audience_invalid', 'Requested audience is not configured', 403);
   }
-  if (!['upload-pack', 'receive-pack'].includes(input.service)) {
-    throw new GitAuthorityError('git_service_invalid', 'Git service is invalid', 400);
+  const legacyFieldCount = [input.actor_id, input.service, input.requested_scopes]
+    .filter((value) => value !== undefined).length;
+  if (legacyFieldCount !== 0 && legacyFieldCount !== 3) {
+    throw new GitAuthorityError('git_legacy_request_invalid', 'Legacy actor_id, service, and requested_scopes must be supplied together', 400);
   }
-  const scopes = [...new Set(input.requested_scopes ?? [])].sort() as GitCapabilityScope[];
-  validateServiceScopes(input.service, scopes);
   const correlationId = input.correlation_id
     ? normalizeString(input.correlation_id, 'correlation_id', 128)
     : randomUUID();
@@ -1183,18 +1266,41 @@ export async function exchangeGitCredential(
   if (!actor || !await actorCanSeeRepository(repository.id, actor, sql)) {
     throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
   }
-  if (actor.actorId !== requestedActorId) {
-    throw new GitAuthorityError('git_actor_mismatch', 'The requested actor does not match the resolved NIP-98 actor', 403);
-  }
   const grants = await applicableGrantRows(repository.id, actor, sql);
-  for (const scope of scopes) {
-    if (!grants.some((grant) => grant.permission === permissionForScope(scope))) {
-      throw new GitAuthorityError('git_scope_not_granted', `Requested scope ${scope} is not granted`, 403);
-    }
+  const currentAuthority = transportAuthorityForGrants(grants);
+  if (currentAuthority.scopes.length === 0) {
+    throw new GitAuthorityError('git_transport_not_granted', 'No Git transport scope is currently granted', 403);
   }
-  const prefixes = [...new Set(grants
-    .filter((grant) => scopes.some((scope) => permissionForScope(scope) === grant.permission))
-    .flatMap((grant) => normalizeStoredPrefixes(grant.ref_constraints)))].sort();
+  let service: GitService | null = null;
+  let scopes = currentAuthority.scopes;
+  let prefixes = currentAuthority.prefixes;
+  if (legacyFieldCount === 3) {
+    const requestedActorId = assertUuid(input.actor_id!, 'actor_id');
+    if (actor.actorId !== requestedActorId) {
+      throw new GitAuthorityError('git_actor_mismatch', 'The requested actor does not match the resolved NIP-98 actor', 403);
+    }
+    if (!['upload-pack', 'receive-pack'].includes(input.service!)) {
+      throw new GitAuthorityError('git_service_invalid', 'Git service is invalid', 400);
+    }
+    const requestedScopes = [...new Set(input.requested_scopes ?? [])].sort() as GitCapabilityScope[];
+    validateServiceScopes(input.service!, requestedScopes);
+    for (const scope of requestedScopes) {
+      if (!currentAuthority.scopes.includes(scope)) {
+        throw new GitAuthorityError('git_scope_not_granted', `Requested scope ${scope} is not granted`, 403);
+      }
+    }
+    service = input.service!;
+    scopes = requestedScopes;
+    const requestedPermissions = new Set(requestedScopes.map(permissionForScope));
+    prefixes = [...new Set(grants.flatMap((grant) => {
+      if (grant.permission === 'git.repo.admin' && requestedScopes.some((scope) => scope !== 'git.fetch')) {
+        return [...permittedWorkPrefixes];
+      }
+      return requestedPermissions.has(grant.permission)
+        ? normalizeStoredPrefixes(grant.ref_constraints)
+        : [];
+    }))].sort();
+  }
   const autopilotInstanceNpub = input.autopilot_instance_npub
     ? normalizeString(input.autopilot_instance_npub, 'autopilot_instance_npub', 128)
     : null;
@@ -1218,7 +1324,7 @@ export async function exchangeGitCredential(
       ) VALUES (
         ${capabilityHash}, ${capabilityHashPrefix}, ${repository.workspace_id}, ${repository.id},
         ${actor.actorId}, ${verification.signerNpub}, ${scopes}, ${input.audience},
-        ${input.service}, ${repository.policy_revision}, ${db.json({ prefixes })},
+        ${service}, ${repository.policy_revision}, ${db.json({ prefixes })},
         ${autopilotInstanceNpub}, ${sessionId}, ${taskId}, ${workroomId},
         ${correlationId}, ${expiresAt}
       )
@@ -1232,7 +1338,7 @@ export async function exchangeGitCredential(
       signerNpub: verification.signerNpub,
       operation: 'git.credential.issue',
       requestedScope: scopes.join(','),
-      service: input.service,
+      service,
       decision: 'allow',
       reasonCode: 'git_capability_issued',
       policyRevision: Number(repository.policy_revision),
@@ -1259,7 +1365,7 @@ export async function exchangeGitCredential(
       actor_id: actor.actorId,
       signer_npub: verification.signerNpub,
       audience: input.audience,
-      service: input.service,
+      service,
       scopes,
       policy_revision: Number(repository.policy_revision),
       expires_at: expiresAt.toISOString(),
@@ -1337,14 +1443,24 @@ export async function introspectGitCapability(
   if (capability.expires_at.getTime() <= Date.now()) return deny('git_capability_expired');
   if (capability.repository_id !== requestedRepositoryId) return deny('git_capability_wrong_repository');
   if (capability.audience !== input.audience || input.audience !== config.git.audience) return deny('git_capability_wrong_audience');
-  if (capability.git_service !== input.service) return deny('git_capability_wrong_service');
+  if (capability.git_service !== null && capability.git_service !== input.service) return deny('git_capability_wrong_service');
   if (Number(capability.policy_revision) !== Number(capability.current_policy_revision)) return deny('git_capability_stale_policy');
   if (!capability.scopes.includes(input.required_scope)) return deny('git_capability_missing_scope');
   if (!serviceAcceptsRequiredScope(input.service, input.required_scope)) return deny('git_capability_service_scope_mismatch');
   const actor = await resolveActorContext(capability.workspace_id, capability.actor_npub, sql);
   if (!actor || actor.actorId !== capability.actor_id) return deny('git_capability_actor_inactive');
-  if (!await actorHasPermission(capability.repository_id, actor, permissionForScope(input.required_scope), sql)) {
+  if (!await signerIsActiveForActor(capability.signer_npub, actor, sql)) {
+    return deny('git_capability_signer_inactive');
+  }
+  const currentAuthority = transportAuthorityForGrants(
+    await applicableGrantRows(capability.repository_id, actor, sql),
+  );
+  if (!currentAuthority.scopes.includes(input.required_scope)) {
     return deny('git_capability_access_revoked');
+  }
+  const issuedPrefixes = normalizeStoredPrefixes(capability.ref_constraints);
+  if (issuedPrefixes.some((prefix) => !currentAuthority.prefixes.includes(prefix))) {
+    return deny('git_capability_ref_constraints_stale');
   }
 
   await sql.begin(async (tx) => {
@@ -1380,7 +1496,7 @@ export async function introspectGitCapability(
     ...(capability.actor_display_name ? { actor_display_name: capability.actor_display_name } : {}),
     signer_npub: capability.signer_npub,
     audience: capability.audience,
-    service: capability.git_service,
+    service: input.service,
     scopes: capability.scopes,
     ref_constraints: { prefixes: normalizeStoredPrefixes(capability.ref_constraints) },
     policy_revision: Number(capability.policy_revision),

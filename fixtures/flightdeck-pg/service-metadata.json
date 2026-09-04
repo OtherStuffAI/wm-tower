@@ -21,7 +21,8 @@
       "identity": "FlightDeckPgIdentityFields",
       "service": "public Tower service metadata",
       "capabilities": "supported Flight Deck PG feature flags",
-      "links": "typed API discovery URLs"
+      "links": "typed API discovery URLs",
+      "git": "optional operator-configured Git gateway discovery"
     }
   },
   "example": {
@@ -49,6 +50,10 @@
         "pg_chat",
         "realtime_events"
       ],
+      "git": {
+        "gateway_origins": ["https://git.example.invalid"],
+        "audience": "wingman-git"
+      },
       "links": {
         "workspace_descriptor_template": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor",
         "openapi": "/openapi.json"

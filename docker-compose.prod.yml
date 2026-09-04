@@ -130,6 +130,7 @@ services:
       GIT_INTERNAL_SERVICE_TOKEN: ${GIT_INTERNAL_SERVICE_TOKEN:-}
       GIT_INTERNAL_SERVICE_TOKEN_FILE: ${GIT_INTERNAL_SERVICE_TOKEN_FILE:-/run/tower-git-secrets/git-internal-service-token}
       GIT_SERVICE_AUDIENCE: ${GIT_SERVICE_AUDIENCE:-}
+      GIT_GATEWAY_ORIGINS: ${GIT_GATEWAY_ORIGINS:-}
       GIT_CAPABILITY_TTL_SECONDS: ${GIT_CAPABILITY_TTL_SECONDS:-300}
       GIT_FORGEJO_BASE_URL: ${GIT_FORGEJO_BASE_URL:-}
       # The provider control token is intentionally never mounted into Tower.

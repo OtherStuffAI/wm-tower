@@ -207,11 +207,16 @@ describe('OpenAPI docs', () => {
     expect(body.paths['/api/v4/git/workspaces/{workspaceId}/repositories/{repositoryId}/policy'].patch.description).toContain('service-managed');
     expect(body.paths['/api/v4/git/workspaces/{workspaceId}/repositories/{repositoryId}/audit-events'].get.description).toContain('Capability plaintext');
     expect(body.paths['/api/v4/git/credential-exchanges'].post.description).toContain('60-second');
+    expect(body.paths['/api/v4/git/credential-exchanges'].post.description).toContain('derives every currently authorized transport scope');
     expect(body.paths['/api/v4/git/credential-exchanges'].post.responses['201'].content['application/json'].schema.$ref)
       .toBe('#/components/schemas/GitCredentialExchangeResponse');
     expect(body.paths['/api/v4/git/internal/capabilities/introspect'].post.security).toEqual([{ gitInternalService: [] }]);
     expect(body.paths['/api/v4/git/internal/capabilities/revoke'].post.security).toEqual([{ gitInternalService: [] }]);
     expect(body.components.schemas.GitCredentialExchangeResponse.properties.capability.writeOnly).toBe(true);
+    expect(body.components.schemas.GitCredentialExchangeRequest.required).toEqual(['repository_id', 'audience']);
+    expect(body.paths['/api/v4/git/workspaces/{workspaceId}/repositories/resolve'].get.security).toEqual([{ nip98: [] }]);
+    expect(body.paths['/api/v4/flightdeck-pg/service'].get.responses['200'].content['application/json'].schema.properties.git.required)
+      .toEqual(['gateway_origins', 'audience']);
     expect(body.components.schemas.GitAuditEvent.properties.capability).toBeUndefined();
     expect(body.components.securitySchemes.gitInternalService.name).toBe('x-wingman-git-service-token');
   });

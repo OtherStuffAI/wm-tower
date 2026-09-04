@@ -58,6 +58,8 @@ Tower Git authority v1 is optional but fail-closed unless all of these are set:
 - `GIT_ISSUE_BROKER_TOKEN` (independent Tower-to-private-broker token)
 - `GIT_ISSUE_BROKER_URL` (normally `http://git-issue-broker:3190`)
 - `GIT_SERVICE_AUDIENCE` (normally `wingman-git`)
+- `GIT_GATEWAY_ORIGINS` (comma-separated exact public HTTPS gateway origins
+  advertised to authenticated clients; never inferred from Tower or Forgejo)
 - `GIT_CAPABILITY_TTL_SECONDS` defaults to `300` and is clamped to 60–600 seconds
 
 See `docs/git-authority-v1.md`. Never commit or reuse production secret values.
@@ -101,6 +103,8 @@ cp .env.prod.example .env.prod
 - set `SUPERBASED_SERVICE_NSEC` to the stable service key
 - set `DB_PASSWORD` to a real password
 - set the main and graph database usernames/passwords explicitly; no credential defaults are accepted
+- set `GIT_GATEWAY_ORIGINS` explicitly to the public HTTPS origin(s) that route
+  Git smart HTTP to this stack's gateway
 - set unique MinIO access and secret keys; no credential defaults are accepted
 - set `STORAGE_S3_ENDPOINT_PUBLIC` to the MinIO URL your clients can reach
 - leave `STORAGE_S3_ENDPOINT=http://minio:9000` unless you are using external S3

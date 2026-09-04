@@ -2885,7 +2885,7 @@ CREATE TABLE IF NOT EXISTS git_capabilities (
   signer_npub TEXT NOT NULL,
   scopes TEXT[] NOT NULL,
   audience TEXT NOT NULL,
-  git_service TEXT NOT NULL,
+  git_service TEXT,
   policy_revision INTEGER NOT NULL,
   ref_constraints JSONB NOT NULL DEFAULT '{"prefixes":[]}'::jsonb,
   autopilot_instance_npub TEXT,

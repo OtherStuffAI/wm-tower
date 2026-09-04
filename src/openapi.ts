@@ -2759,7 +2759,8 @@ export function buildOpenApiDocument(origin: string) {
         },
         GitCredentialExchangeRequest: {
           type: 'object', additionalProperties: false,
-          required: ['repository_id', 'actor_id', 'audience', 'service', 'requested_scopes'],
+          required: ['repository_id', 'audience'],
+          description: 'Current clients send repository_id and audience; Tower resolves the authenticated actor and derives all transport scopes. actor_id, service, and requested_scopes form an all-or-nothing restricted legacy request.',
           properties: {
             repository_id: { type: 'string', format: 'uuid' }, actor_id: { type: 'string', format: 'uuid' }, audience: { type: 'string' },
             service: { type: 'string', enum: ['upload-pack', 'receive-pack'] },
@@ -2775,7 +2776,7 @@ export function buildOpenApiDocument(origin: string) {
           properties: {
             capability_id: { type: 'string', format: 'uuid' }, username: { type: 'string', enum: ['nostr'] }, capability: { type: 'string', writeOnly: true },
             repository_id: { type: 'string', format: 'uuid' }, actor_id: { type: 'string', format: 'uuid' }, signer_npub: { type: 'string' }, audience: { type: 'string' },
-            service: { type: 'string', enum: ['upload-pack', 'receive-pack'] }, scopes: { type: 'array', items: { type: 'string' } },
+            service: { type: ['string', 'null'], enum: ['upload-pack', 'receive-pack', null] }, scopes: { type: 'array', items: { type: 'string' } },
             policy_revision: { type: 'integer', minimum: 1 }, expires_at: { type: 'string', format: 'date-time' },
           },
         },
@@ -4498,7 +4499,20 @@ export function buildOpenApiDocument(origin: string) {
           description: 'Implemented PH1-5 runtime service metadata for typed Flight Deck PG clients.',
           'x-flightdeck-pg-contract-fixture': flightDeckPgContractFixturePaths['flightdeck_pg.service_metadata'],
           responses: {
-            '200': { description: 'Service metadata contract fixture', content: { 'application/json': { schema: { type: 'object' } } } },
+            '200': { description: 'Service metadata contract fixture. The git object is omitted unless Git authority and explicit gateway discovery are fully configured.', content: { 'application/json': { schema: {
+              type: 'object',
+              required: ['identity', 'service', 'capabilities', 'links'],
+              properties: {
+                identity: { type: 'object' }, service: { type: 'object' }, capabilities: { type: 'array', items: { type: 'string' } }, links: { type: 'object' },
+                git: {
+                  type: 'object', additionalProperties: false, required: ['gateway_origins', 'audience'],
+                  properties: {
+                    gateway_origins: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', format: 'uri', pattern: '^https://[^/]+$' } },
+                    audience: { type: 'string', minLength: 1 },
+                  },
+                },
+              },
+            } } } },
           },
         },
       },
@@ -9381,6 +9395,22 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/git/workspaces/{workspaceId}/repositories/resolve': {
+        get: {
+          tags: ['Git Authority'], security: [{ nip98: [] }],
+          summary: 'Resolve one canonical gateway path to a visible Tower repository',
+          description: 'Credential-broker discovery seam. Accepts only /organization/repository.git and returns the stable repository UUID after current workspace membership and actor/group grants are checked. Unknown, foreign, malformed, and ungranted paths are non-disclosing.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'path', in: 'query', required: true, schema: { type: 'string', pattern: '^/[a-z0-9][a-z0-9-]{0,38}/[a-z0-9][a-z0-9._-]{0,62}\\.git$' } },
+          ],
+          responses: {
+            '200': { description: 'Canonical path and visible repository', content: { 'application/json': { schema: { type: 'object', required: ['canonical_path', 'repository'], properties: { canonical_path: { type: 'string' }, repository: { $ref: '#/components/schemas/GitRepository' } } } } } },
+            '401': { description: 'NIP-98 auth required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '404': { description: 'Repository path not found or not visible', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+          },
+        },
+      },
       '/api/v4/git/workspaces/{workspaceId}/repositories/{repositoryId}': {
         get: {
           tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Read a visible private repository',
@@ -9567,10 +9597,10 @@ export function buildOpenApiDocument(origin: string) {
       '/api/v4/git/credential-exchanges': {
         post: {
           tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Exchange one strict NIP-98 event for a short-lived Git capability',
-          description: 'Requires exact scheme/host/path/query/method, a mandatory body payload hash, a 60-second age/skew window, and one-time event ID consumption. The response is the only Tower serialization containing capability plaintext.',
+          description: 'Requires exact scheme/host/path/query/method, a mandatory body payload hash, a 60-second age/skew window, and one-time event ID consumption. Current clients send repository_id and audience; Tower resolves the NIP-98 actor and derives every currently authorized transport scope from active actor/group grants. Restricted legacy actor_id/service/requested_scopes fields are accepted only together and only as a validated subset. The response is the only Tower serialization containing capability plaintext.',
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/GitCredentialExchangeRequest' } } } },
           responses: {
-            '201': { description: 'Short-lived repository/audience/service/scopes/policy-bound capability', content: { 'application/json': { schema: { $ref: '#/components/schemas/GitCredentialExchangeResponse' } } } },
+            '201': { description: 'Short-lived repository/audience/scopes/policy-bound capability; current capabilities are service-neutral until gateway introspection', content: { 'application/json': { schema: { $ref: '#/components/schemas/GitCredentialExchangeResponse' } } } },
             '400': { description: 'Invalid exchange request or service/scope combination', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
             '401': { description: 'Strict NIP-98 verification failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
             '403': { description: 'Actor, audience, or scope denied', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },

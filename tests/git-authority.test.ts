@@ -346,6 +346,18 @@ describe('Tower Git authority v1', () => {
       expect.objectContaining({ principal_type: 'actor', principal_actor_id: readerId, permission: 'git.repo.read' }),
       expect.objectContaining({ principal_type: 'group', principal_group_id: contributorGroupId, permission: 'git.repo.write' }),
     ]));
+    const resolvePath = `/api/v4/git/workspaces/${workspaceId}/repositories/resolve?path=${encodeURIComponent('/wm-git-authority/private-control-plane.git')}`;
+    const resolved = await publicRequest(resolvePath, 'GET', readerSecret);
+    expect(resolved.response.status).toBe(200);
+    expect(resolved.json).toMatchObject({
+      canonical_path: '/wm-git-authority/private-control-plane.git',
+      repository: { repository_id: repositoryId, workspace_id: workspaceId },
+    });
+    const malformed = await publicRequest(
+      `/api/v4/git/workspaces/${workspaceId}/repositories/resolve?path=${encodeURIComponent('/wm-git-authority/private-control-plane')}`,
+      'GET', readerSecret,
+    );
+    expect(malformed.response.status).toBe(404);
   });
 
   test('Forgejo desired state expands actor and group grants on PostgreSQL', async () => {
@@ -539,6 +551,12 @@ describe('Tower Git authority v1', () => {
     expect(list.response.status).toBe(200);
     expect(list.json.repositories).toEqual([]);
     expect(foreignWorkspaceId).not.toBe(workspaceId);
+    const resolved = await publicRequest(
+      `/api/v4/git/workspaces/${workspaceId}/repositories/resolve?path=${encodeURIComponent('/wm-git-authority/private-control-plane.git')}`,
+      'GET', foreignSecret,
+    );
+    expect(resolved.response.status).toBe(404);
+    expect(resolved.json.code).toBe('git_repository_not_found');
   });
 
   test('strict NIP-98 exchange rejects method, exact URL/query, payload, stale events, actor mismatch, and replay', async () => {
@@ -587,6 +605,105 @@ describe('Tower Git authority v1', () => {
     const replay = await exchangeRequest(body, readerSecret, { authorization });
     expect(replay.response.status).toBe(409);
     expect(replay.json.code).toBe('git_exchange_replayed_event');
+  });
+
+  test('current exchange resolves the actor and derives every transport scope from live grants', async () => {
+    const derived = await exchangeRequest({
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      session_id: 'service-neutral-session',
+    }, contributorSecret);
+    expect(derived.response.status).toBe(201);
+    expect(derived.json).toMatchObject({
+      actor_id: contributorId,
+      signer_npub: CONTRIBUTOR_NPUB,
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      service: null,
+      scopes: ['git.fetch', 'git.push.branch_create', 'git.push.unprotected'],
+    });
+
+    const fetchDecision = await internalRequest('/api/v4/git/internal/capabilities/introspect', {
+      capability: derived.json.capability,
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      service: 'upload-pack',
+      required_scope: 'git.fetch',
+    });
+    expect(fetchDecision.json).toMatchObject({ active: true, service: 'upload-pack' });
+    const pushDecision = await internalRequest('/api/v4/git/internal/capabilities/introspect', {
+      capability: derived.json.capability,
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      service: 'receive-pack',
+      required_scope: 'git.push.unprotected',
+    });
+    expect(pushDecision.json).toMatchObject({
+      active: true,
+      service: 'receive-pack',
+      ref_constraints: { prefixes: ['refs/heads/feature/', 'refs/heads/work/'] },
+    });
+    await sql`
+      UPDATE git_capabilities
+      SET ref_constraints = ${sql.json({ prefixes: ['refs/heads/foreign/'] })}
+      WHERE id = ${derived.json.capability_id}
+    `;
+    const staleConstraints = await internalRequest('/api/v4/git/internal/capabilities/introspect', {
+      capability: derived.json.capability,
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      service: 'receive-pack',
+      required_scope: 'git.push.unprotected',
+    });
+    expect(staleConstraints.json).toEqual({ active: false, reason_code: 'git_capability_ref_constraints_stale' });
+
+    const partialLegacy = await exchangeRequest({
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      actor_id: contributorId,
+    }, contributorSecret);
+    expect(partialLegacy.response.status).toBe(400);
+    expect(partialLegacy.json.code).toBe('git_legacy_request_invalid');
+    const excessiveLegacy = await exchangeRequest({
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      actor_id: readerId,
+      service: 'receive-pack',
+      requested_scopes: ['git.push.unprotected'],
+    }, readerSecret);
+    expect(excessiveLegacy.response.status).toBe(403);
+    expect(excessiveLegacy.json.code).toBe('git_scope_not_granted');
+  });
+
+  test('introspection rejects a capability after its workspace signer is revoked', async () => {
+    const issued = await exchangeRequest({
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+    }, sessionKeySecret);
+    expect(issued.response.status).toBe(201);
+    expect(issued.json.signer_npub).toBe(SESSION_KEY_NPUB);
+
+    await sql`
+      UPDATE user_workspace_keys
+      SET active = false, revoked_at = NOW()
+      WHERE workspace_owner_npub = 'npub1workspacegitauthority'
+        AND ws_key_npub = ${SESSION_KEY_NPUB}
+    `;
+    const revokedSigner = await internalRequest('/api/v4/git/internal/capabilities/introspect', {
+      capability: issued.json.capability,
+      repository_id: repositoryId,
+      audience: GIT_AUDIENCE,
+      service: 'upload-pack',
+      required_scope: 'git.fetch',
+    });
+    expect(revokedSigner.json).toEqual({ active: false, reason_code: 'git_capability_signer_inactive' });
+
+    await sql`
+      UPDATE user_workspace_keys
+      SET active = true, revoked_at = NULL
+      WHERE workspace_owner_npub = 'npub1workspacegitauthority'
+        AND ws_key_npub = ${SESSION_KEY_NPUB}
+    `;
   });
 
   test('valid exchange preserves signer/actor identity and persists no capability plaintext', async () => {

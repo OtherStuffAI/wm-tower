@@ -88,6 +88,7 @@ export const config = {
     capabilityHashKey: secretEnv('GIT_CAPABILITY_HASH_KEY'),
     internalServiceToken: secretEnv('GIT_INTERNAL_SERVICE_TOKEN'),
     audience: String(process.env.GIT_SERVICE_AUDIENCE || '').trim(),
+    gatewayOrigins: csvValues(process.env.GIT_GATEWAY_ORIGINS),
     capabilityTtlSeconds: Math.max(60, Math.min(600, positiveIntEnv('GIT_CAPABILITY_TTL_SECONDS', 300))),
     forgejoBaseUrl: String(process.env.GIT_FORGEJO_BASE_URL || '').trim().replace(/\/+$/, ''),
     forgejoControlToken: secretEnv('GIT_FORGEJO_CONTROL_TOKEN'),

@@ -32,6 +32,7 @@ import {
   listGitRepositoryGrants,
   readGitRepository,
   readGitRepositoryPolicy,
+  resolveGitRepositoryPath,
   revokeGitCapability,
   revokeGitRepositoryGrant,
   updateGitRepositoryPolicy,
@@ -228,6 +229,19 @@ gitRouter.get('/workspaces/:workspaceId/repositories', async (c) => {
     return c.json({ repositories });
   } catch (error) {
     await recordPublicDenial('git.repository.list', auth, error);
+    return errorResponse(c, error);
+  }
+});
+
+gitRouter.get('/workspaces/:workspaceId/repositories/resolve', async (c) => {
+  const auth = await publicAuth(c);
+  if (auth instanceof Response) return auth;
+  try {
+    return c.json(await resolveGitRepositoryPath(
+      c.req.param('workspaceId'), c.req.query('path') || '', auth.userNpub,
+    ));
+  } catch (error) {
+    await recordPublicDenial('git.repository.resolve', auth, error);
     return errorResponse(c, error);
   }
 });

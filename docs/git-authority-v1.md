@@ -17,6 +17,9 @@ The Git authority routes fail closed until all of these values are configured:
   `wingman-git` in `x-wingman-git-service-token` for introspection/revocation.
 - `GIT_SERVICE_AUDIENCE`: the exact configured gateway audience, normally
   `wingman-git`.
+- `GIT_GATEWAY_ORIGINS`: comma-separated exact public HTTPS origins advertised
+  to authenticated credential brokers. Configure this independently; Tower
+  never derives it from its own, Forgejo's, or the browser gateway URL.
 - `GIT_CAPABILITY_TTL_SECONDS`: 60–600 seconds; defaults to 300.
 - `GIT_FORGEJO_BASE_URL`: private Forgejo origin; never a public bypass URL.
 - `GIT_FORGEJO_CONTROL_TOKEN`: non-admin service-account token scoped to
@@ -70,13 +73,18 @@ the service token.
   never replaced by the workspace owner.
 - Opaque capabilities are random 256-bit values returned once. Tower persists
   only HMAC-SHA256 plus a 12-character hash prefix for correlation.
-- Capabilities are bound to repository, actor, signer, audience, Git service,
-  transport scopes, ref constraints, policy revision, and optional session/task/
-  workroom context. Task/workroom IDs are accepted only when they resolve in
+- Current credential exchanges send only `repository_id`, `audience`, and
+  optional correlation context. Tower resolves the strict NIP-98 actor and
+  derives every authorized transport scope and ref constraint from current
+  actor/group grants. Capabilities are bound to repository, actor, signer,
+  audience, transport scopes, ref constraints, policy revision, and optional
+  session/task/workroom context. The gateway supplies the actual smart-HTTP
+  service at introspection time. Task/workroom IDs are accepted only when they resolve in
   the same workspace and the logical actor has channel-read authority there.
-- Introspection rechecks expiry, revocation, repository, audience, service,
-  scope, current policy revision, workspace membership, and current grant/group
-  access. A capability never proves repository administration, merge, approval,
+- Introspection rechecks expiry, revocation, repository, audience, the gateway's
+  actual service and required scope, current policy revision, signer mapping,
+  workspace membership, current grant/group access, and ref constraints. A
+  capability never proves repository administration, merge, approval,
   promotion, deployment, or arbitrary ref authority.
 - Git audit rows are append-only at the database boundary and expose normalized
   decisions without bearer, Authorization, internal token, or plaintext
@@ -97,13 +105,24 @@ the service token.
 Public NIP-98 routes are under `/api/v4/git`:
 
 - owner/admin workspace namespace claim before the first repository;
-- repository create/list/read;
+- repository create/list/read and authenticated canonical gateway-path
+  resolution for credential brokers;
 - grant create/list/revoke;
 - policy read/update;
 - redacted repository audit-event list;
 - issue list/read for any actor with a visible repository grant;
 - strict issue creation/commenting for `git.repo.write` and `git.repo.admin`;
 - strict `POST /credential-exchanges`.
+
+For a migration window, the exchange accepts `actor_id`, `service`, and
+`requested_scopes` only when all three are present and remain a validated subset
+of the resolved actor's current authority. New helpers must not send them.
+
+Authenticated `GET /api/v4/flightdeck-pg/service` includes a `git` object only
+when the capability hash key, internal gateway token, audience, and explicit
+`GIT_GATEWAY_ORIGINS` are fully configured. Origins must be operator-supplied
+HTTPS origins; Tower never derives Tower, Forgejo, organization, or repository
+hostnames.
 
 Internal service-token routes are:
 

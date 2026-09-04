@@ -2523,10 +2523,11 @@ export interface CreateGitRepositoryGrantRequest {
 
 export interface GitCredentialExchangeRequest {
   repository_id: string;
-  actor_id: string;
   audience: string;
-  service: GitService;
-  requested_scopes: GitCapabilityScope[];
+  /** Restricted compatibility fields. When present, all three are required. */
+  actor_id?: string;
+  service?: GitService;
+  requested_scopes?: GitCapabilityScope[];
   autopilot_instance_npub?: string;
   session_id?: string;
   task_id?: string;
@@ -2542,7 +2543,7 @@ export interface GitCredentialExchangeResponse {
   actor_id: string;
   signer_npub: string;
   audience: string;
-  service: GitService;
+  service: GitService | null;
   scopes: GitCapabilityScope[];
   policy_revision: number;
   expires_at: string;

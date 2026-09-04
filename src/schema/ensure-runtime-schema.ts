@@ -4167,6 +4167,9 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   // Git authority v1 is additive and schema-owned here so existing Tower
   // databases receive the same constraints as fresh bootstrap databases.
   await sql.unsafe(gitAuthorityV1Sql());
+  // Repository-derived capabilities are intentionally not bound to a service;
+  // the gateway supplies the actual smart-HTTP service at introspection time.
+  await sql.unsafe(`ALTER TABLE git_capabilities ALTER COLUMN git_service DROP NOT NULL`);
   await sql.unsafe(`
     ALTER TABLE git_forgejo_actor_aliases
     ADD COLUMN IF NOT EXISTS forgejo_user_id BIGINT;

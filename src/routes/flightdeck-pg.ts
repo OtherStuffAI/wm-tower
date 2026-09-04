@@ -1364,17 +1364,42 @@ flightDeckPgRouter.get('/service', async (c) => {
 
   const towerProfile = await getTowerProfile();
   const appNpub = appNpubFromRequest(c);
+  const gatewayOrigins = [...new Set(config.git.gatewayOrigins.flatMap((value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:'
+        && !url.username && !url.password && url.pathname === '/'
+        && !url.search && !url.hash
+        ? [url.origin]
+        : [];
+    } catch {
+      return [];
+    }
+  }))].sort();
+  const gitConfigured = Boolean(
+    config.git.capabilityHashKey.length >= 32
+    && config.git.internalServiceToken.length >= 32
+    && config.git.audience
+    && gatewayOrigins.length > 0
+    && gatewayOrigins.length === config.git.gatewayOrigins.length,
+  );
   return c.json({
     identity: buildFlightDeckPgIdentity(null, appNpub),
     service: {
       name: towerProfile.tower_name,
       description: towerProfile.tower_description,
-      base_url: new URL(c.req.url).origin,
+      base_url: getEffectiveRequestUrl(c.req.raw).origin,
       service_npub: config.service.npub || null,
       version: getTowerBuildInfo().version,
       schema_version: 1,
     },
     capabilities: flightDeckPgCapabilities,
+    ...(gitConfigured ? {
+      git: {
+        gateway_origins: gatewayOrigins,
+        audience: config.git.audience,
+      },
+    } : {}),
     links: {
       workspace_descriptor_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor',
       me_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me',

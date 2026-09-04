@@ -601,6 +601,37 @@ describe('Flight Deck PG API routes', () => {
     expect(json.capabilities).toContain('pg_channel_grants');
   });
 
+  test('advertises only explicitly and fully configured Git discovery', async () => {
+    const previous = {
+      capabilityHashKey: config.git.capabilityHashKey,
+      internalServiceToken: config.git.internalServiceToken,
+      audience: config.git.audience,
+      gatewayOrigins: config.git.gatewayOrigins,
+    };
+    try {
+      config.git.capabilityHashKey = 'h'.repeat(32);
+      config.git.internalServiceToken = 's'.repeat(32);
+      config.git.audience = 'operator-audience';
+      config.git.gatewayOrigins = ['https://git.operator.example'];
+      const configured = await requestJson('/api/v4/flightdeck-pg/service', 'GET', ownerSecret);
+      expect(configured.res.status).toBe(200);
+      expect(configured.json.git).toEqual({
+        gateway_origins: ['https://git.operator.example'],
+        audience: 'operator-audience',
+      });
+
+      config.git.gatewayOrigins = ['http://127.0.0.1:3180'];
+      const insecure = await requestJson('/api/v4/flightdeck-pg/service', 'GET', ownerSecret);
+      expect(insecure.json.git).toBeUndefined();
+
+      config.git.gatewayOrigins = [];
+      const absent = await requestJson('/api/v4/flightdeck-pg/service', 'GET', ownerSecret);
+      expect(absent.json.git).toBeUndefined();
+    } finally {
+      Object.assign(config.git, previous);
+    }
+  });
+
   test('serves notification settings as a backward-compatible config alias', async () => {
     const { workspaceId } = await seedWorkspace('npub1workspaceflightdeckpgnotificationsettings');
     const configPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/notifications/config`;

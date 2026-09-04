@@ -207,7 +207,7 @@ Trying to place one NIP-98 header in `http.extraHeader` would be brittle and uns
 1. The remote is canonical, for example `https://git.example.test/w/<workspace-slug>/<repo-slug>.git`. Tower/Git service resolves it to an immutable repository UUID; filesystem paths are never derived directly from unchecked slugs.
 2. Git calls the host-scoped `git-credential-wingman get` helper. Set `credential.useHttpPath=true` for the Git hostname so a credential for one repository is not offered to another.
 3. The helper sends the protocol, host, path, Autopilot session ID, and optional workroom/task context to the loopback Autopilot credential broker. It does not accept an arbitrary Tower URL from repository-controlled Git config.
-4. Autopilot creates a NIP-98 POST as the session's agent actor to a fixed Tower route such as `POST /api/v4/git/credential-exchanges`. The body contains `repository_id`, `audience`, requested transport, session/instance IDs, and optional `workroom_id`/`task_id`. The payload hash is mandatory.
+4. Autopilot creates a NIP-98 POST as the session's agent actor to a fixed Tower route such as `POST /api/v4/git/credential-exchanges`. The body contains `repository_id`, `audience`, session/instance IDs, and optional `workroom_id`/`task_id`. It does not guess upload-pack versus receive-pack. The payload hash is mandatory.
 5. The exchange route applies stricter verification than Tower's general current verifier:
    - exact scheme, host, path, and query match;
    - at most 60 seconds of clock skew/age;
@@ -215,7 +215,7 @@ Trying to place one NIP-98 header in `http.extraHeader` would be brittle and uns
    - mandatory payload hash;
    - authenticated signer and logical actor both recorded;
    - explicit agent identity; no implicit owner delegation.
-6. Tower resolves the actor's effective stable group IDs and repository grants. It returns a random 256-bit opaque capability and expiry. Tower stores only a keyed hash of the capability plus its repository, actor, policy revision, scopes, context IDs, issue/expiry times, and revocation state.
+6. Tower resolves the actor's effective stable group IDs and repository grants and derives every currently authorized transport scope. It returns a random 256-bit opaque capability and expiry. Tower stores only a keyed hash of the capability plus its repository, actor, policy revision, scopes, ref constraints, context IDs, issue/expiry times, and revocation state. The gateway determines the actual smart-HTTP service and supplies its required scope to introspection.
 7. The helper returns a fixed username (for example `nostr`) and the capability as Git's password. It ignores `store`; `erase` clears only any in-memory entry. It never writes the capability to disk or emits it in diagnostics.
 8. Git sends HTTP Basic over TLS. The gateway hashes and introspects the capability, verifies audience/repository/path/expiry/policy revision, and maps the actor to an internal Forgejo shadow identity.
 9. The gateway replaces Authorization with that shadow actor's internal credential and streams to Forgejo. Forgejo remains the final ref-transaction and branch-protection enforcer.
