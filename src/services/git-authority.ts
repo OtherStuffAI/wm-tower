@@ -742,12 +742,17 @@ export async function listGitRepositories(workspaceId: string, actorNpub: string
            repository.created_by_actor_id, repository.created_at, repository.updated_at
     FROM git_repositories repository
     JOIN git_workspace_namespaces namespace ON namespace.workspace_id = repository.workspace_id
-    JOIN git_repository_grants grant ON grant.repository_id = repository.id AND grant.revoked_at IS NULL
+    JOIN git_repository_grants repository_grant
+      ON repository_grant.repository_id = repository.id
+      AND repository_grant.revoked_at IS NULL
     WHERE repository.workspace_id = ${workspaceId}
       AND repository.archived_at IS NULL
       AND (
-        (grant.principal_type = 'actor' AND grant.principal_actor_id = ${actor.actorId})
-        OR (grant.principal_type = 'group' AND grant.principal_group_id = ANY(${actor.effectiveGroupIds}::uuid[]))
+        (repository_grant.principal_type = 'actor' AND repository_grant.principal_actor_id = ${actor.actorId})
+        OR (
+          repository_grant.principal_type = 'group'
+          AND repository_grant.principal_group_id = ANY(${actor.effectiveGroupIds}::uuid[])
+        )
       )
     ORDER BY repository.created_at DESC
   `;
