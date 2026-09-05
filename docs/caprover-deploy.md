@@ -25,9 +25,6 @@ Use one CapRover app per container:
 | `tower-stable-api` | Tower API | GitHub branch `deployed-stable` | None | Yes |
 | `tower-stable-forgejo-provider` | Private stock Forgejo provider | `caprover/forgejo.captain-definition` | `/var/lib/gitea` | No |
 | `tower-stable-forgejo` | Public Tower Git/Forgejo gateway | GitHub branch `deployed-stable` | None | Yes |
-| `tower-stable-git-issue-broker` | Private Tower-authorized issue adapter | GitHub branch `deployed-stable` | None | No |
-| `tower-stable-git-identity-reconciler` | Private OIDC identity projection worker | GitHub branch `deployed-stable` | None | No |
-| `tower-stable-git-org-reconciler` | Private workspace-to-Forgejo organization worker | GitHub branch `deployed-stable` | None | No |
 
 If graph memory is enabled, add a fourth app:
 
@@ -44,9 +41,6 @@ srv-captain--tower-stable-api
 srv-captain--tower-stable-graph-postgres
 srv-captain--tower-stable-forgejo-provider
 srv-captain--tower-stable-forgejo
-srv-captain--tower-stable-git-issue-broker
-srv-captain--tower-stable-git-identity-reconciler
-srv-captain--tower-stable-git-org-reconciler
 ```
 
 ## Why This Works
@@ -57,16 +51,15 @@ The stack therefore works as separate CapRover apps:
 
 1. Create persistent Postgres and MinIO apps once.
 2. Create the private persistent Forgejo provider once.
-3. Create the Tower API, gateway, issue broker, identity reconciler, and organization reconciler from
-   GitHub branch `deployed-stable`.
+3. Create only the Tower API and plain Forgejo proxy from the reviewed release.
+   Retired worker apps stay stopped; see [migration](forgejo-native-auth-migration.md).
 4. Set `TOWER_RUNTIME_ROLE` per Bun app so the shared image starts the intended
    process.
 5. Point every app at its siblings using CapRover internal DNS.
 6. Future pushes to `deployed-stable` rebuild the GitHub-backed apps; data
    remains in the Postgres, MinIO, and Forgejo volumes.
 
-Do not put a public domain on `tower-stable-forgejo-provider` or
-`tower-stable-git-issue-broker`. The only public Forgejo origin must terminate
+Do not put a public domain on `tower-stable-forgejo-provider` . The only public Forgejo origin must terminate
 at `tower-stable-forgejo`, which proxies to the private provider.
 
 This replaces the manual SSH flow of `git pull`, `docker compose up --build`, and container relaunch for the API. Database/storage containers stay running unless you intentionally update them.
@@ -136,9 +129,6 @@ template:
 
 ```env
 GIT_FORGEJO_BASE_URL=http://srv-captain--tower-stable-forgejo-provider:3000
-GIT_FORGEJO_WEBHOOK_URL=http://srv-captain--tower-stable-api:3100/api/v4/git/forgejo/webhooks
-GIT_ISSUE_BROKER_URL=http://srv-captain--tower-stable-git-issue-broker:3190
-GIT_GATEWAY_TOWER_URL=http://srv-captain--tower-stable-api:3100
 GIT_GATEWAY_BROWSER_ORIGIN=https://tower-stable-forgejo.b.otherstuff.ai
 GIT_OIDC_ISSUER=https://tower-stable-api.b.otherstuff.ai/api/v4/git/oidc
 GIT_OIDC_REDIRECT_URI=https://tower-stable-forgejo.b.otherstuff.ai/user/oauth2/tower/callback
@@ -146,11 +136,10 @@ GIT_OIDC_REDIRECT_URI=https://tower-stable-forgejo.b.otherstuff.ai/user/oauth2/t
 
 CapRover uses direct environment variables rather than the Docker Compose
 secret-file mounts. Do not set any corresponding `*_FILE` variable unless the
-file is actually mounted into that app. Generate independent values for
-`GIT_CAPABILITY_HASH_KEY`, `GIT_INTERNAL_SERVICE_TOKEN`,
-`GIT_FORGEJO_WEBHOOK_SECRET`, `GIT_ISSUE_BROKER_TOKEN`, and
-`GIT_OIDC_CLIENT_SECRET`. Paste the PKCS#8 RSA private key, including its PEM
-newlines, into `GIT_OIDC_SIGNING_KEY`. Never reuse `SUPERBASED_SERVICE_NSEC`.
+file is actually mounted into that app. Use an independent
+`GIT_OIDC_CLIENT_SECRET` and protected RSA `GIT_OIDC_SIGNING_KEY`. Preserve both
+for existing installations and configure `GIT_OIDC_ALLOWED_NPUBS` explicitly.
+Tower authenticates only; there are no Git capability/control/broker secrets.
 
 If graph memory is enabled:
 
@@ -185,49 +174,25 @@ Use a named volume such as `tower-stable-forgejo-provider-data`. The rootless
 image writes its generated configuration and SQLite database below
 `/var/lib/gitea`; mounting only `/etc/gitea` does not preserve either one.
 
-The CapRover overlay uses dynamic task addresses, so the provider template
-trusts CapRover's private `10.0.0.0/8` network for reverse-proxy identity. This
-is safe only while the provider remains unexposed and every app on the
-CapRover host is operator-controlled. Do not publish provider port `3000`.
+Reverse-proxy authentication is disabled. Native Forgejo OAuth/API/Git routes
+are public through the plain proxy and enforce Forgejo's own credentials and
+permissions. No trusted-header impersonation is used.
 
-### Public gateway
+### Public proxy
 
-Create `tower-stable-forgejo` from this repository's `deployed-stable` branch,
-set container HTTP port `3180`, enable HTTPS and WebSocket support, and attach
-the stable domain `tower-stable-forgejo.b.otherstuff.ai`. Apply
-`caprover/git-gateway.env.example`. Its `GIT_INTERNAL_SERVICE_TOKEN` must equal
-the Tower API value.
+Keep `tower-stable-forgejo`, port `3180`, HTTPS, WebSocket support and the existing
+public hostname. Apply `caprover/git-gateway.env.example`; it needs only the
+private provider base URL and public origin. It does not depend on Tower for
+already-authenticated Git/API access.
 
-### Private issue broker
+### Retired workers
 
-Create `tower-stable-git-issue-broker` from `deployed-stable`, set container
-HTTP port `3190`, do not enable a public domain, and apply
-`caprover/git-issue-broker.env.example`. Its token must equal the Tower API
-`GIT_ISSUE_BROKER_TOKEN`.
-
-### Identity reconciler
-
-Create `tower-stable-git-identity-reconciler` from `deployed-stable`, leave it
-without a public domain, and apply
-`caprover/git-identity-reconciler.env.example`. The worker follows native
-Forgejo username changes by immutable OIDC/provider user ID.
-
-### Workspace organization reconciler
-
-Create `tower-stable-git-org-reconciler` from `deployed-stable`, leave it
-without a public domain, and apply `caprover/git-org-reconciler.env.example`.
-`GIT_GATEWAY_TOWER_URL` and `GIT_FORGEJO_BASE_URL` are the configurable Tower
-and private Forgejo URLs. The worker uses the isolated non-admin control token
-to create one private Forgejo organization per Tower workspace and reconcile
-Tower owners/admins into Forgejo's Owners team. Tower workspace creation only
-queues this projection, so provider downtime does not roll back the workspace.
-
-The provider still requires one-time creation of the non-admin repository
-reconciler identity, the isolated identity lookup account, and the `tower`
-OpenID Connect authentication source. Perform those bootstrap operations from
-the provider app's CapRover terminal after Tower OIDC discovery returns HTTP
-200. Never expose the generated provider tokens or add them to the Tower API
-app.
+Do not create or redeploy issue broker, identity or org/repository reconcilers.
+Disable existing apps, launchers and tokens with task/process evidence before
+cutover using [the executable migration handoff](forgejo-native-auth-migration.md).
+Keep the existing stock provider, persistent volume, OIDC source and user links.
+A fresh instance needs only the native `tower` OIDC authentication source, never
+provider control/identity accounts.
 
 ## Postgres App
 
@@ -321,6 +286,8 @@ curl -fsS https://tower-stable-minio.b.otherstuff.ai/minio/health/live
 
 ## Rollback
 
-Use CapRover's previous deployment rollback for `tower-stable-api`, or move `deployed-stable` back to a known-good commit and rebuild.
+Keep retired workers stopped. Roll back only to a reviewed authentication-only
+release; never restore the old permission writer/gateway architecture. See the
+migration handoff for snapshot recovery.
 
 Do not delete persistent Postgres or MinIO apps during rollback. If an app must be deleted and recreated, keep the same app name and do not remove its persistent volume.

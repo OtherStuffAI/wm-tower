@@ -1,3 +1,9 @@
+> **RETIRED HISTORICAL DESIGN — DO NOT RUN THESE COMMANDS.**
+> Tower now authenticates allowlisted Nostr identities only. Stock Forgejo owns
+> all accounts, OAuth, permissions, Git and APIs. The capability gateway,
+> permission writers, grants and issue broker described below are removed.
+> Follow [the native migration handoff](forgejo-native-auth-migration.md).
+
 # Tower Git authority v1
 
 Tower Git authority v1 is the canonical control plane for private,

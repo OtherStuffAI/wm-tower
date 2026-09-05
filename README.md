@@ -22,8 +22,14 @@ For the current Wingman Be Free workflow:
 - Yoke is a local CLI and should ideally be consumable via `npx wingman-yoke` or `bunx wingman-yoke`
 
 The portable Docker bundle is backend-only: Tower, Postgres, MinIO, and the
-private Forgejo/Tower Git gateway plus isolated issue-broker data plane. Flight
-Deck and Autopilot stay outside this stack.
+stock Forgejo provider with a plain reverse proxy preserving its public URL.
+Tower authenticates explicitly allowlisted Nostr identities through OIDC only.
+Forgejo issues native OAuth credentials and owns all accounts, repository/team
+permissions, Git and APIs. Autopilot's shipped helper signs in again through
+Tower when a native credential expires; there are no Tower Git grants, permission
+workers or issue broker. See [migration](docs/forgejo-native-auth-migration.md)
+for the reviewed cutover and native access recovery. Flight Deck and Autopilot
+stay outside this stack.
 
 ## Protocol Docs
 

@@ -2365,7 +2365,8 @@ export interface RecordHistoryResponse {
   versions: RecordResponse[];
 }
 
-// Tower Git authority v1. These permissions and resources are deliberately
+// Deprecated audit-only Git authority v1 types. No runtime routes or permissions.
+// These historical permissions and resources are deliberately
 // separate from Flight Deck channel grants.
 export const gitRepositoryPermissions = [
   'git.repo.read',
@@ -2763,4 +2764,12 @@ export interface FlightDeckRecordPage {
   snapshot_complete: boolean;
   partitions_complete: string[];
   bounds: { max_rows: number; max_bytes: number };
+}
+
+/** Tower authenticates only; this challenge grants no Forgejo Git/API permissions. */
+export interface ForgejoLoginChallenge {
+  request_id: string;
+  completion_url: string;
+  client_id: string;
+  expires_at: number;
 }

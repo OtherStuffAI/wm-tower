@@ -5,20 +5,12 @@ runtime_role=${TOWER_RUNTIME_ROLE:-api}
 
 case "$runtime_role" in
   git-gateway)
-    echo "Starting Tower Git gateway..."
+    echo "Starting stock Forgejo reverse proxy..."
     exec bun run git:gateway
     ;;
-  git-issue-broker)
-    echo "Starting Tower Git issue broker..."
-    exec bun run git:issues
-    ;;
-  git-identity-reconciler)
-    echo "Starting Tower Git identity reconciler..."
-    exec bun run git:reconcile-identities
-    ;;
-  git-org-reconciler)
-    echo "Starting Tower Git organization reconciler..."
-    exec bun run git:reconcile-organizations
+  git-issue-broker|git-identity-reconciler|git-org-reconciler|git-reconciler)
+    echo "Retired runtime role: Tower authenticates only; Forgejo owns authorization." >&2
+    exit 64
     ;;
   api)
     ;;

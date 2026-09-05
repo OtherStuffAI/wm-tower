@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: native-fixture-only
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:35442:5432"]
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.3-rootless
+    extra_hosts: ["dev.otherstuff.studio:host-gateway"]
+    environment:
+      SSL_CERT_FILE: /fixture/cert.pem
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__PROTOCOL: https
+      FORGEJO__server__CERT_FILE: /fixture/cert.pem
+      FORGEJO__server__KEY_FILE: /fixture/key.pem
+      FORGEJO__server__ROOT_URL: https://dev.otherstuff.studio:33310/
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "false"
+      FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION: "false"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION_API: "false"
+      FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      FORGEJO__oauth2__ACCESS_TOKEN_EXPIRATION_TIME: "15"
+      FORGEJO__actions__ENABLED: "false"
+      FORGEJO__security__DISABLE_GIT_HOOKS: "true"
+    ports: ["127.0.0.1:33310:3000"]
+    volumes:
+      - fixture-data:/var/lib/gitea
+      - fixture-config:/etc/gitea
+      - /tmp/tower-native-forgejo:/fixture:ro
+volumes:
+  fixture-data:
+  fixture-config:

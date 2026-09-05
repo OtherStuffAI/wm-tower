@@ -83,23 +83,8 @@ export const config = {
     activeMaxAgeDays: positiveIntEnv('WAPP_ACTIVITY_ACTIVE_MAX_AGE_DAYS', 365),
   },
   git: {
-    // Git authority remains disabled/fail-closed until all three operator-owned
-    // values are configured. Secrets are never defaulted in source.
-    capabilityHashKey: secretEnv('GIT_CAPABILITY_HASH_KEY'),
-    internalServiceToken: secretEnv('GIT_INTERNAL_SERVICE_TOKEN'),
-    audience: String(process.env.GIT_SERVICE_AUDIENCE || '').trim(),
-    gatewayOrigins: csvValues(process.env.GIT_GATEWAY_ORIGINS),
-    capabilityTtlSeconds: Math.max(60, Math.min(600, positiveIntEnv('GIT_CAPABILITY_TTL_SECONDS', 300))),
-    forgejoBaseUrl: String(process.env.GIT_FORGEJO_BASE_URL || '').trim().replace(/\/+$/, ''),
-    forgejoControlToken: secretEnv('GIT_FORGEJO_CONTROL_TOKEN'),
-    forgejoWebhookSecret: secretEnv('GIT_FORGEJO_WEBHOOK_SECRET'),
-    forgejoWebhookUrl: String(process.env.GIT_FORGEJO_WEBHOOK_URL || '').trim(),
-    issueBrokerUrl: String(process.env.GIT_ISSUE_BROKER_URL || '').trim().replace(/\/+$/, ''),
-    issueBrokerToken: secretEnv('GIT_ISSUE_BROKER_TOKEN'),
-    issueBrokerPort: positiveIntEnv('GIT_ISSUE_BROKER_PORT', 3190),
-    gatewayTowerUrl: String(process.env.GIT_GATEWAY_TOWER_URL || '').trim().replace(/\/+$/, ''),
-    gatewayFixedUsername: String(process.env.GIT_GATEWAY_FIXED_USERNAME || 'nostr').trim(),
-    gatewayPort: positiveIntEnv('GIT_GATEWAY_PORT', 3180),
+    // Authentication only. An empty explicit Nostr allowlist denies all sign-ins.
+    oidcAllowedNpubs: csvValues(process.env.GIT_OIDC_ALLOWED_NPUBS),
     oidcIssuer: String(process.env.GIT_OIDC_ISSUER || '').trim().replace(/\/+$/, ''),
     oidcClientId: String(process.env.GIT_OIDC_CLIENT_ID || 'forgejo').trim(),
     oidcClientSecret: secretEnv('GIT_OIDC_CLIENT_SECRET'),

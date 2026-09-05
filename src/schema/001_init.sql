@@ -1,5 +1,55 @@
 -- V4 Coworker MVP schema
 
+-- forgejo_native_retirement_v1
+-- Run before any upgrade/backfill can fire an installed legacy projection trigger.
+-- Catalog lookup also works for a fresh database where these tables do not exist.
+DO $$
+DECLARE retired RECORD;
+BEGIN
+  FOR retired IN
+    SELECT trigger_row.tgname, namespace.nspname, relation.relname
+    FROM pg_trigger trigger_row
+    JOIN pg_class relation ON relation.oid = trigger_row.tgrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = current_schema() AND NOT trigger_row.tgisinternal
+      AND trigger_row.tgname IN (
+        'trg_git_ensure_workspace_forgejo_binding',
+        'trg_git_group_membership_reconciliation_stale',
+        'trg_git_workspace_organization_reconciliation_stale',
+        'trg_git_actor_organizations_reconciliation_stale',
+        'trg_git_group_edge_reconciliation_stale')
+  LOOP
+    EXECUTE format('DROP TRIGGER %I ON %I.%I', retired.tgname, retired.nspname, retired.relname);
+  END LOOP;
+END;
+$$;
+DROP FUNCTION IF EXISTS git_ensure_workspace_forgejo_binding();
+DROP FUNCTION IF EXISTS git_ensure_workspace_forgejo_binding_for(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS git_mark_group_membership_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_workspace_organization_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_actor_organizations_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_group_edge_reconciliation_stale();
+-- Archived Git records must survive normal Tower workspace/actor/group deletion.
+-- Remove only outward foreign keys; retain relationships between historical git_ tables.
+DO $$
+DECLARE retired_fk RECORD;
+BEGIN
+  FOR retired_fk IN
+    SELECT constraint_row.conname, namespace.nspname, relation.relname
+    FROM pg_constraint constraint_row
+    JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    JOIN pg_class referenced ON referenced.oid = constraint_row.confrelid
+    WHERE constraint_row.contype = 'f' AND namespace.nspname = current_schema()
+      AND left(relation.relname, 4) = 'git_'
+      AND NOT (referenced.relnamespace = relation.relnamespace AND left(referenced.relname, 4) = 'git_')
+  LOOP
+    EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', retired_fk.nspname, retired_fk.relname, retired_fk.conname);
+  END LOOP;
+END;
+$$;
+-- end_forgejo_native_retirement_v1
+
 CREATE TABLE IF NOT EXISTS v4_groups (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_npub TEXT NOT NULL,
@@ -2971,9 +3021,8 @@ BEGIN
 END;
 $$;
 
--- Forgejo is an enforcement replica. Tower claims a globally unique immutable
--- workspace namespace and uses Tower-validated repository slugs as provider
--- paths. Stable UUIDs remain the authority keys behind those readable aliases.
+-- Historical Forgejo projection tables retained for audit and initial OIDC
+-- identity continuity only. No running code writes provider state from them.
 CREATE TABLE IF NOT EXISTS git_forgejo_actor_aliases (
   actor_id UUID PRIMARY KEY REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE,
   desired_username TEXT NOT NULL,
@@ -3020,9 +3069,8 @@ CREATE TABLE IF NOT EXISTS git_forgejo_repository_bindings (
 -- A lost worker leaves access pending until its attempt is recovered, never auto-expired.
 ALTER TABLE git_forgejo_repository_bindings ADD COLUMN IF NOT EXISTS reconciliation_token UUID;
 
--- A workspace organization exists independently of repositories. Tower writes
--- the desired binding transactionally; the private provider worker projects it
--- into Forgejo without making workspace creation depend on provider uptime.
+-- Historical workspace organization projection. Native Forgejo now owns
+-- organizations and permissions independently of Tower workspace lifecycle.
 CREATE TABLE IF NOT EXISTS git_forgejo_workspace_bindings (
   workspace_id UUID PRIMARY KEY REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
   forgejo_owner TEXT NOT NULL UNIQUE,
@@ -3039,65 +3087,11 @@ CREATE TABLE IF NOT EXISTS git_forgejo_workspace_bindings (
 ALTER TABLE git_forgejo_workspace_bindings
   ADD COLUMN IF NOT EXISTS desired_generation INTEGER NOT NULL DEFAULT 1;
 
-CREATE OR REPLACE FUNCTION git_ensure_workspace_forgejo_binding_for(
-  target_workspace_id UUID,
-  target_slug TEXT,
-  target_name TEXT
-)
-RETURNS VOID AS $$
-DECLARE
-  candidate TEXT;
-  fallback TEXT;
-BEGIN
-  fallback := 'wm-' || replace(target_workspace_id::text, '-', '');
-  candidate := lower(regexp_replace(COALESCE(NULLIF(trim(target_slug), ''), target_name), '[^a-zA-Z0-9]+', '-', 'g'));
-  candidate := trim(both '-' from candidate);
-  IF candidate !~ '^[a-z0-9][a-z0-9-]{0,38}$'
-     OR candidate ~ '^wm-[a-f0-9]{32}$'
-     OR candidate IN ('admin', 'api', 'assets', 'auth', 'explore', 'health', 'issues', 'milestones', 'org', 'pulls', 'ready', 'repo', 'user', 'v2')
-     OR EXISTS (
-       SELECT 1 FROM git_forgejo_actor_aliases alias
-       WHERE lower(alias.desired_username) = candidate OR lower(alias.applied_username) = candidate
-     ) THEN
-    candidate := fallback;
-  END IF;
-  BEGIN
-    INSERT INTO git_workspace_namespaces (workspace_id, namespace)
-    VALUES (target_workspace_id, candidate)
-    ON CONFLICT (workspace_id) DO NOTHING;
-  EXCEPTION WHEN unique_violation THEN
-    INSERT INTO git_workspace_namespaces (workspace_id, namespace)
-    VALUES (target_workspace_id, fallback)
-    ON CONFLICT (workspace_id) DO NOTHING;
-  END;
-  INSERT INTO git_forgejo_workspace_bindings (workspace_id, forgejo_owner)
-  SELECT target_workspace_id, namespace FROM git_workspace_namespaces WHERE workspace_id = target_workspace_id
-  ON CONFLICT (workspace_id) DO NOTHING;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION git_ensure_workspace_forgejo_binding()
-RETURNS TRIGGER AS $$
-BEGIN
-  PERFORM git_ensure_workspace_forgejo_binding_for(NEW.id, NEW.slug, NEW.name);
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
+-- Native Forgejo retirement: retain historical bindings without generating new
+-- organizations from Tower workspaces, including during repeated runtime migration.
 DROP TRIGGER IF EXISTS trg_git_ensure_workspace_forgejo_binding ON flightdeck_pg_workspaces;
-CREATE TRIGGER trg_git_ensure_workspace_forgejo_binding
-AFTER INSERT ON flightdeck_pg_workspaces
-FOR EACH ROW EXECUTE FUNCTION git_ensure_workspace_forgejo_binding();
-
--- Backfill workspaces created before organization projection was introduced.
-DO $$
-DECLARE workspace_row flightdeck_pg_workspaces%ROWTYPE;
-BEGIN
-  FOR workspace_row IN SELECT * FROM flightdeck_pg_workspaces ORDER BY created_at, id LOOP
-    PERFORM git_ensure_workspace_forgejo_binding_for(workspace_row.id, workspace_row.slug, workspace_row.name);
-  END LOOP;
-END;
-$$;
+DROP FUNCTION IF EXISTS git_ensure_workspace_forgejo_binding();
+DROP FUNCTION IF EXISTS git_ensure_workspace_forgejo_binding_for(UUID, TEXT, TEXT);
 
 DO $$
 DECLARE constraint_name TEXT;
@@ -3176,123 +3170,36 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END;
 $$;
 
--- Group membership and nesting can change effective Forgejo collaborators
--- without touching a repository grant row. Mark every affected binding stale
--- transactionally so the browser gateway fails closed until reconciliation.
-CREATE OR REPLACE FUNCTION git_mark_group_membership_reconciliation_stale()
-RETURNS TRIGGER AS $$
-DECLARE
-  affected_workspace UUID;
-  affected_group UUID;
-BEGIN
-  affected_workspace := CASE WHEN TG_OP = 'DELETE' THEN OLD.workspace_id ELSE NEW.workspace_id END;
-  affected_group := CASE WHEN TG_OP = 'DELETE' THEN OLD.group_id ELSE NEW.group_id END;
-  WITH RECURSIVE affected_groups(group_id) AS (
-    SELECT affected_group
-    UNION
-    SELECT OLD.group_id WHERE TG_OP = 'UPDATE' AND OLD.group_id IS DISTINCT FROM NEW.group_id
-    UNION
-    SELECT edge.parent_group_id
-    FROM flightdeck_pg_group_edges edge
-    JOIN affected_groups child ON child.group_id = edge.child_group_id
-    WHERE edge.workspace_id = affected_workspace
-  ), changed AS (
-    UPDATE git_repositories repository
-    SET policy_revision = repository.policy_revision + 1, updated_at = NOW()
-    WHERE repository.workspace_id = affected_workspace
-      AND repository.archived_at IS NULL
-      AND EXISTS (
-        SELECT 1 FROM git_repository_grants repository_grant
-        WHERE repository_grant.repository_id = repository.id
-          AND repository_grant.principal_type = 'group'
-          AND repository_grant.revoked_at IS NULL
-          AND repository_grant.principal_group_id IN (SELECT group_id FROM affected_groups)
-      )
-    RETURNING repository.id, repository.policy_revision
-  )
-  UPDATE git_forgejo_repository_bindings binding
-  SET desired_policy_revision = changed.policy_revision, state = 'pending', updated_at = NOW()
-  FROM changed WHERE binding.repository_id = changed.id;
-  UPDATE git_forgejo_workspace_bindings
-  SET desired_generation = desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
-  WHERE workspace_id = affected_workspace;
-  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION git_mark_workspace_organization_reconciliation_stale()
-RETURNS TRIGGER AS $$
-DECLARE
-  affected_workspace UUID;
-BEGIN
-  affected_workspace := CASE WHEN TG_OP = 'DELETE' THEN OLD.workspace_id ELSE NEW.workspace_id END;
-  UPDATE git_forgejo_workspace_bindings
-  SET desired_generation = desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
-  WHERE workspace_id = affected_workspace;
-  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION git_mark_actor_organizations_reconciliation_stale()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF NEW.forgejo_user_id IS DISTINCT FROM OLD.forgejo_user_id
-     OR NEW.applied_username IS DISTINCT FROM OLD.applied_username THEN
-    UPDATE git_forgejo_workspace_bindings binding
-    SET desired_generation = binding.desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
-    FROM flightdeck_pg_workspace_memberships membership
-    WHERE membership.actor_id = NEW.actor_id
-      AND binding.workspace_id = membership.workspace_id;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION git_mark_group_edge_reconciliation_stale()
-RETURNS TRIGGER AS $$
-DECLARE
-  affected_workspace UUID;
-BEGIN
-  affected_workspace := CASE WHEN TG_OP = 'DELETE' THEN OLD.workspace_id ELSE NEW.workspace_id END;
-  WITH changed AS (
-    UPDATE git_repositories repository
-    SET policy_revision = repository.policy_revision + 1, updated_at = NOW()
-    WHERE repository.workspace_id = affected_workspace
-      AND repository.archived_at IS NULL
-      AND EXISTS (
-        SELECT 1 FROM git_repository_grants repository_grant
-        WHERE repository_grant.repository_id = repository.id
-          AND repository_grant.principal_type = 'group'
-          AND repository_grant.revoked_at IS NULL
-      )
-    RETURNING repository.id, repository.policy_revision
-  )
-  UPDATE git_forgejo_repository_bindings binding
-  SET desired_policy_revision = changed.policy_revision, state = 'pending', updated_at = NOW()
-  FROM changed WHERE binding.repository_id = changed.id;
-  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
-END;
-$$ LANGUAGE plpgsql;
-
+-- Native Forgejo owns all permissions. Remove operational projection triggers
+-- from upgraded databases; keep existing git_* rows as historical audit data.
+-- The immutable audit/event triggers above intentionally remain in place.
 DROP TRIGGER IF EXISTS trg_git_group_membership_reconciliation_stale ON flightdeck_pg_group_memberships;
-CREATE TRIGGER trg_git_group_membership_reconciliation_stale
-AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_group_memberships
-FOR EACH ROW EXECUTE FUNCTION git_mark_group_membership_reconciliation_stale();
-
 DROP TRIGGER IF EXISTS trg_git_workspace_organization_reconciliation_stale ON flightdeck_pg_workspace_memberships;
-CREATE TRIGGER trg_git_workspace_organization_reconciliation_stale
-AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_workspace_memberships
-FOR EACH ROW EXECUTE FUNCTION git_mark_workspace_organization_reconciliation_stale();
-
 DROP TRIGGER IF EXISTS trg_git_actor_organizations_reconciliation_stale ON git_forgejo_actor_aliases;
-CREATE TRIGGER trg_git_actor_organizations_reconciliation_stale
-AFTER UPDATE OF forgejo_user_id, applied_username ON git_forgejo_actor_aliases
-FOR EACH ROW EXECUTE FUNCTION git_mark_actor_organizations_reconciliation_stale();
-
 DROP TRIGGER IF EXISTS trg_git_group_edge_reconciliation_stale ON flightdeck_pg_group_edges;
-CREATE TRIGGER trg_git_group_edge_reconciliation_stale
-AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_group_edges
-FOR EACH ROW EXECUTE FUNCTION git_mark_group_edge_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_group_membership_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_workspace_organization_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_actor_organizations_reconciliation_stale();
+DROP FUNCTION IF EXISTS git_mark_group_edge_reconciliation_stale();
+-- Archived Git records must survive normal Tower workspace/actor/group deletion.
+-- Remove only outward foreign keys; retain relationships between historical git_ tables.
+DO $$
+DECLARE retired_fk RECORD;
+BEGIN
+  FOR retired_fk IN
+    SELECT constraint_row.conname, namespace.nspname, relation.relname
+    FROM pg_constraint constraint_row
+    JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    JOIN pg_class referenced ON referenced.oid = constraint_row.confrelid
+    WHERE constraint_row.contype = 'f' AND namespace.nspname = current_schema()
+      AND left(relation.relname, 4) = 'git_'
+      AND NOT (referenced.relnamespace = relation.relnamespace AND left(referenced.relname, 4) = 'git_')
+  LOOP
+    EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', retired_fk.nspname, retired_fk.relname, retired_fk.conname);
+  END LOOP;
+END;
+$$;
 -- end_git_authority_v1
 
 CREATE TABLE IF NOT EXISTS tower_metadata (
@@ -3516,3 +3423,20 @@ CREATE INDEX IF NOT EXISTS idx_fd_message_thread_effective_timeline
   WHERE thread_id IS NOT NULL;
 
 -- end_flightdeck_record_delta_v1
+
+-- Authentication identity only; legacy git_* data remains for audit.
+CREATE TABLE IF NOT EXISTS forgejo_login_identities (
+  npub TEXT PRIMARY KEY,
+  subject TEXT NOT NULL,
+  initial_username TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Identity continuity migration only; no Forgejo permission or account mutation.
+INSERT INTO forgejo_login_identities (npub, subject, initial_username)
+SELECT actor.npub, actor.id::text,
+  COALESCE(alias.applied_username, alias.desired_username,
+    'nostr-' || substr(md5(actor.npub), 1, 24))
+FROM flightdeck_pg_actors actor
+LEFT JOIN git_forgejo_actor_aliases alias ON alias.actor_id = actor.id
+ON CONFLICT (npub) DO NOTHING;

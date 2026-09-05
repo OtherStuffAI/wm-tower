@@ -51,33 +51,21 @@ Optional because Tower has code defaults:
 - `SUPERBASED_SERVICE_NPUB`
 - `DB_WAIT_MAX_ATTEMPTS` default `40`
 
-Tower Git authority v1 is optional but fail-closed unless all of these are set:
+Tower optionally provides Nostr OIDC authentication for stock Forgejo. Set
+`GIT_OIDC_ALLOWED_NPUBS` explicitly and preserve issuer, signing key, client
+secret and callback URL. Forgejo owns all native OAuth, repository permissions,
+Git and APIs. See [native migration](forgejo-native-auth-migration.md) before
+updating any existing deployment. No worker or issue broker is deployed.
 
-- `GIT_CAPABILITY_HASH_KEY` (independent high-entropy HMAC key, at least 32 bytes)
-- `GIT_INTERNAL_SERVICE_TOKEN` (independent high-entropy `wingman-git` service token)
-- `GIT_ISSUE_BROKER_TOKEN` (independent Tower-to-private-broker token)
-- `GIT_ISSUE_BROKER_URL` (normally `http://git-issue-broker:3190`)
-- `GIT_SERVICE_AUDIENCE` (normally `wingman-git`)
-- `GIT_GATEWAY_ORIGINS` (comma-separated exact public HTTPS gateway origins
-  advertised to authenticated clients; never inferred from Tower or Forgejo)
-- `GIT_CAPABILITY_TTL_SECONDS` defaults to `300` and is clamped to 60–600 seconds
-
-See `docs/git-authority-v1.md`. Never commit or reuse production secret values.
-
-The Forgejo-backed production slice uses ignored secret files rather than
-placing new Git bearer values in Compose interpolation or container metadata.
-Prepare the migrated local configuration from an existing deployment env with:
+Prepare protected OIDC secret files without printing them:
 
 ```bash
 ./scripts/prepare-tower-git-deployment.sh /absolute/path/to/existing/.env.prod
-docker compose --project-name wingman-tower --env-file .env.prod \
-  -f docker-compose.prod.yml config --quiet
+docker compose --env-file .env.prod -f docker-compose.prod.yml config --quiet
 ```
 
-The preparation script copies the existing runtime configuration only when the
-current repo has no `.env.prod`, preserves it thereafter, and generates four
-independent 32-byte secrets under ignored `.runtime/tower-git-secrets/`. It
-does not print them. Do not reuse `SUPERBASED_SERVICE_NSEC` for Git.
+The preparation script preserves existing files. Preserve the original issuer
+and keys during migration; do not bootstrap replacement identities.
 
 Important container note:
 
@@ -138,77 +126,25 @@ This starts:
 - `wingman-tower-forgejo`
 - `wingman-tower-git-gateway`
 
-Forgejo has persistent config/data volumes and no host port. Only the gateway
-is published, on `127.0.0.1:3180` by default. Forgejo accepts reverse-proxy
-identity headers only from fixed gateway, reconciler, and issue-broker addresses
-on the internal `git-private` network. Reverse-proxy auto-registration is off;
-human login uses Tower OIDC and native Forgejo sessions. Registration,
-internal/password login, SSH, push-to-create, Actions,
-and custom Git hooks are disabled.
+Forgejo has persistent config/data volumes and no host port. The optional plain
+reverse proxy is published on `127.0.0.1:3180` and preserves the public URL.
+Reverse-proxy identity authentication is disabled. Stock native OAuth, Git,
+API, consent and permissions pass through unchanged; the proxy has no Tower
+authorization or startup dependency. SSH, push-to-create, Actions and custom
+Git hooks remain disabled by default.
 
-Set `GIT_GATEWAY_BROWSER_ORIGIN` to the exact public HTTPS origin terminating
-at that same gateway port (for example `https://forgejo.example.com`). The
-gateway transparently proxies Forgejo UI/API traffic and strips spoofable
-identity headers. Forgejo redirects login to Tower OIDC, where the user signs
-the authorization request with Nostr. Do not
-point Cloudflare at Forgejo port `3000` or publish that port.
-
-After Forgejo is healthy, provision its control identity once:
-
-```bash
-./scripts/bootstrap-forgejo-control.sh
-```
-
-This creates a normal non-admin account with an unusable random password and a
-token limited to organization/repository write scopes. The token is stored only
-in ignored `.runtime/tower-git-secrets/forgejo-control-token`, is mounted only
-into the on-demand reconciler, and is never given to Tower, the gateway,
-clients, or agents. No bootstrap admin is required. Re-running the script is a
-no-op while the token file exists.
-
-Register Tower as Forgejo's stock OpenID Connect authentication source:
+Set `GIT_GATEWAY_BROWSER_ORIGIN` to the existing public Forgejo HTTPS origin.
+For a fresh instance, configure the native external OIDC source once:
 
 ```bash
 ./scripts/bootstrap-forgejo-oidc.sh
 ```
 
-The preparation script generates an RSA signing key and OAuth client secret in
-the ignored Git secrets directory. `GIT_OIDC_ISSUER` must be Tower's public
-HTTPS issuer and `GIT_OIDC_REDIRECT_URI` must be the exact Forgejo callback.
-Forgejo has a dedicated outbound bridge for discovery and token calls; its HTTP
-port remains unpublished.
-
-New deployments keep `GIT_FORGEJO_OIDC_ACCOUNT_LINKING=disabled`. When migrating
-accounts previously created by trusted proxy authentication, set it to `auto`
-only until every existing user has completed one Tower OIDC login, then restore
-`disabled` and restart Forgejo. Auto-linking trusts a username/email match and
-must not remain enabled as routine account policy.
-
-The identity reconciler follows linked Forgejo users by numeric provider ID so
-native username changes do not change identity. Provision its lookup identity
-once after Forgejo is healthy:
-
-```bash
-./scripts/bootstrap-forgejo-identity.sh
-```
-
-Its ignored `forgejo-identity-token` is mounted only into the identity
-reconciler. Tower, the gateway, and the ordinary repository reconciler never
-receive this administrator credential.
-
-The preparation script also creates an independent ignored
-`git-issue-broker-token`. It is mounted only into Tower and the private
-`git-issue-broker` service. The broker holds no Forgejo access token; Forgejo
-accepts its `X-WebAuth-User` identity only from the broker's fixed internal
-address. Do not publish broker port `3190` or add it to the default network.
-
-Reconcile a registered Tower repository by UUID:
-
-```bash
-docker compose --project-name wingman-tower --env-file .env.prod \
-  -f docker-compose.prod.yml --profile tools run --rm git-reconciler \
-  <repository-uuid>
-```
+For migration, preserve existing source IDs, issuer and immutable subject links.
+Keep `GIT_FORGEJO_OIDC_ACCOUNT_LINKING=disabled`; do not auto-link by alias or
+email. Old control/identity bootstrap scripts are retired and return an error.
+Organizations, teams, accounts, usernames and repositories are managed natively
+in Forgejo. Never restart permission reconciliation to repair access.
 
 Postgres is created automatically, MinIO is bootstrapped with the configured bucket, and Tower waits for its dependencies, runs migrations, then starts the API.
 
@@ -226,13 +162,11 @@ curl http://127.0.0.1:${MINIO_API_HOST_PORT:-9000}/minio/health/live
 docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f tower
 ```
 
-The local Tower API and gateway listener are private host endpoints. The public
-Forgejo origin terminates at the gateway. Browsers use Forgejo's native session
-after Tower OIDC/Nostr authorization; stock Git continues to exchange short-lived
-credentials through Tower and use the same gateway. Anonymous repositories,
-Pages, public hosted sites, and SSH are not
-provided. Seamless agent use still requires the separate Autopilot
-`git-credential-wingman` helper.
+The shipped Autopilot `git-credential-wingman` helper obtains a native Forgejo
+OAuth credential through the session broker and Tower Nostr OIDC. Expiry causes
+native sign-in again. Existing native tokens work while Tower is unavailable;
+allowlist removal prevents new login only. Forgejo must revoke native access
+separately when immediate removal is required.
 
 ## Canonical Tower release checks
 

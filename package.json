@@ -18,11 +18,7 @@
     "db:migrate-plaintext": "bun run src/schema/migrate-plaintext-records.ts",
     "db:replay-v3-open-tasks": "bun run src/schema/replay-v3-open-tasks.ts",
     "db:cleanup-wapp-activity": "bun run src/schema/cleanup-wapp-activity.ts",
-    "git:gateway": "bun run src/git-gateway.ts",
-    "git:issues": "bun run src/forgejo/issue-broker.ts",
-    "git:reconcile": "bun run src/forgejo/reconcile.ts",
-    "git:reconcile-organizations": "bun run src/forgejo/reconcile-organizations.ts",
-    "git:reconcile-identities": "bun run src/forgejo/reconcile-identities.ts"
+    "git:gateway": "bun run src/git-gateway.ts"
   },
   "dependencies": {
     "hono": "^4.7.0",

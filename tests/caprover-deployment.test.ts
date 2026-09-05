@@ -19,12 +19,11 @@ describe('CapRover deployment contract', () => {
     expect(entrypoint).toContain('runtime_role=${TOWER_RUNTIME_ROLE:-api}');
     expect(entrypoint).toContain('git-gateway)');
     expect(entrypoint).toContain('exec bun run git:gateway');
-    expect(entrypoint).toContain('git-issue-broker)');
-    expect(entrypoint).toContain('exec bun run git:issues');
-    expect(entrypoint).toContain('git-identity-reconciler)');
-    expect(entrypoint).toContain('exec bun run git:reconcile-identities');
-    expect(entrypoint).toContain('git-org-reconciler)');
-    expect(entrypoint).toContain('exec bun run git:reconcile-organizations');
+    for (const role of ['git-issue-broker', 'git-identity-reconciler', 'git-org-reconciler', 'git-reconciler']) {
+      const result = Bun.spawnSync(['sh', 'docker/entrypoint.sh'], { cwd: root, env: { ...process.env, TOWER_RUNTIME_ROLE: role } });
+      expect(result.exitCode).toBe(64);
+      expect(result.stderr.toString()).toContain('Retired runtime role');
+    }
     expect(apiEnv).toContain('TOWER_RUNTIME_ROLE=api');
     expect(gatewayEnv).toContain('TOWER_RUNTIME_ROLE=git-gateway');
     expect(brokerEnv).toContain('TOWER_RUNTIME_ROLE=git-issue-broker');
@@ -38,18 +37,22 @@ describe('CapRover deployment contract', () => {
     expect(apiEnv).toContain('GIT_OIDC_ISSUER=https://tower-stable-api.b.otherstuff.ai/api/v4/git/oidc');
     expect(apiEnv).toContain('GIT_OIDC_REDIRECT_URI=https://tower-stable-forgejo.b.otherstuff.ai/user/oauth2/tower/callback');
     expect(gatewayEnv).toContain('GIT_GATEWAY_BROWSER_ORIGIN=https://tower-stable-forgejo.b.otherstuff.ai');
-    for (const env of [apiEnv, gatewayEnv, brokerEnv, identityEnv, orgEnv]) {
+    for (const env of [apiEnv, gatewayEnv]) {
       expect(env).toContain('http://srv-captain--tower-stable-forgejo-provider:3000');
     }
-    expect(orgEnv).toContain('GIT_GATEWAY_TOWER_URL=http://srv-captain--tower-stable-api:3100');
+    for (const env of [brokerEnv, identityEnv, orgEnv]) expect(env).toContain('RETIRED:');
+    expect(gatewayEnv).not.toContain('TOKEN');
+    expect(apiEnv).toContain('GIT_OIDC_ALLOWED_NPUBS=');
   });
 
   test('keeps Forgejo authentication fail-closed behind the gateway', () => {
-    expect(forgejoEnv).toContain('FORGEJO__service__DISABLE_REGISTRATION=true');
+    expect(forgejoEnv).toContain('FORGEJO__service__DISABLE_REGISTRATION=false');
     expect(forgejoEnv).toContain('FORGEJO__service__ENABLE_INTERNAL_SIGNIN=false');
-    expect(forgejoEnv).toContain('FORGEJO__service__ENABLE_BASIC_AUTHENTICATION=false');
+    expect(forgejoEnv).toContain('FORGEJO__service__ENABLE_BASIC_AUTHENTICATION=true');
     expect(forgejoEnv).toContain('FORGEJO__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION=false');
     expect(forgejoEnv).toContain('FORGEJO__actions__ENABLED=false');
+    expect(forgejoEnv).toContain('ENABLE_REVERSE_PROXY_AUTHENTICATION=false');
+    expect(forgejoEnv).toContain('ENABLE_REVERSE_PROXY_AUTHENTICATION_API=false');
   });
 
   test('passes the required Flight Deck identity into the production API', () => {

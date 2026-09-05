@@ -1,7 +1,10 @@
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { generateKeyPairSync } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 
+import { finalizeEvent, nip19, getPublicKey } from 'nostr-tools';
 let router: any;
+let previousConfig: any;
+let runtimeConfig: any;
 let issuer = 'https://tower.example.test/api/v4/git/oidc';
 let redirectUri = 'https://forgejo.example.test/user/oauth2/tower/callback';
 let clientSecret = 's'.repeat(40);
@@ -22,10 +25,15 @@ beforeAll(async () => {
   }
   router = (await import('../src/routes/git-oidc')).gitOidcRouter;
   const runtime = (await import('../src/config')).config.git;
+  previousConfig = { ...runtime };
+  runtimeConfig = runtime;
+  Object.assign(runtime, { oidcIssuer: issuer, oidcClientId: 'forgejo', oidcClientSecret: clientSecret, oidcRedirectUri: redirectUri, oidcSigningKey: defaults.GIT_OIDC_SIGNING_KEY, oidcAllowedNpubs: [] });
   issuer = runtime.oidcIssuer;
   redirectUri = runtime.oidcRedirectUri;
   clientSecret = runtime.oidcClientSecret;
 });
+
+afterAll(() => Object.assign(runtimeConfig, previousConfig));
 
 describe('Tower Forgejo OIDC provider', () => {
   test('publishes discovery metadata and an RSA signing key', async () => {
@@ -51,4 +59,39 @@ describe('Tower Forgejo OIDC provider', () => {
     expect((await router.request(`${requestOrigin}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })).status).toBe(401);
     expect((await router.request(`${requestOrigin}/token`, { method: 'POST', headers: { authorization: `Basic ${Buffer.from(`forgejo:${clientSecret}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded' }, body })).status).toBe(400);
   });
+  test('structured challenge binds Nostr proof, rejects unlisted signers and replay', async () => {
+    const secret = new Uint8Array(32).fill(121);
+    const url = new URL(`${requestOrigin}/authorize`);
+    url.search = new URLSearchParams({ client_id: 'forgejo', redirect_uri: redirectUri, response_type: 'code', scope: 'openid', state: 'native-state', nonce: 'native-nonce' }).toString();
+    const response = await router.request(url, { headers: { accept: 'application/json' } });
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const challenge = await response.json();
+    expect(challenge).toMatchObject({ client_id: 'forgejo', completion_url: `${issuer}/authorize/complete` });
+    const body = JSON.stringify({ request_id: challenge.request_id });
+    const proof = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), content: '', tags: [
+      ['u', challenge.completion_url], ['method', 'POST'], ['payload', createHash('sha256').update(body).digest('hex')],
+      ['nonce', challenge.request_id], ['aud', challenge.client_id], ['expiration', String(challenge.expires_at)],
+    ] }, secret);
+    expect(runtimeConfig.oidcAllowedNpubs).not.toContain(nip19.npubEncode(getPublicKey(secret)));
+    const submit = () => router.request(`${requestOrigin}/authorize/complete`, { method: 'POST', headers: { authorization: `Nostr ${Buffer.from(JSON.stringify(proof)).toString('base64')}`, 'content-type': 'application/json' }, body });
+    expect((await submit()).status).toBe(403);
+    expect((await submit()).status).toBe(401);
+  });
+
+  test('rejects tampered, duplicate, foreign and expired Nostr bindings', async () => {
+    const secret = new Uint8Array(32).fill(122);
+    for (const mutation of ['u', 'method', 'payload', 'nonce', 'aud', 'expiration', 'duplicate', 'old']) {
+      const url = new URL(`${requestOrigin}/authorize`);
+      url.search = new URLSearchParams({ client_id: 'forgejo', redirect_uri: redirectUri, response_type: 'code', scope: 'openid', state: 'binding-state' }).toString();
+      const challenge = await (await router.request(url, { headers: { accept: 'application/json' } })).json();
+      const body = JSON.stringify({ request_id: challenge.request_id });
+      const tags = [['u', challenge.completion_url], ['method', 'POST'], ['payload', createHash('sha256').update(body).digest('hex')], ['nonce', challenge.request_id], ['aud', challenge.client_id], ['expiration', String(challenge.expires_at)]];
+      if (mutation === 'duplicate') tags.push(['nonce', challenge.request_id]);
+      else if (mutation !== 'old') tags.find(tag => tag[0] === mutation)![1] = mutation === 'expiration' ? '1' : 'foreign';
+      const proof = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000) - (mutation === 'old' ? 120 : 0), content: '', tags }, secret);
+      const response = await router.request(`${requestOrigin}/authorize/complete`, { method: 'POST', headers: { authorization: `Nostr ${Buffer.from(JSON.stringify(proof)).toString('base64')}`, 'content-type': 'application/json' }, body });
+      expect(response.status).toBe(401);
+    }
+  });
+
 });

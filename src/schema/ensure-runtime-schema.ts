@@ -1,3 +1,4 @@
+import { forgejoLoginIdentitySchema } from '../services/forgejo-login-identity';
 import { getDb } from '../db';
 import { readFileSync } from 'node:fs';
 
@@ -24,6 +25,8 @@ function gitAuthorityV1Sql(): string {
 }
 
 export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
+  const retirementSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
+  await sql.unsafe(retirementSchema.split('-- forgejo_native_retirement_v1')[1]!.split('-- end_forgejo_native_retirement_v1')[0]!);
 
   await sql.unsafe(`
     ALTER TABLE v4_groups
@@ -4167,9 +4170,10 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   const recordDeltaSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
   await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
 
-  // Git authority v1 is additive and schema-owned here so existing Tower
-  // databases receive the same constraints as fresh bootstrap databases.
+  // Retain legacy Git tables for audit, and remove their operational projection
+  // triggers/functions on upgrades. This block must never backfill provider intent.
   await sql.unsafe(gitAuthorityV1Sql());
+  await sql.unsafe(forgejoLoginIdentitySchema);
   // Repository-derived capabilities are intentionally not bound to a service;
   // the gateway supplies the actual smart-HTTP service at introspection time.
   await sql.unsafe(`ALTER TABLE git_capabilities ALTER COLUMN git_service DROP NOT NULL`);

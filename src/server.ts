@@ -10,7 +10,6 @@ import { billingRouter, workspaceBillingRouter } from './routes/billing';
 import { flightDeckPgRouter } from './routes/flightdeck-pg';
 import { groupsRouter } from './routes/groups';
 import { graphRouter } from './routes/graph';
-import { gitRouter } from './routes/git';
 import { gitOidcRouter } from './routes/git-oidc';
 import { recordsRouter } from './routes/records';
 import { storageRouter } from './routes/storage';
@@ -41,9 +40,8 @@ export function createApp() {
         allowed_npubs_configured: (config.graph?.allowedNpubs?.length || 0) > 0,
       },
       git: {
-        authority_configured: Boolean(config.git.capabilityHashKey && config.git.internalServiceToken && config.git.audience),
-        forgejo_webhook_configured: Boolean(config.git.forgejoWebhookSecret && config.git.forgejoWebhookUrl),
-        gateway_separate_process: true,
+        authentication_only: true,
+        oidc_configured: Boolean(config.git.oidcIssuer && config.git.oidcAllowedNpubs.length),
       },
     });
   });
@@ -71,7 +69,8 @@ export function createApp() {
 
   app.route('/api/v4/groups', groupsRouter);
   app.route('/api/v4/git/oidc', gitOidcRouter);
-  app.route('/api/v4/git', gitRouter);
+  // Legacy Git authority endpoints are retired. Forgejo owns all authorization.
+  app.all('/api/v4/git/*', (c) => c.json({ error: 'retired', message: 'Use native Forgejo Git and API endpoints' }, 410));
   app.route('/api/v4/graph', graphRouter);
   app.route('/api/v4/billing', billingRouter);
   app.route('/api/v4/flightdeck-pg', flightDeckPgRouter);

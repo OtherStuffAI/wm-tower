@@ -6,6 +6,8 @@ import postgres from 'postgres';
 import { closeDb, setDb } from '../src/db';
 import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { completeInstallIntent } from '../src/services/wapp-management';
+import { config } from '../src/config';
+import { resolveForgejoLoginIdentity, forgejoLoginIdentitySchema } from '../src/services/forgejo-login-identity';
 
 const TEST_DB = process.env.TEST_DB_NAME || 'coworker_v4_test_flightdeck_pg_schema';
 
@@ -2921,4 +2923,80 @@ describe('Flight Deck PG schema foundation', () => {
     expect(backfilled.participant_npubs).toEqual([ownerNpub, currentNpub]);
     expect(backfilled.updated_at.getTime()).toBeGreaterThan(channel.updated_at.getTime());
   });
+});
+
+describe('native Forgejo schema retirement', () => {
+  test('upgrade removes old projection triggers before writes and never backfills archived bindings', async () => {
+    const marker = crypto.randomUUID().replaceAll('-', '');
+    const [actor] = await sql`INSERT INTO flightdeck_pg_actors (npub, kind, display_name)
+      VALUES (${'npub1native' + marker}, 'human', 'Native retirement fixture') RETURNING id`;
+    const createWorkspace = async (slug: string) => (await sql`
+      INSERT INTO flightdeck_pg_workspaces (tower_service_npub, workspace_service_npub, workspace_owner_npub, app_npub, name, slug, created_by_actor_id)
+      VALUES ('npub1tower', ${'npub1workspace' + slug}, ${'npub1native' + marker}, 'npub1app', 'Native retirement', ${slug}, ${actor.id}) RETURNING id`)[0]!;
+    const historical = await createWorkspace('history-' + marker);
+    await sql`INSERT INTO git_workspace_namespaces (workspace_id, namespace) VALUES (${historical.id}, ${'old-' + marker})`;
+    await sql`INSERT INTO git_forgejo_workspace_bindings (workspace_id, forgejo_owner, state, desired_generation)
+      VALUES (${historical.id}, ${'old-' + marker}, 'ready', 7)`;
+    // Reconstruct an installed old-version workspace trigger. Migration must
+    // remove it, retain existing data and avoid replaying its workspace backfill.
+    await sql.unsafe(`CREATE OR REPLACE FUNCTION git_ensure_workspace_forgejo_binding()
+      RETURNS TRIGGER AS $$ BEGIN
+        INSERT INTO git_workspace_namespaces (workspace_id, namespace)
+        VALUES (NEW.id, 'wm-' || replace(NEW.id::text, '-', ''));
+        RETURN NEW;
+      END; $$ LANGUAGE plpgsql`);
+    await sql.unsafe(`CREATE TRIGGER trg_git_ensure_workspace_forgejo_binding
+      AFTER INSERT ON flightdeck_pg_workspaces FOR EACH ROW
+      EXECUTE FUNCTION git_ensure_workspace_forgejo_binding()`);
+    const before = (await sql`SELECT * FROM git_forgejo_workspace_bindings WHERE workspace_id = ${historical.id}`)[0];
+    await ensureRuntimeSchema(sql);
+    await ensureRuntimeSchema(sql);
+    expect((await sql`SELECT * FROM git_forgejo_workspace_bindings WHERE workspace_id = ${historical.id}`)[0]).toEqual(before);
+    const fresh = await createWorkspace('fresh-' + marker);
+    expect(await sql`SELECT * FROM git_workspace_namespaces WHERE workspace_id = ${fresh.id}`).toHaveLength(0);
+    expect(await sql`SELECT * FROM git_forgejo_workspace_bindings WHERE workspace_id = ${fresh.id}`).toHaveLength(0);
+    const triggers = await sql`SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'trg_git_%'`;
+    expect(triggers.map(row => row.tgname).sort()).toEqual(['trg_git_audit_events_immutable', 'trg_git_forgejo_events_immutable']);
+    expect((await sql`SELECT to_regprocedure('git_ensure_workspace_forgejo_binding()') AS function`)[0]!.function).toBeNull();
+    const aliasName = 'retired-' + marker.slice(0, 20);
+    await sql`INSERT INTO git_forgejo_actor_aliases (actor_id, desired_username, state)
+      VALUES (${actor.id}, ${aliasName}, 'ready')`;
+    const aliasBefore = (await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${actor.id}`)[0];
+    // Recreate former cascade constraints, proving the upgrade detaches them.
+    await sql.unsafe(`ALTER TABLE git_forgejo_actor_aliases ADD CONSTRAINT native_retirement_actor_test_fk
+      FOREIGN KEY (actor_id) REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE`);
+    await sql.unsafe(`ALTER TABLE git_forgejo_workspace_bindings ADD CONSTRAINT native_retirement_workspace_test_fk
+      FOREIGN KEY (workspace_id) REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE`);
+    await ensureRuntimeSchema(sql);
+    await sql`DELETE FROM flightdeck_pg_workspaces WHERE id IN (${historical.id}, ${fresh.id})`;
+    await sql`DELETE FROM flightdeck_pg_actors WHERE id = ${actor.id}`;
+    expect((await sql`SELECT * FROM git_forgejo_workspace_bindings WHERE workspace_id = ${historical.id}`)[0]).toEqual(before);
+    expect((await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${actor.id}`)[0]).toEqual(aliasBefore);
+    const previousAllowlist = config.git.oidcAllowedNpubs;
+    try {
+      config.git.oidcAllowedNpubs = ['npub1native' + marker];
+      expect((await resolveForgejoLoginIdentity('npub1native' + marker, sql))!.sub).toBe(actor.id);
+    } finally { config.git.oidcAllowedNpubs = previousAllowlist; }
+    const externalFks = await sql`SELECT constraint_row.conname FROM pg_constraint constraint_row
+      JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+      JOIN pg_class referenced ON referenced.oid = constraint_row.confrelid
+      WHERE constraint_row.contype = 'f' AND left(relation.relname, 4) = 'git_'
+        AND left(referenced.relname, 4) <> 'git_'`;
+    expect(externalFks).toHaveLength(0);
+    expect((await sql`SELECT count(*)::int AS count FROM pg_constraint constraint_row
+      JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+      JOIN pg_class referenced ON referenced.oid = constraint_row.confrelid
+      WHERE constraint_row.contype = 'f' AND left(relation.relname, 4) = 'git_'
+        AND left(referenced.relname, 4) = 'git_'`)[0]!.count).toBeGreaterThan(0);
+  });
+});
+
+
+test('identity migration never remaps a fresh-npub subject after later actor registration', async () => {
+  const npub = 'npub1fresh' + crypto.randomUUID().replaceAll('-', '');
+  await sql`INSERT INTO forgejo_login_identities (npub, subject, initial_username) VALUES (${npub}, ${npub}, 'native-user')`;
+  await sql`INSERT INTO flightdeck_pg_actors (npub, kind, display_name) VALUES (${npub}, 'agent', 'Later registration')`;
+  await sql.unsafe(forgejoLoginIdentitySchema);
+  expect((await sql`SELECT subject, initial_username FROM forgejo_login_identities WHERE npub = ${npub}`)[0])
+    .toEqual({ subject: npub, initial_username: 'native-user' });
 });

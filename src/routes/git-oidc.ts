@@ -2,7 +2,7 @@ import { createHash, createPrivateKey, randomBytes, sign as signBytes, timingSaf
 import { Hono, type Context } from 'hono';
 import { nip19, verifyEvent } from 'nostr-tools';
 import { config } from '../config';
-import { validateForgejoBrowserActor } from '../services/forgejo-authority';
+import { resolveForgejoLoginIdentity } from '../services/forgejo-login-identity';
 
 const NIP98_KIND = 27235;
 const challenges = new Map<string, AuthorizationRequest>();
@@ -110,6 +110,9 @@ gitOidcRouter.get('/authorize', (c) => {
   const requestId = token();
   const request: AuthorizationRequest = { clientId, redirectUri, state, scope, nonce: c.req.query('nonce') || null, codeChallenge, expiresAt: Date.now() + 60_000 };
   storeTransient(challenges, hash(requestId), request);
+  if (c.req.header('accept')?.includes('application/json')) {
+    return c.json({ request_id: requestId, completion_url: `${config.git.oidcIssuer}/authorize/complete`, client_id: request.clientId, expires_at: Math.floor(request.expiresAt / 1000) });
+  }
   return c.html(loginPage(requestId, request));
 });
 
@@ -125,10 +128,10 @@ gitOidcRouter.post('/authorize/complete', async (c) => {
   let valid = false; try { valid = Boolean(event && verifyEvent(event)); } catch {}
   if (!valid || event.kind !== NIP98_KIND || singleTag(event, 'u') !== `${config.git.oidcIssuer}/authorize/complete` || singleTag(event, 'method') !== 'POST' || singleTag(event, 'payload') !== createHash('sha256').update(raw).digest('hex') || singleTag(event, 'nonce') !== requestId || singleTag(event, 'aud') !== request.clientId || Math.abs(now - Number(event.created_at)) > 60 || expiration !== Math.floor(request.expiresAt / 1000) || expiration <= now) return oidcError(c, 401, 'access_denied', 'The Nostr authorization proof is invalid');
   let signerNpub = ''; try { signerNpub = nip19.npubEncode(event.pubkey); } catch {}
-  const actor = signerNpub ? await validateForgejoBrowserActor({ signerNpub }) : null;
-  if (!actor?.active || !actor.actor_id || !actor.actor_username) return oidcError(c, 403, 'access_denied', 'This Tower identity has no active Forgejo access');
+  const actor = signerNpub ? await resolveForgejoLoginIdentity(signerNpub) : null;
+  if (!actor) return oidcError(c, 403, 'access_denied', 'This Nostr identity is not allowed to sign in');
   const code = token();
-  storeTransient(codes, hash(code), { ...request, authTime: now, actor: { sub: actor.actor_id, preferred_username: actor.actor_username, ...(actor.actor_display_name ? { name: actor.actor_display_name } : {}), email: `${actor.actor_id}@users.tower.invalid`, email_verified: true } });
+  storeTransient(codes, hash(code), { ...request, authTime: now, actor });
   const redirect = new URL(request.redirectUri); redirect.searchParams.set('code', code); redirect.searchParams.set('state', request.state);
   return c.json({ redirect_to: redirect.toString() });
 });

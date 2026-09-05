@@ -77,10 +77,13 @@ do
   hydrate_from_live_tower "$key"
 done
 
-generate_secret "$secret_dir/git-capability-hash-key"
-generate_secret "$secret_dir/git-internal-service-token"
-generate_secret "$secret_dir/git-forgejo-webhook-secret"
-generate_secret "$secret_dir/git-issue-broker-token"
+# Never rotate a previously configured inline OIDC secret/key implicitly.
+for key in GIT_OIDC_CLIENT_SECRET GIT_OIDC_SIGNING_KEY; do
+  if [ -n "$(env_value "$key")" ]; then
+    echo "Existing inline $key: migrate it to its protected file before using this helper; issuer/key continuity is required." >&2
+    exit 1
+  fi
+done
 generate_secret "$secret_dir/git-oidc-client-secret"
 if [ ! -s "$secret_dir/git-oidc-signing-key.pem" ]; then
   signing_temp=$(mktemp "$secret_dir/.git-oidc-signing-key.XXXXXX")
@@ -92,31 +95,22 @@ fi
 upsert_env COMPOSE_PROJECT_NAME wingman-tower
 upsert_env TOWER_ENV_FILE .env.prod
 upsert_env TOWER_GIT_SECRETS_DIR ./.runtime/tower-git-secrets
-upsert_env GIT_CAPABILITY_HASH_KEY ""
-upsert_env GIT_CAPABILITY_HASH_KEY_FILE /run/tower-git-secrets/git-capability-hash-key
-upsert_env GIT_INTERNAL_SERVICE_TOKEN ""
-upsert_env GIT_INTERNAL_SERVICE_TOKEN_FILE /run/tower-git-secrets/git-internal-service-token
-upsert_env GIT_FORGEJO_CONTROL_TOKEN ""
-upsert_env GIT_FORGEJO_CONTROL_TOKEN_FILE /run/tower-git-secrets/forgejo-control-token
-upsert_env GIT_FORGEJO_WEBHOOK_SECRET ""
-upsert_env GIT_FORGEJO_WEBHOOK_SECRET_FILE /run/tower-git-secrets/git-forgejo-webhook-secret
-upsert_env GIT_ISSUE_BROKER_URL http://git-issue-broker:3190
-upsert_env GIT_ISSUE_BROKER_TOKEN ""
-upsert_env GIT_ISSUE_BROKER_TOKEN_FILE /run/tower-git-secrets/git-issue-broker-token
-upsert_env GIT_SERVICE_AUDIENCE wingman-git
 upsert_env GIT_FORGEJO_BASE_URL http://forgejo:3000
-upsert_env GIT_FORGEJO_WEBHOOK_URL http://tower:3100/api/v4/git/forgejo/webhooks
-upsert_env GIT_GATEWAY_TOWER_URL http://tower:3100
-upsert_env GIT_GATEWAY_FIXED_USERNAME nostr
 upsert_env GIT_GATEWAY_HOST_BIND_ADDRESS 127.0.0.1
 upsert_env GIT_GATEWAY_HOST_PORT 3180
-upsert_env GIT_OIDC_CLIENT_ID forgejo
+if [ -z "$(env_value GIT_OIDC_CLIENT_ID)" ]; then
+  upsert_env GIT_OIDC_CLIENT_ID forgejo
+fi
 upsert_env GIT_OIDC_CLIENT_SECRET ""
 upsert_env GIT_OIDC_CLIENT_SECRET_FILE /run/tower-git-secrets/git-oidc-client-secret
 upsert_env GIT_OIDC_SIGNING_KEY ""
 upsert_env GIT_OIDC_SIGNING_KEY_FILE /run/tower-git-secrets/git-oidc-signing-key.pem
-upsert_env GIT_OIDC_ISSUER "$(env_value SUPERBASED_DIRECT_HTTPS_URL)/api/v4/git/oidc"
-upsert_env GIT_OIDC_REDIRECT_URI "$(env_value GIT_GATEWAY_BROWSER_ORIGIN)/user/oauth2/tower/callback"
+if [ -z "$(env_value GIT_OIDC_ISSUER)" ]; then
+  upsert_env GIT_OIDC_ISSUER "$(env_value SUPERBASED_DIRECT_HTTPS_URL)/api/v4/git/oidc"
+fi
+if [ -z "$(env_value GIT_OIDC_REDIRECT_URI)" ]; then
+  upsert_env GIT_OIDC_REDIRECT_URI "$(env_value GIT_GATEWAY_BROWSER_ORIGIN)/user/oauth2/tower/callback"
+fi
 upsert_env GIT_FORGEJO_OIDC_ACCOUNT_LINKING disabled
 
 echo "Prepared ignored Tower Git deployment configuration without printing secrets."
