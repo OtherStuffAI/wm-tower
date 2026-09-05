@@ -49,6 +49,8 @@ Coverage includes direct Write addition, Read downgrade, old-capability denial,
 work push and protected push policy, group inheritance, final revocation,
 provider-only `tower-members` repository cleanup, immutable identity mismatches,
 foreign actors/groups, unauthorized administrators, payload tampering, replay,
-last-admin protection, competing revision-checked edits, exclusive reconciliation,
-and stale acknowledgement/readiness. No blanket grant or provider-state import
+last-admin protection (including empty groups and populated nested groups),
+competing revision-checked edits, exclusive reconciliation, stopped-writer
+abandonment recovery, and stale acknowledgement/readiness. Gateway unit tests
+also cover duplicate-slash paths that stock Forgejo normalizes before routing. No blanket grant or provider-state import
 is used to obtain the passing result.

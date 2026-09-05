@@ -222,3 +222,13 @@ describe('Tower sharing browser bridge', () => {
     expect(providerCalls).toBe(0);
   });
 });
+
+test('rejects duplicate-slash provider paths before provider normalization can bypass authority', async () => {
+  let requests = 0;
+  const app = createForgejoGateway({ towerUrl: 'http://tower.internal', forgejoUrl: 'http://forgejo.internal', internalServiceToken: serviceToken, audience: 'wingman-git', fetchImpl: (async () => { requests++; return new Response('provider'); }) as typeof fetch });
+  for (const path of ['//api/v1/user/repos', '//org/otherstuff/teams/owners/action/add', '//otherstuff/kindling/src/branch/main/file', '/otherstuff//kindling/src/branch/main/file']) {
+    const response = await app.request('http://gateway' + path, { method: 'POST', headers: { cookie: 'i_like_forgejo=existing' } });
+    expect(response.status).toBe(400);
+  }
+  expect(requests).toBe(0);
+});

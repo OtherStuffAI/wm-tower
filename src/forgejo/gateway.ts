@@ -41,6 +41,9 @@ export function createForgejoGateway(options: GatewayOptions) {
     const url = new URL(c.req.url), gitMatch = canonicalGitPath.exec(url.pathname);
     let decodedPath: string;
     try { decodedPath = decodeURIComponent(url.pathname); } catch { return gatewayError(c, 400, 'git_path_invalid'); }
+    // Forgejo normalizes duplicate slashes before routing. Reject them before
+    // checking API/team/repository paths so its routing cannot bypass our gate.
+    if (decodedPath.includes('//') || decodedPath.includes('\\') || /(?:^|\/)\.{1,2}(?:\/|$)/.test(decodedPath)) return gatewayError(c, 400, 'git_path_invalid');
     if (decodedPath !== url.pathname && (/\/settings\/collaboration(?:\/|$)/i.test(decodedPath)
       || /^\/org\/[^/]+\/teams(?:\/|$)/i.test(decodedPath) || /^\/api\//i.test(decodedPath))) {
       return gatewayError(c, 403, 'git_sharing_tower_required');

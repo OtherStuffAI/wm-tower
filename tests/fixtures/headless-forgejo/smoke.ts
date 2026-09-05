@@ -1,5 +1,6 @@
 /** Real Forgejo + Tower + Autopilot broker + compiled shipped helper. Synthetic identities only. */
 import assert from 'node:assert/strict';
+import { revokeGitRepositoryGrant } from '../../../src/services/git-authority';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -169,6 +170,30 @@ try {
     assert.equal((await sharingRequest(owner, 'POST', { ...mutation, principal_id: foreignActor.id })).status, 409);
     const ownerPrincipal = snapshot.principals.find((p: any) => p.principal_id === owner.id);
     assert.equal((await sharingRequest(owner, 'POST', { ...ownerPrincipal, expected_policy_revision: snapshot.policy_revision, access: 'none' })).status, 409);
+    // An empty administrator group must not permit removing the last actual admin.
+    const [emptyGroup] = await sql`INSERT INTO flightdeck_pg_groups (workspace_id, name, kind, created_by_actor_id) VALUES (${workspace.id}, 'Empty administrators', 'custom', ${owner.id}) RETURNING id`;
+    const emptyPrincipal = { principal_type: 'group', principal_id: emptyGroup.id };
+    assert.equal((await sharingRequest(owner, 'POST', { ...emptyPrincipal, expected_policy_revision: snapshot.policy_revision, access: 'admin' })).status, 202);
+    const withEmptyGroup = (await sharingRequest(owner, 'GET')).body;
+    const blockedRemoval = await sharingRequest(owner, 'POST', { ...ownerPrincipal, expected_policy_revision: withEmptyGroup.policy_revision, access: 'none' });
+    assert.equal(blockedRemoval.body.code, 'git_last_admin_grant');
+    const ownerAdmin = withEmptyGroup.grants.find((g: any) => g.principal_actor_id === owner.id && g.permission === 'git.repo.admin');
+    await assert.rejects(revokeGitRepositoryGrant(workspace.id, repositoryId, ownerAdmin.grant_id, owner.npub, owner.npub, sql), { code: 'git_last_admin_grant' });
+    assert.equal((await sharingRequest(owner, 'POST', { ...emptyPrincipal, expected_policy_revision: withEmptyGroup.policy_revision, access: 'none' })).status, 202);
+    // A populated nested group really can retain administration and restore a direct admin.
+    const [parentGroup] = await sql`INSERT INTO flightdeck_pg_groups (workspace_id, name, kind, created_by_actor_id) VALUES (${workspace.id}, 'Parent administrators', 'custom', ${owner.id}) RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_group_edges (workspace_id, parent_group_id, child_group_id, created_by_actor_id) VALUES (${workspace.id}, ${parentGroup.id}, ${groupId}, ${owner.id})`;
+    const parentPrincipal = { principal_type: 'group', principal_id: parentGroup.id };
+    const saveCurrent = async (account: typeof owner, principal: any, access: string) => {
+      const current = (await sharingRequest(account, 'GET')).body;
+      assert.equal((await sharingRequest(account, 'POST', { ...principal, expected_policy_revision: current.policy_revision, access })).status, 202);
+    };
+    await saveCurrent(owner, parentPrincipal, 'admin');
+    await saveCurrent(owner, ownerPrincipal, 'none');
+    await saveCurrent(agent, ownerPrincipal, 'admin');
+    await saveCurrent(owner, parentPrincipal, 'none');
+    await page.getByRole('button', { name: 'Load sharing with Nostr' }).click();
+    await page.locator('#status').filter({ hasText: 'Sharing is saved in Tower.' }).waitFor();
     // Reproduce the screenshot's provider-only tower-members repository assignment.
     const teamAttachment = await fetch(`${forgejoUrl}/api/v1/repos/headless-${suffix}/allowed/teams/tower-members`, {
       method: 'PUT', headers: { authorization: `token ${controlToken}` },
@@ -245,6 +270,14 @@ try {
     await assert.rejects(acknowledgeForgejoReconciliation({ repositoryId, reconciliationToken: token, appliedPolicyRevision: desired.desired_policy_revision, ok: true }, sql), { code: 'git_reconciliation_token_invalid' });
     assert.equal((await sharingRequest(owner, 'POST', { ...target, access: 'write', expected_policy_revision: snapshot.policy_revision })).status, 409);
     assert.notEqual((await command(['git', '-C', checkout, 'fetch', 'origin'], environments.get('agent'), undefined, true)).status, 0);
+    // Supported abandonment recovery: no provider writer is running in this fixture.
+    const abandonedToken = randomUUID();
+    const abandoned = await beginForgejoReconciliation(repositoryId, abandonedToken, sql);
+    const recovered = await acknowledgeForgejoReconciliation({ repositoryId, reconciliationToken: abandonedToken, appliedPolicyRevision: abandoned.desired_policy_revision, ok: false, errorCode: 'git_operator_abandoned_attempt' }, sql);
+    assert.equal(recovered.state, 'pending');
+    assert.equal((await resolveForgejoRepositoryPath(`headless-${suffix}`, 'allowed', sql)).ready, false);
+    await reconcile();
+    await assert.rejects(acknowledgeForgejoReconciliation({ repositoryId, reconciliationToken: abandonedToken, appliedPolicyRevision: abandoned.desired_policy_revision, ok: true }, sql), { code: 'git_reconciliation_token_invalid' });
     const grants = (await sharingRequest(owner, 'GET')).body.grants;
     assert(grants.some((g: any) => g.principal_actor_id === owner.id && g.permission === 'git.repo.admin'));
     assert(!grants.some((g: any) => g.principal_actor_id === agent.id));

@@ -918,6 +918,31 @@ export async function createGitRepositoryGrant(
   }
 }
 
+// Call under the repository lock. An empty group grant is not an administrator.
+async function requireRemainingRepositoryAdmin(repositoryId: string, excludedGrantIds: string[], sql: DbClient) {
+  const [remaining] = await sql<{ actor_id: string }[]>`
+    WITH RECURSIVE admin_groups(workspace_id, group_id) AS (
+      SELECT workspace_id, principal_group_id FROM git_repository_grants
+      WHERE repository_id = ${repositoryId} AND revoked_at IS NULL AND permission = 'git.repo.admin'
+        AND principal_type = 'group' AND NOT (id = ANY(${excludedGrantIds}::uuid[]))
+      UNION
+      SELECT edge.workspace_id, edge.child_group_id FROM flightdeck_pg_group_edges edge
+      JOIN admin_groups parent ON parent.workspace_id = edge.workspace_id AND parent.group_id = edge.parent_group_id
+    ), administrators(workspace_id, actor_id) AS (
+      SELECT workspace_id, principal_actor_id FROM git_repository_grants
+      WHERE repository_id = ${repositoryId} AND revoked_at IS NULL AND permission = 'git.repo.admin'
+        AND principal_type = 'actor' AND NOT (id = ANY(${excludedGrantIds}::uuid[]))
+      UNION
+      SELECT member.workspace_id, member.actor_id FROM flightdeck_pg_group_memberships member
+      JOIN admin_groups inherited ON inherited.workspace_id = member.workspace_id AND inherited.group_id = member.group_id
+    )
+    SELECT administrator.actor_id FROM administrators administrator
+    JOIN flightdeck_pg_workspace_memberships member ON member.workspace_id = administrator.workspace_id AND member.actor_id = administrator.actor_id
+    LIMIT 1
+  `;
+  if (!remaining) throw new GitAuthorityError('git_last_admin_grant', 'The final repository administrator cannot be removed', 409);
+}
+
 export async function revokeGitRepositoryGrant(
   workspaceId: string,
   repositoryId: string,
@@ -941,13 +966,7 @@ export async function revokeGitRepositoryGrant(
     `;
     if (!existing) throw new GitAuthorityError('git_grant_not_found', 'Grant not found', 404);
     if (existing.permission === 'git.repo.admin') {
-      const [{ count }] = await db<{ count: number }[]>`
-        SELECT COUNT(*)::int AS count FROM git_repository_grants
-        WHERE repository_id = ${repository.id} AND permission = 'git.repo.admin' AND revoked_at IS NULL
-      `;
-      if (Number(count) <= 1) {
-        throw new GitAuthorityError('git_last_admin_grant', 'The final repository administrator grant cannot be revoked', 409);
-      }
+      await requireRemainingRepositoryAdmin(repository.id, [existing.id], db);
     }
     const [grant] = await db<GitGrantRow[]>`
       UPDATE git_repository_grants
@@ -1695,11 +1714,7 @@ export async function updateGitSharing(owner: string, slug: string, actorNpub: s
         AND (principal_actor_id = ${principalId} OR principal_group_id = ${principalId})
     `;
     if (existing.some(grant => grant.permission === 'git.repo.admin') && input.access !== 'admin') {
-      const [remaining] = await db<any[]>`
-        SELECT id FROM git_repository_grants WHERE repository_id = ${target.id} AND revoked_at IS NULL
-          AND permission = 'git.repo.admin' AND NOT (id = ANY(${existing.map(g => g.id)}::uuid[])) LIMIT 1
-      `;
-      if (!remaining) throw new GitAuthorityError('git_last_admin_grant', 'The final repository administrator cannot be removed', 409);
+      await requireRemainingRepositoryAdmin(target.id, existing.map(grant => grant.id), db);
     }
     // Replace all direct permissions for this principal atomically, including branch-create.
     // Other principals and inherited group permissions are intentionally preserved.
