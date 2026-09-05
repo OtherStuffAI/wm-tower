@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import type { GitCapabilityIntrospectionResponse, GitCapabilityScope, GitService } from '../types';
 import { forgejoDisplayName, forgejoShadowUsername } from './identity';
+import { sharingPage } from './sharing-page';
 
 const canonicalGitPath = /^\/([a-z0-9][a-z0-9-]{0,38})\/([a-z0-9][a-z0-9._-]{0,62})\.git\/(info\/refs|git-upload-pack|git-receive-pack)$/;
 const untrustedIdentityHeaders = new Set(['x-webauth-user', 'x-webauth-email', 'x-webauth-fullname', 'x-forwarded-user', 'x-remote-user', 'x-gitea-user', 'x-forgejo-user', 'x-wingman-git-service-token', 'host', 'content-length']);
@@ -38,8 +39,52 @@ export function createForgejoGateway(options: GatewayOptions) {
   });
   app.all('*', async (c) => {
     const url = new URL(c.req.url), gitMatch = canonicalGitPath.exec(url.pathname);
+    let decodedPath: string;
+    try { decodedPath = decodeURIComponent(url.pathname); } catch { return gatewayError(c, 400, 'git_path_invalid'); }
+    if (decodedPath !== url.pathname && (/\/settings\/collaboration(?:\/|$)/i.test(decodedPath)
+      || /^\/org\/[^/]+\/teams(?:\/|$)/i.test(decodedPath) || /^\/api\//i.test(decodedPath))) {
+      return gatewayError(c, 403, 'git_sharing_tower_required');
+    }
+    const sharing = /^\/([a-z0-9][a-z0-9-]{0,38})\/([a-z0-9][a-z0-9._-]{0,62})\/settings\/collaboration\/?$/.exec(url.pathname);
+    if (sharing) {
+      c.header('cache-control', 'no-store');
+      c.header('x-frame-options', 'DENY');
+      c.header('content-security-policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+      if (c.req.method === 'GET') return c.html(sharingPage(sharing[1], sharing[2]));
+      return gatewayError(c, 409, 'git_sharing_reload_required');
+    }
+    if (/^\/api\/v4\/git\/forgejo\/sharing\/[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9][a-z0-9._-]{0,62}$/.test(url.pathname)) {
+      if (!['GET', 'POST'].includes(c.req.method)) return gatewayError(c, 405, 'git_sharing_method_invalid');
+      // Only a signed public request crosses this seam. No cookies, service token,
+      // or caller-supplied forwarding/identity headers can become administrator intent.
+      if (!c.req.header('authorization')?.startsWith('Nostr ')) return gatewayError(c, 401, 'nip98_auth_required');
+      try {
+        const origin = new URL(browserOrigin || url.origin);
+        const headers = new Headers({ authorization: c.req.header('authorization')!, 'content-type': 'application/json',
+          'x-forwarded-host': origin.host, 'x-forwarded-proto': origin.protocol.slice(0, -1) });
+        const response = await fetchImpl(`${towerUrl}${url.pathname}${url.search}`, { method: c.req.method, headers,
+          body: c.req.method === 'POST' ? await c.req.text() : undefined, redirect: 'manual' });
+        return new Response(response.body, { status: response.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+      } catch { return gatewayError(c, 503, 'git_authority_unavailable'); }
+    }
+    // Native provider sharing writes cannot bypass Tower through old tabs,
+    // alternate collaboration actions, organization team forms, or REST APIs.
+    if (/\/settings\/collaboration(?:\/|$)/i.test(url.pathname)
+      || (!['GET', 'HEAD'].includes(c.req.method) && /^\/org\/[^/]+\/teams(?:\/|$)/i.test(url.pathname))
+      || /^\/api\//i.test(url.pathname)) return gatewayError(c, 403, 'git_sharing_tower_required');
     if (!gitMatch) {
       if (/\.git(?:\/|$)/.test(url.pathname)) return gatewayError(c, 404, 'git_repository_not_found');
+      const repoPath = /^\/([a-z0-9][a-z0-9-]{0,38})\/([a-z0-9][a-z0-9._-]{0,62})(?:\/|$)/i.exec(decodedPath.toLowerCase());
+      const providerRoots = new Set(['user', 'org', 'assets', 'avatar', 'avatars', 'attachments', 'repo', 'explore', 'notifications']);
+      if (repoPath && !providerRoots.has(repoPath[1])) {
+        try {
+          const resolved = await fetchImpl(`${towerUrl}/api/v4/git/internal/forgejo/resolve?owner=${encodeURIComponent(repoPath[1])}&repository=${encodeURIComponent(repoPath[2])}`, {
+            headers: { 'x-wingman-git-service-token': options.internalServiceToken },
+          });
+          if (!resolved.ok) return gatewayError(c, resolved.status === 404 ? 404 : 503, 'git_repository_not_found');
+          if (!(await resolved.json() as any).ready) return gatewayError(c, 503, 'git_reconciliation_stale');
+        } catch { return gatewayError(c, 503, 'git_authority_unavailable'); }
+      }
       return proxyBrowserRequest(c, url, forgejoUrl, fetchImpl);
     }
     const requestedOperation = operation(c, gitMatch[3]);

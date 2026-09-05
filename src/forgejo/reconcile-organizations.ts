@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { GitForgejoOrganizationDesiredState, GitForgejoWorkspaceBinding } from '../types';
 import { secretEnv } from '../secret-env';
 import { ForgejoClient } from './client';
@@ -72,13 +73,14 @@ export async function reconcilePendingForgejoOrganizations(
   const pendingRepositories = await towerRequest(options, '/repositories/pending');
   for (const repository of pendingRepositories.repositories ?? []) {
     let desired: any;
+    const reconciliationToken = randomUUID();
     const path = `/repositories/${encodeURIComponent(repository.repository_id)}`;
     try {
-      desired = await towerRequest(options, `${path}/desired-state`);
+      desired = await towerRequest(options, `${path}/begin`, { method: 'POST', body: JSON.stringify({ reconciliation_token: reconciliationToken }) });
       await client.reconcile(desired);
-      await towerRequest(options, `${path}/ack`, { method: 'POST', body: JSON.stringify({ applied_policy_revision: desired.desired_policy_revision, ok: true }) });
+      await towerRequest(options, `${path}/ack`, { method: 'POST', body: JSON.stringify({ reconciliation_token: reconciliationToken, applied_policy_revision: desired.desired_policy_revision, ok: true }) });
     } catch {
-      if (desired) await towerRequest(options, `${path}/ack`, { method: 'POST', body: JSON.stringify({ applied_policy_revision: desired.desired_policy_revision, ok: false, error_code: 'git_forgejo_reconciliation_failed' }) }).catch(() => {});
+      if (desired) await towerRequest(options, `${path}/ack`, { method: 'POST', body: JSON.stringify({ reconciliation_token: reconciliationToken, applied_policy_revision: desired.desired_policy_revision, ok: false, error_code: 'git_forgejo_reconciliation_failed' }) }).catch(() => {});
     }
   }
   return { processed: organizations.length, reconciled, failed };

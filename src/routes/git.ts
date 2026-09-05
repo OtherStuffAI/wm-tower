@@ -36,6 +36,8 @@ import {
   revokeGitCapability,
   revokeGitRepositoryGrant,
   updateGitRepositoryPolicy,
+  readGitSharing,
+  updateGitSharing,
 } from '../services/git-authority';
 import {
   gitActorBootstrap,
@@ -43,6 +45,7 @@ import {
   acknowledgeForgejoActorAlias,
   acknowledgeForgejoOrganizationReconciliation,
   acknowledgeForgejoReconciliation,
+  beginForgejoReconciliation,
   appliedForgejoActorUsername,
   ensureForgejoBinding,
   ingestForgejoWebhook,
@@ -66,6 +69,37 @@ import {
 } from '../forgejo/issue-client';
 
 export const gitRouter = new Hono();
+
+gitRouter.get('/forgejo/sharing/:owner/:repository', async c => {
+  c.header('cache-control', 'no-store');
+  const auth = await publicAuth(c);
+  if (auth instanceof Response) return auth;
+  try { return c.json(await readGitSharing(c.req.param('owner'), c.req.param('repository'), auth.userNpub)); }
+  catch (error) { return errorResponse(c, error); }
+});
+
+gitRouter.post('/forgejo/sharing/:owner/:repository', async c => {
+  c.header('cache-control', 'no-store');
+  const operation = 'git.sharing.update';
+  const raw = await c.req.raw.clone().text();
+  const proof = await verifyStrictNip98Mutation(c.req.header('authorization') || null, c.req.raw, raw);
+  if (!proof.ok) return c.json({ error: 'Sharing signature invalid', code: proof.reasonCode }, 401);
+  const consumed = await consumeGitNip98MutationEvent(operation, proof);
+  // Do not return an old success after a later downgrade/revocation.
+  if (consumed.state !== 'consumed') return c.json({ error: 'Sharing command already consumed; reload', code: 'git_mutation_replayed_event' }, 409);
+  try {
+    let input: import('../types').GitSharingMutation;
+    try { input = JSON.parse(raw); } catch { throw new GitAuthorityError('git_sharing_invalid', 'Invalid sharing command', 400); }
+    const result = await updateGitSharing(c.req.param('owner'), c.req.param('repository'), proof.userNpub, proof.signerNpub, input);
+    await finishGitNip98MutationEvent({ eventId: proof.eventId, actorId: result.actor_id, workspaceId: result.workspace_id,
+      repositoryId: result.repository_id, decision: 'allow', reasonCode: 'git_sharing_updated', result });
+    return c.json(result, 202);
+  } catch (error) {
+    await finishGitNip98MutationEvent({ eventId: proof.eventId, decision: 'deny', reasonCode: error instanceof GitAuthorityError ? error.code : 'git_internal_error' });
+    await recordPublicDenial(operation, proof, error);
+    return errorResponse(c, error);
+  }
+});
 
 function errorResponse(c: Context, error: unknown) {
   if (error instanceof GitAuthorityError) {
@@ -737,14 +771,23 @@ gitRouter.post('/internal/forgejo/actor-usernames/:actorId/ack', async (c) => {
   } catch (error) { return errorResponse(c, error); }
 });
 
+gitRouter.post('/internal/forgejo/repositories/:repositoryId/begin', async c => {
+  const failure = internalServiceAuth(c); if (failure) return failure;
+  try {
+    const body = await readBody<{ reconciliation_token: string }>(c);
+    return c.json(await beginForgejoReconciliation(c.req.param('repositoryId'), body.reconciliation_token));
+  } catch (error) { return errorResponse(c, error); }
+});
+
 gitRouter.post('/internal/forgejo/repositories/:repositoryId/ack', async (c) => {
   const authFailure = internalServiceAuth(c);
   if (authFailure) return authFailure;
   try {
-    const body = await readBody<{ applied_policy_revision: number; ok: boolean; error_code?: string }>(c);
+    const body = await readBody<{ applied_policy_revision: number; reconciliation_token: string; ok: boolean; error_code?: string }>(c);
     return c.json(await acknowledgeForgejoReconciliation({
       repositoryId: c.req.param('repositoryId'),
       appliedPolicyRevision: body.applied_policy_revision,
+      reconciliationToken: body.reconciliation_token,
       ok: body.ok === true,
       errorCode: body.error_code,
     }));

@@ -2393,6 +2393,24 @@ export type GitResourceType = 'git-workspace' | 'git-repository' | 'git-capabili
 export type GitService = 'upload-pack' | 'receive-pack';
 export type GitPrincipalType = 'actor' | 'group';
 
+export interface GitSharingMutation {
+  expected_policy_revision: number;
+  principal_type: GitPrincipalType;
+  principal_id: string;
+  // Actor bindings are immutable provider IDs, never usernames supplied by a form.
+  forgejo_user_id?: number;
+  access: 'read' | 'write' | 'admin' | 'none';
+}
+
+export interface GitSharingState {
+  repository_id: string;
+  workspace_id: string;
+  policy_revision: number;
+  ready: boolean;
+  principals: Array<{ principal_type: GitPrincipalType; principal_id: string; label: string; forgejo_user_id?: number }>;
+  grants: GitRepositoryGrant[];
+}
+
 export interface GitRepository {
   repository_id: string;
   workspace_id: string;
@@ -2659,6 +2677,8 @@ export interface GitForgejoBrowserActorValidation {
 }
 
 export interface GitForgejoDesiredState extends GitForgejoRepositoryBinding {
+  /** Internal control-plane recovery only; never returned by public repository resolution. */
+  reconciliation_token?: string | null;
   display_name: string;
   description: string;
   private: true;

@@ -3016,6 +3016,10 @@ CREATE TABLE IF NOT EXISTS git_forgejo_repository_bindings (
   CHECK (applied_policy_revision IS NULL OR applied_policy_revision >= 1)
 );
 
+-- Stock Forgejo has no fencing API: do not allow overlapping repository projections.
+-- A lost worker leaves access pending until its attempt is recovered, never auto-expired.
+ALTER TABLE git_forgejo_repository_bindings ADD COLUMN IF NOT EXISTS reconciliation_token UUID;
+
 -- A workspace organization exists independently of repositories. Tower writes
 -- the desired binding transactionally; the private provider worker projects it
 -- into Forgejo without making workspace creation depend on provider uptime.

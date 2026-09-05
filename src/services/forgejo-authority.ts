@@ -392,7 +392,8 @@ export async function ensureForgejoBinding(repositoryId: string, sql: DbClient =
           ELSE NULL
         END,
         state = CASE
-          WHEN git_forgejo_repository_bindings.forgejo_owner = EXCLUDED.forgejo_owner
+          WHEN git_forgejo_repository_bindings.reconciliation_token IS NULL
+           AND git_forgejo_repository_bindings.forgejo_owner = EXCLUDED.forgejo_owner
            AND git_forgejo_repository_bindings.forgejo_repository = EXCLUDED.forgejo_repository
            AND git_forgejo_repository_bindings.applied_policy_revision = EXCLUDED.desired_policy_revision THEN 'ready'
           ELSE 'pending'
@@ -417,7 +418,7 @@ export async function resolveForgejoRepositoryPath(owner: string, repository: st
   if (!row) throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
   return {
     ...serializeBinding(row),
-    ready: row.state === 'ready'
+    ready: row.state === 'ready' && row.reconciliation_token === null
       && Number(row.applied_policy_revision) === Number(row.policy_revision)
       && row.repository_state === 'active',
   };
@@ -426,7 +427,9 @@ export async function resolveForgejoRepositoryPath(owner: string, repository: st
 export async function readForgejoDesiredState(repositoryId: string, sql: DbClient = getDb()): Promise<GitForgejoDesiredState> {
   const binding = await ensureForgejoBinding(repositoryId, sql);
   const [repository] = await sql<any[]>`
-    SELECT display_name, description, default_branch FROM git_repositories WHERE id = ${repositoryId}
+    SELECT display_name, description, default_branch, binding.reconciliation_token
+    FROM git_repositories repository JOIN git_forgejo_repository_bindings binding ON binding.repository_id = repository.id
+    WHERE repository.id = ${repositoryId}
   `;
   const branchRules = await sql<any[]>`
     SELECT id AS policy_id, ref_name, branch_class, protected, service_managed,
@@ -474,6 +477,7 @@ export async function readForgejoDesiredState(repositoryId: string, sql: DbClien
   `;
   return {
     ...binding,
+    reconciliation_token: repository.reconciliation_token,
     display_name: repository.display_name,
     description: repository.description,
     private: true,
@@ -643,33 +647,49 @@ export async function validateForgejoBrowserActor(input: {
   };
 }
 
+export async function beginForgejoReconciliation(repositoryId: string, token: string, sql: DbClient = getDb()) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
+    throw new GitAuthorityError('git_reconciliation_token_invalid', 'Reconciliation token is required', 400);
+  }
+  return sql.begin(async tx => {
+    const db = tx as unknown as DbClient;
+    await db`SELECT id FROM git_repositories WHERE id = ${repositoryId} FOR UPDATE`;
+    await ensureForgejoBinding(repositoryId, db);
+    const [binding] = await db<any[]>`UPDATE git_forgejo_repository_bindings SET reconciliation_token = ${token}, state = 'pending'
+      WHERE repository_id = ${repositoryId} AND reconciliation_token IS NULL RETURNING repository_id`;
+    if (!binding) throw new GitAuthorityError('git_reconciliation_busy', 'Repository reconciliation is already in progress', 409);
+    return readForgejoDesiredState(repositoryId, db);
+  });
+}
+
 export async function acknowledgeForgejoReconciliation(input: {
   repositoryId: string;
   appliedPolicyRevision: number;
+  reconciliationToken: string;
   ok: boolean;
   errorCode?: string | null;
 }, sql: DbClient = getDb()): Promise<GitForgejoRepositoryBinding> {
-  const binding = await ensureForgejoBinding(input.repositoryId, sql);
   if (!Number.isSafeInteger(input.appliedPolicyRevision) || input.appliedPolicyRevision < 1) {
     throw new GitAuthorityError('git_validation_error', 'applied_policy_revision is invalid', 400);
   }
-  if (input.appliedPolicyRevision !== binding.desired_policy_revision) {
-    throw new GitAuthorityError('git_reconciliation_stale', 'Reconciliation revision is stale', 409);
-  }
-  return sql.begin(async (tx) => {
+  const result = await sql.begin(async tx => {
     const db = tx as unknown as DbClient;
-    const [row] = await db<any[]>`
-      UPDATE git_forgejo_repository_bindings
-      SET applied_policy_revision = ${input.ok ? input.appliedPolicyRevision : null},
-          state = ${input.ok ? 'ready' : 'error'},
-          last_error_code = ${input.ok ? null : String(input.errorCode || 'git_forgejo_reconciliation_failed').slice(0, 200)},
-          reconciled_at = ${input.ok ? new Date() : null}, updated_at = NOW()
-      WHERE repository_id = ${input.repositoryId}
-      RETURNING *
-    `;
-    if (input.ok) await db`UPDATE git_repositories SET state = 'active', updated_at = NOW() WHERE id = ${input.repositoryId}`;
-    return serializeBinding(row);
+    const [repository] = await db<any[]>`SELECT policy_revision FROM git_repositories WHERE id = ${input.repositoryId} FOR UPDATE`;
+    const [binding] = await db<any[]>`SELECT * FROM git_forgejo_repository_bindings WHERE repository_id = ${input.repositoryId} FOR UPDATE`;
+    if (!input.reconciliationToken || binding?.reconciliation_token !== input.reconciliationToken) {
+      throw new GitAuthorityError('git_reconciliation_token_invalid', 'Reconciliation attempt does not own this repository', 409);
+    }
+    const current = Number(repository.policy_revision) === input.appliedPolicyRevision;
+    const ready = current && input.ok;
+    const [row] = await db<any[]>`UPDATE git_forgejo_repository_bindings
+      SET reconciliation_token = NULL, applied_policy_revision = ${ready ? input.appliedPolicyRevision : null},
+        state = ${ready ? 'ready' : 'pending'}, last_error_code = ${ready ? null : current ? String(input.errorCode || 'git_forgejo_reconciliation_failed').slice(0, 200) : 'git_reconciliation_stale'},
+        reconciled_at = ${ready ? new Date() : null}, updated_at = NOW() WHERE repository_id = ${input.repositoryId} RETURNING *`;
+    if (ready) await db`UPDATE git_repositories SET state = 'active', updated_at = NOW() WHERE id = ${input.repositoryId}`;
+    return { row, current };
   });
+  if (!result.current) throw new GitAuthorityError('git_reconciliation_stale', 'Reconciliation revision is stale; retry current authority', 409);
+  return serializeBinding(result.row);
 }
 
 function verifyWebhookSignature(body: string, provided: string): boolean {

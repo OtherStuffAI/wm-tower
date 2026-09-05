@@ -51,6 +51,17 @@ export class ForgejoClient {
     return text ? JSON.parse(text) : null;
   }
 
+  private async list(path: string): Promise<any[]> {
+    const rows: any[] = [];
+    for (let page = 1; page <= 1000; page++) {
+      const batch = await this.request(`${path}?limit=50&page=${page}`);
+      if (!Array.isArray(batch)) throw new ForgejoAdapterError('forgejo_api_error', 'Forgejo list response was invalid', 502);
+      rows.push(...batch);
+      if (batch.length < 50) return rows;
+    }
+    throw new ForgejoAdapterError('forgejo_list_incomplete', 'Forgejo list exceeded the reconciliation bound', 502);
+  }
+
   private async ensureOrganization(name: string) {
     const existing = await this.fetchImpl(`${this.baseUrl}/api/v1/orgs/${encodeURIComponent(name)}`, {
       headers: { authorization: `token ${this.options.controlToken}`, accept: 'application/json' },
@@ -141,8 +152,16 @@ export class ForgejoClient {
   }
 
   private async reconcileCollaborators(state: GitForgejoDesiredState) {
+    // Tower groups are expanded into exact actor permissions. Provider-only
+    // teams (including tower-members) must never retain a parallel repository ACL.
+    const repository = `/repos/${encodeURIComponent(state.forgejo_owner)}/${encodeURIComponent(state.forgejo_repository)}`;
+    const teams = await this.list(`${repository}/teams`);
+    if (!Array.isArray(teams)) throw new ForgejoAdapterError('forgejo_api_error', 'Forgejo repository teams response was invalid', 502);
+    for (const team of teams) {
+      if (team.permission !== 'owner') await this.request(`${repository}/teams/${encodeURIComponent(String(team.name))}`, { method: 'DELETE' }, [204, 404]);
+    }
     const base = `/repos/${encodeURIComponent(state.forgejo_owner)}/${encodeURIComponent(state.forgejo_repository)}/collaborators`;
-    const collaborators = await this.request(base);
+    const collaborators = await this.list(base);
     const desired = new Set(state.actor_access.map((access) => access.shadow_username));
     if (Array.isArray(collaborators)) {
       for (const collaborator of collaborators) {

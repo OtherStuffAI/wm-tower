@@ -9586,6 +9586,25 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/git/forgejo/sharing/{owner}/{repository}': {
+        parameters: ['owner', 'repository'].map(name => ({ name, in: 'path', required: true, schema: { type: 'string' } })),
+        get: {
+          tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Read Tower sharing and immutable workspace principals for the Forgejo collaboration page',
+          responses: { '200': { description: 'Current policy revision, active grants, actor/provider-ID and stable group choices, and reconciliation readiness' }, '404': { description: 'Repository absent or signer lacks exact git.repo.admin' } },
+        },
+        post: {
+          tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Atomically replace one principal’s direct sharing permissions',
+          description: 'Requires strict payload-bound one-use NIP-98 administrator intent. Read maps to git.repo.read; Write to git.repo.write plus git.branch.create on work/feature refs; Admin to git.repo.admin; none revokes every direct permission for this principal. Inherited grants remain. Provider state is never imported.',
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object', required: ['expected_policy_revision', 'principal_type', 'principal_id', 'access'], properties: {
+              expected_policy_revision: { type: 'integer', minimum: 1 }, principal_type: { type: 'string', enum: ['actor', 'group'] },
+              principal_id: { type: 'string', format: 'uuid' }, forgejo_user_id: { type: 'integer', minimum: 1, description: 'Required for actors; must equal the immutable Tower binding' },
+              access: { type: 'string', enum: ['read', 'write', 'admin', 'none'] },
+            },
+          } } } },
+          responses: { '202': { description: 'Tower policy committed; stock provider reconciliation pending' }, '401': { description: 'Invalid signature' }, '404': { description: 'Unknown repository/principal or unauthorized administrator' }, '409': { description: 'Stale revision, mismatched actor binding, replay, or final administrator removal' } },
+        },
+      },
       '/api/v4/git/workspaces/{workspaceId}/repositories/{repositoryId}/grants': {
         post: {
           tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Create an explicit actor or stable-group repository grant',
@@ -9795,11 +9814,20 @@ export function buildOpenApiDocument(origin: string) {
           responses: { '200': { description: 'Actor username reconciliation state' }, '409': { description: 'Stale username request' } },
         },
       },
+      '/api/v4/git/internal/forgejo/repositories/{repositoryId}/begin': {
+        post: {
+          tags: ['Git Authority'], security: [{ gitInternalService: [] }], summary: 'Acquire an exclusive stock-provider repository reconciliation attempt',
+          description: 'Marks provider access pending and returns desired state. Token must accompany acknowledgement. Attempts never expire automatically: an interrupted worker fails closed until explicitly recovered after proving it can no longer write.',
+          parameters: [{ name: 'repositoryId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['reconciliation_token'], properties: { reconciliation_token: { type: 'string', format: 'uuid' } } } } } },
+          responses: { '200': { description: 'Exclusive attempt acquired; current desired state' }, '409': { description: 'A provider writer is already active' } },
+        },
+      },
       '/api/v4/git/internal/forgejo/repositories/{repositoryId}/ack': {
         post: {
           tags: ['Git Authority'], security: [{ gitInternalService: [] }], summary: 'Acknowledge one exact Forgejo policy reconciliation revision',
           parameters: [{ name: 'repositoryId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['applied_policy_revision', 'ok'], properties: { applied_policy_revision: { type: 'integer', minimum: 1 }, ok: { type: 'boolean' }, error_code: { type: 'string' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['applied_policy_revision', 'reconciliation_token', 'ok'], properties: { reconciliation_token: { type: 'string', format: 'uuid' }, applied_policy_revision: { type: 'integer', minimum: 1 }, ok: { type: 'boolean' }, error_code: { type: 'string' } } } } } },
           responses: {
             '200': { description: 'Reconciliation state', content: { 'application/json': { schema: { $ref: '#/components/schemas/GitForgejoRepositoryBinding' } } } },
             '409': { description: 'Stale reconciliation revision', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },

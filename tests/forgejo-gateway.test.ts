@@ -178,3 +178,47 @@ describe('Forgejo browser reverse proxy', () => {
     expect(await response.text()).toBe('var loaded=true;');
   });
 });
+
+describe('Tower sharing browser bridge', () => {
+  test('serves sharing at the Forgejo collaboration URL and blocks native edits and team bypasses', async () => {
+    let calls = 0;
+    const app = createForgejoGateway({ towerUrl: 'http://tower.internal', forgejoUrl: 'http://forgejo.internal', internalServiceToken: serviceToken,
+      audience: 'git', fetchImpl: (async () => { calls++; return new Response('provider'); }) as typeof fetch });
+    const response = await app.request('https://forgejo.test/otherstuff/kindling/settings/collaboration');
+    expect(response.status).toBe(200); expect(await response.text()).toContain('Load sharing with Nostr');
+    for (const path of ['/otherstuff/kindling/settings/collaboration', '/otherstuff/kindling/settings/collaboration/access_mode', '/org/otherstuff/teams/tower-members/action', '/otherstuff/kindling/settings/%63ollaboration', '/org/otherstuff/%74eams/tower-members/action', '/api/v1/repos/otherstuff/kindling/collaborators/lara']) {
+      expect((await app.request(`https://forgejo.test${path}`, { method: 'POST' })).status).toBeGreaterThanOrEqual(400);
+    }
+    expect(calls).toBe(0);
+  });
+
+  test('forwards only signed sharing intent to Tower, with gateway-owned URL headers', async () => {
+    const app = createForgejoGateway({ towerUrl: 'http://tower.internal', forgejoUrl: 'http://forgejo.internal', internalServiceToken: serviceToken,
+      audience: 'git', browserOrigin: 'https://forgejo.test', fetchImpl: (async (url, init) => {
+        expect(String(url)).toBe('http://tower.internal/api/v4/git/forgejo/sharing/otherstuff/kindling');
+        const headers = new Headers(init?.headers);
+        expect(headers.get('authorization')).toBe('Nostr signed-intent');
+        expect(headers.get('cookie')).toBeNull(); expect(headers.get('x-wingman-git-service-token')).toBeNull();
+        expect(headers.get('x-forwarded-host')).toBe('forgejo.test'); expect(headers.get('x-forwarded-proto')).toBe('https');
+        expect(await new Response(init?.body).text()).toBe('{"access":"none"}');
+        return Response.json({ policy_revision: 2 }, { status: 202 });
+      }) as typeof fetch });
+    const url = 'https://forgejo.test/api/v4/git/forgejo/sharing/otherstuff/kindling';
+    expect((await app.request(url, { method: 'POST', headers: { cookie: 'admin=session' } })).status).toBe(401);
+    expect((await app.request(url, { method: 'POST', headers: { authorization: 'Nostr signed-intent', cookie: 'admin=session',
+      'x-forwarded-host': 'evil.test', 'x-wingman-git-service-token': 'spoof' }, body: '{"access":"none"}' })).status).toBe(202);
+  });
+
+  test('holds browser repository operations closed during provider reconciliation', async () => {
+    let providerCalls = 0;
+    const app = createForgejoGateway({ towerUrl: 'http://tower.internal', forgejoUrl: 'http://forgejo.internal', internalServiceToken: serviceToken,
+      audience: 'git', fetchImpl: (async url => {
+        if (String(url).includes('/resolve?')) return Response.json({ ready: false });
+        providerCalls++; return new Response('provider');
+      }) as typeof fetch });
+    expect((await app.request('https://forgejo.test/otherstuff/kindling/src/branch/main')).status).toBe(503);
+    expect((await app.request('https://forgejo.test/Otherstuff/Kindling/src/branch/main')).status).toBe(503);
+    expect((await app.request('https://forgejo.test/%6ftherstuff/kindling/src/branch/main')).status).toBe(503);
+    expect(providerCalls).toBe(0);
+  });
+});

@@ -874,6 +874,8 @@ export async function createGitRepositoryGrant(
   try {
     return await sql.begin(async (tx) => {
       const db = tx as unknown as DbClient;
+      await db`SELECT id FROM git_repositories WHERE id = ${repositoryId} FOR UPDATE`;
+      await requireRepositoryAdmin(workspaceId, repositoryId, actorNpub, db);
       const [grant] = await db<GitGrantRow[]>`
         INSERT INTO git_repository_grants (
           workspace_id, repository_id, principal_type, principal_actor_id,
@@ -928,6 +930,8 @@ export async function revokeGitRepositoryGrant(
   assertUuid(grantId, 'grant_id');
   return sql.begin(async (tx) => {
     const db = tx as unknown as DbClient;
+    await db`SELECT id FROM git_repositories WHERE id = ${repositoryId} FOR UPDATE`;
+    await requireRepositoryAdmin(workspaceId, repositoryId, actorNpub, db);
     const [existing] = await db<GitGrantRow[]>`
       SELECT id, repository_id, principal_type, principal_actor_id, principal_group_id,
              permission, ref_constraints, created_by_actor_id, created_at, revoked_by_actor_id, revoked_at
@@ -1004,6 +1008,8 @@ export async function updateGitRepositoryPolicy(
   const rules = normalizeBranchRules(input.branch_rules);
   return sql.begin(async (tx) => {
     const db = tx as unknown as DbClient;
+    await db`SELECT id FROM git_repositories WHERE id = ${repositoryId} FOR UPDATE`;
+    await requireRepositoryAdmin(workspaceId, repositoryId, actorNpub, db);
     const [updated] = await db<GitRepositoryRow[]>`
       UPDATE git_repositories
       SET policy_revision = policy_revision + 1, updated_at = NOW()
@@ -1613,4 +1619,104 @@ export async function listGitAuditEvents(
     correlation_id: row.correlation_id,
     occurred_at: row.occurred_at.toISOString(),
   }));
+}
+
+/** A browser sharing edit is a Tower command, never a provider-state import. */
+async function sharingRepository(owner: string, slug: string, sql: DbClient) {
+  const [row] = await sql<{ id: string; workspace_id: string }[]>`
+    SELECT repository.id, repository.workspace_id FROM git_repositories repository
+    JOIN git_workspace_namespaces namespace ON namespace.workspace_id = repository.workspace_id
+    WHERE namespace.namespace = ${owner} AND repository.slug = ${slug} AND repository.archived_at IS NULL
+  `;
+  if (!row) throw new GitAuthorityError('git_repository_not_found', 'Repository not found', 404);
+  return row;
+}
+
+export async function readGitSharing(owner: string, slug: string, actorNpub: string, sql: DbClient = getDb()): Promise<import('../types').GitSharingState> {
+  return sql.begin(async tx => {
+    const db = tx as unknown as DbClient;
+    const target = await sharingRepository(owner, slug, db);
+    // Snapshot and mutations use the same lock, including the legacy grant API.
+    await db`SELECT id FROM git_repositories WHERE id = ${target.id} FOR UPDATE`;
+    const { repository } = await requireRepositoryAdmin(target.workspace_id, target.id, actorNpub, db);
+    const actors = await db<any[]>`
+      SELECT actor.id, COALESCE(alias.applied_username, actor.display_name, actor.id::text) AS label, alias.forgejo_user_id
+      FROM flightdeck_pg_workspace_memberships membership
+      JOIN flightdeck_pg_actors actor ON actor.id = membership.actor_id
+      JOIN git_forgejo_actor_aliases alias ON alias.actor_id = actor.id
+      WHERE membership.workspace_id = ${target.workspace_id} AND alias.state = 'ready' AND alias.forgejo_user_id IS NOT NULL
+      ORDER BY label, actor.id
+    `;
+    const groups = await db<any[]>`SELECT id, name FROM flightdeck_pg_groups WHERE workspace_id = ${target.workspace_id} ORDER BY name, id`;
+    const [binding] = await db<any[]>`SELECT state, applied_policy_revision FROM git_forgejo_repository_bindings WHERE repository_id = ${target.id}`;
+    return {
+      repository_id: target.id, workspace_id: target.workspace_id, policy_revision: Number(repository.policy_revision),
+      ready: binding?.state === 'ready' && Number(binding.applied_policy_revision) === Number(repository.policy_revision),
+      principals: [
+        ...actors.map(row => ({ principal_type: 'actor' as const, principal_id: row.id, label: row.label, forgejo_user_id: Number(row.forgejo_user_id) })),
+        ...groups.map(row => ({ principal_type: 'group' as const, principal_id: row.id, label: row.name })),
+      ],
+      grants: (await listGitRepositoryGrants(target.workspace_id, target.id, actorNpub, db)).filter(grant => !grant.revoked_at),
+    };
+  });
+}
+
+export async function updateGitSharing(owner: string, slug: string, actorNpub: string, signerNpub: string, input: import('../types').GitSharingMutation, sql: DbClient = getDb()) {
+  if (!input || !Number.isSafeInteger(input.expected_policy_revision) || input.expected_policy_revision < 1
+    || !['actor', 'group'].includes(input.principal_type) || !['read', 'write', 'admin', 'none'].includes(input.access)) {
+    throw new GitAuthorityError('git_sharing_invalid', 'Invalid sharing command', 400);
+  }
+  const principalId = assertUuid(input.principal_id, 'principal_id');
+  return sql.begin(async tx => {
+    const db = tx as unknown as DbClient;
+    const target = await sharingRepository(owner, slug, db);
+    await db`SELECT id FROM git_repositories WHERE id = ${target.id} FOR UPDATE`;
+    const { repository, actor } = await requireRepositoryAdmin(target.workspace_id, target.id, actorNpub, db);
+    if (Number(repository.policy_revision) !== input.expected_policy_revision) {
+      throw new GitAuthorityError('git_sharing_stale', 'Sharing changed. Reload before submitting again.', 409);
+    }
+    if (input.principal_type === 'actor') {
+      const [member] = await db<any[]>`
+        SELECT alias.forgejo_user_id FROM flightdeck_pg_workspace_memberships membership
+        JOIN git_forgejo_actor_aliases alias ON alias.actor_id = membership.actor_id
+        WHERE membership.workspace_id = ${target.workspace_id} AND membership.actor_id = ${principalId}
+          AND alias.state = 'ready' AND alias.forgejo_user_id IS NOT NULL
+      `;
+      if (!member || !Number.isSafeInteger(input.forgejo_user_id) || Number(member.forgejo_user_id) !== input.forgejo_user_id) {
+        throw new GitAuthorityError('git_sharing_identity_mismatch', 'Actor binding changed or is unavailable', 409);
+      }
+    } else {
+      const [group] = await db<any[]>`SELECT id FROM flightdeck_pg_groups WHERE workspace_id = ${target.workspace_id} AND id = ${principalId}`;
+      if (!group) throw new GitAuthorityError('git_principal_not_found', 'Group not found', 404);
+    }
+    const existing = await db<GitGrantRow[]>`
+      SELECT * FROM git_repository_grants WHERE repository_id = ${target.id} AND revoked_at IS NULL
+        AND principal_type = ${input.principal_type}
+        AND (principal_actor_id = ${principalId} OR principal_group_id = ${principalId})
+    `;
+    if (existing.some(grant => grant.permission === 'git.repo.admin') && input.access !== 'admin') {
+      const [remaining] = await db<any[]>`
+        SELECT id FROM git_repository_grants WHERE repository_id = ${target.id} AND revoked_at IS NULL
+          AND permission = 'git.repo.admin' AND NOT (id = ANY(${existing.map(g => g.id)}::uuid[])) LIMIT 1
+      `;
+      if (!remaining) throw new GitAuthorityError('git_last_admin_grant', 'The final repository administrator cannot be removed', 409);
+    }
+    // Replace all direct permissions for this principal atomically, including branch-create.
+    // Other principals and inherited group permissions are intentionally preserved.
+    await db`UPDATE git_repository_grants SET revoked_at = NOW(), revoked_by_actor_id = ${actor.actorId}
+      WHERE id = ANY(${existing.map(grant => grant.id)}::uuid[])`;
+    const permissions: GitRepositoryPermission[] = input.access === 'none' ? [] : input.access === 'write'
+      ? ['git.repo.write', 'git.branch.create'] : [input.access === 'admin' ? 'git.repo.admin' : 'git.repo.read'];
+    for (const permission of permissions) {
+      await db`INSERT INTO git_repository_grants (workspace_id, repository_id, principal_type, principal_actor_id, principal_group_id, permission, ref_constraints, created_by_actor_id)
+        VALUES (${target.workspace_id}, ${target.id}, ${input.principal_type}, ${input.principal_type === 'actor' ? principalId : null},
+          ${input.principal_type === 'group' ? principalId : null}, ${permission}, ${db.json({ prefixes: normalizeRefPrefixes(undefined, permission) })}, ${actor.actorId})`;
+    }
+    const [updated] = await db<any[]>`UPDATE git_repositories SET policy_revision = policy_revision + 1, updated_at = NOW() WHERE id = ${target.id} RETURNING policy_revision`;
+    const revision = Number(updated.policy_revision);
+    await appendGitAuditEvent({ workspaceId: target.workspace_id, repositoryId: target.id, actorId: actor.actorId, actorNpub, signerNpub,
+      operation: 'git.sharing.update', requestedScope: input.access, decision: 'allow', reasonCode: 'git_sharing_updated', policyRevision: revision,
+      correlationId: randomUUID() }, db);
+    return { repository_id: target.id, workspace_id: target.workspace_id, actor_id: actor.actorId, policy_revision: revision, ready: false };
+  });
 }

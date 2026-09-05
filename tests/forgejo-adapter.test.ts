@@ -44,12 +44,16 @@ describe('Forgejo control-plane adapter', () => {
         expect(JSON.parse(String(init?.body))).toMatchObject({ name: 'tower-members' });
         return Response.json({ id: 2, name: 'tower-members', permission: 'read' }, { status: 201 });
       }
+      if (url.endsWith('/kindling/teams?limit=50&page=1')) return Response.json([{ id: 1, name: 'Owners', permission: 'owner' }, { id: 2, name: 'tower-members', permission: 'read' }]);
+      if (url.endsWith('/collaborators?limit=50&page=1')) return Response.json([]);
       if (url.includes('/branch_protections/')) return new Response('', { status: 404 });
       if (url.endsWith('/')) return new Response('', { status: 302 });
       if (method === 'DELETE') return new Response('', { status: 204 });
       return Response.json({}, { status: method === 'PUT' ? 204 : 201 });
     }) as typeof fetch;
     await new ForgejoClient({ baseUrl: 'http://forgejo.internal', controlToken: randomBytes(32).toString('base64url'), fetchImpl }).reconcile(state);
+    expect(calls.some(call => call.url.endsWith('/kindling/teams/tower-members') && call.method === 'DELETE')).toBeTrue();
+    expect(calls.some(call => call.url.endsWith('/kindling/teams/Owners') && call.method === 'DELETE')).toBeFalse();
     const repoCreate = calls.find((call) => call.url.endsWith(`/orgs/${state.forgejo_owner}/repos`) && call.method === 'POST');
     expect(repoCreate?.body).toMatchObject({ name: state.forgejo_repository, private: true, default_branch: 'main' });
     expect(calls.filter((call) => call.url.endsWith('/branch_protections') && call.method === 'POST')).toHaveLength(5);
