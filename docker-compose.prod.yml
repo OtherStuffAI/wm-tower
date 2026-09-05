@@ -321,6 +321,7 @@ services:
     environment:
       GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
       GIT_FORGEJO_IDENTITY_TOKEN_FILE: /run/tower-git-secrets/forgejo-identity-token
+      GIT_FORGEJO_OIDC_SOURCE_ID: ${GIT_FORGEJO_OIDC_SOURCE_ID:-0}
       GIT_FORGEJO_BASE_URL: http://forgejo:3000
       GIT_GATEWAY_TOWER_URL: http://tower:3100
     volumes:
@@ -347,9 +348,12 @@ services:
     environment:
       GIT_INTERNAL_SERVICE_TOKEN_FILE: /run/tower-git-secrets/git-internal-service-token
       GIT_FORGEJO_CONTROL_TOKEN_FILE: /run/tower-git-secrets/forgejo-control-token
+      GIT_FORGEJO_WEBHOOK_URL: http://tower:3100/api/v4/git/forgejo/webhooks
+      GIT_FORGEJO_WEBHOOK_SECRET_FILE: /run/tower-git-secrets/git-forgejo-webhook-secret
       GIT_FORGEJO_BASE_URL: http://forgejo:3000
       GIT_GATEWAY_TOWER_URL: http://tower:3100
     volumes:
+      - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-forgejo-webhook-secret:/run/tower-git-secrets/git-forgejo-webhook-secret:ro
       - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-internal-service-token:/run/tower-git-secrets/git-internal-service-token:ro
       - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/forgejo-control-token:/run/tower-git-secrets/forgejo-control-token:ro
     networks:

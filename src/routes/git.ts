@@ -38,6 +38,8 @@ import {
   updateGitRepositoryPolicy,
 } from '../services/git-authority';
 import {
+  gitActorBootstrap,
+  listPendingForgejoRepositories,
   acknowledgeForgejoActorAlias,
   acknowledgeForgejoOrganizationReconciliation,
   acknowledgeForgejoReconciliation,
@@ -179,6 +181,21 @@ gitRouter.put('/workspaces/:workspaceId/namespace', async (c) => {
     await recordPublicDenial('git.namespace.claim', auth, error);
     return errorResponse(c, error);
   }
+});
+
+gitRouter.on(['GET', 'POST'], '/workspaces/:workspaceId/actor-bootstrap', async (c) => {
+  const auth = await publicAuth(c);
+  if (auth instanceof Response) return auth;
+  try {
+    const result = await gitActorBootstrap(c.req.param('workspaceId'), auth.userNpub, auth.signerNpub, c.req.method === 'POST');
+    return c.json({ bootstrap: result }, c.req.method === 'POST' ? 202 : 200);
+  } catch (error) { return errorResponse(c, error); }
+});
+
+gitRouter.get('/internal/forgejo/repositories/pending', async (c) => {
+  const failure = internalServiceAuth(c); if (failure) return failure;
+  try { return c.json({ repositories: await listPendingForgejoRepositories() }); }
+  catch (error) { return errorResponse(c, error); }
 });
 
 gitRouter.get('/workspaces/:workspaceId/actor-username', async (c) => {
@@ -679,9 +696,9 @@ gitRouter.post('/internal/forgejo/organizations/:workspaceId/ack', async (c) => 
   const authFailure = internalServiceAuth(c);
   if (authFailure) return authFailure;
   try {
-    const body = await readBody<{ forgejo_owner: string; ok: boolean; error_code?: string }>(c);
+    const body = await readBody<{ forgejo_owner: string; desired_generation: number; ok: boolean; error_code?: string }>(c);
     return c.json(await acknowledgeForgejoOrganizationReconciliation({
-      workspaceId: c.req.param('workspaceId'), forgejoOwner: body.forgejo_owner,
+      workspaceId: c.req.param('workspaceId'), forgejoOwner: body.forgejo_owner, desiredGeneration: body.desired_generation,
       ok: body.ok === true, errorCode: body.error_code,
     }));
   } catch (error) { return errorResponse(c, error); }
@@ -703,8 +720,8 @@ gitRouter.get('/internal/forgejo/actor-bindings', async (c) => {
 gitRouter.post('/internal/forgejo/actor-bindings/:actorId', async (c) => {
   const authFailure = internalServiceAuth(c); if (authFailure) return authFailure;
   try {
-    const body = await readBody<{ forgejo_user_id: number; username: string }>(c);
-    return c.json({ actor_username: await syncForgejoActorBinding({ actorId: c.req.param('actorId'), forgejoUserId: body.forgejo_user_id, username: body.username }) });
+    const body = await readBody<{ forgejo_user_id: number; username: string; desired_username?: string }>(c);
+    return c.json({ actor_username: await syncForgejoActorBinding({ actorId: c.req.param('actorId'), forgejoUserId: body.forgejo_user_id, username: body.username, desiredUsername: body.desired_username }) });
   } catch (error) { return errorResponse(c, error); }
 });
 

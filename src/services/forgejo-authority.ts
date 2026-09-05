@@ -3,6 +3,7 @@ import { config } from '../config';
 import { getDb } from '../db';
 import type {
   GitActorUsername,
+  GitActorBootstrap,
   GitForgejoOrganizationDesiredState,
   GitForgejoDesiredState,
   GitForgejoRepositoryBinding,
@@ -30,7 +31,7 @@ function serializeActorUsername(row: any, actorId: string): GitActorUsername {
     actor_id: actorId,
     username: row?.desired_username ?? fallback,
     applied_username: row?.applied_username ?? fallback,
-    state: row?.state ?? 'ready',
+    state: row?.forgejo_user_id == null && row?.state === 'ready' ? 'pending' : row?.state ?? 'pending',
     last_error_code: row?.last_error_code ?? null,
     created_at: row?.created_at?.toISOString() ?? null,
     updated_at: row?.updated_at?.toISOString() ?? null,
@@ -41,7 +42,7 @@ export async function appliedForgejoActorUsername(actorId: string, sql: DbClient
   const fallback = forgejoShadowUsername(actorId);
   await sql`
     INSERT INTO git_forgejo_actor_aliases (actor_id, desired_username, applied_username, state)
-    VALUES (${actorId}, ${fallback}, ${fallback}, 'ready')
+    VALUES (${actorId}, ${fallback}, ${fallback}, 'pending')
     ON CONFLICT (actor_id) DO NOTHING
   `;
   const [row] = await sql<{ applied_username: string | null }[]>`
@@ -69,6 +70,39 @@ export async function readGitActorUsername(workspaceId: string, actorNpub: strin
   if (!actor) throw new GitAuthorityError('git_workspace_not_found', 'Workspace not found', 404);
   const [row] = await sql<any[]>`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${actor.id}`;
   return serializeActorUsername(row, actor.id);
+}
+
+export async function gitActorBootstrap(workspaceId: string, actorNpub: string, signerNpub: string, request: boolean, sql: DbClient = getDb()): Promise<GitActorBootstrap> {
+  const actor = await readGitActorUsername(workspaceId, actorNpub, sql);
+  if (request) {
+    await appliedForgejoActorUsername(actor.actor_id, sql);
+    await sql`UPDATE git_forgejo_actor_aliases SET state = 'pending', last_error_code = NULL, updated_at = NOW()
+      WHERE actor_id = ${actor.actor_id} AND (forgejo_user_id IS NULL OR state = 'error')`;
+    await ensureForgejoWorkspaceBinding(workspaceId, sql);
+    await appendGitAuditEvent({ workspaceId, actorId: actor.actor_id, actorNpub, signerNpub,
+      operation: 'git.actor.bootstrap', decision: 'allow', reasonCode: 'git_actor_bootstrap_requested' }, sql);
+  }
+  const [alias] = await sql<any[]>`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${actor.actor_id}`;
+  const [organization] = await sql<any[]>`SELECT state, last_error_code FROM git_forgejo_workspace_bindings WHERE workspace_id = ${workspaceId}`;
+  const accountState = !alias ? 'not_requested' : alias.state === 'error' ? 'error'
+    : alias.forgejo_user_id == null || alias.state !== 'ready' ? 'pending' : 'ready';
+  const organizationState = organization?.state ?? 'pending';
+  return {
+    actor_id: actor.actor_id, workspace_id: workspaceId,
+    state: accountState === 'not_requested' ? 'not_requested' : accountState === 'error' || organizationState === 'error' ? 'error'
+      : accountState === 'ready' && organizationState === 'ready' ? 'ready' : 'pending',
+    account_state: accountState, organization_state: organizationState,
+    last_error_code: alias?.last_error_code ?? organization?.last_error_code ?? null,
+    actor_username: serializeActorUsername(alias, actor.actor_id),
+  };
+}
+
+export async function listPendingForgejoRepositories(sql: DbClient = getDb()) {
+  return sql<{ repository_id: string }[]>`SELECT repository.id AS repository_id FROM git_repositories repository
+    LEFT JOIN git_forgejo_repository_bindings binding ON binding.repository_id = repository.id
+    WHERE repository.archived_at IS NULL AND repository.state <> 'archived'
+      AND (binding.repository_id IS NULL OR binding.state <> 'ready' OR binding.applied_policy_revision IS DISTINCT FROM repository.policy_revision)
+    ORDER BY repository.id`;
 }
 
 export async function requestGitActorUsername(
@@ -99,15 +133,12 @@ export async function requestGitActorUsername(
       `;
       if (namespace?.present) throw new GitAuthorityError('git_actor_username_conflict', 'Forgejo username is already claimed', 409);
       const [existing] = await db<any[]>`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${actor.id} FOR UPDATE`;
-      if (existing?.forgejo_user_id !== null && existing?.forgejo_user_id !== undefined) {
-        throw new GitAuthorityError('git_actor_username_provider_managed', 'Change the username in Forgejo Settings', 409);
-      }
       const [row] = await db<any[]>`
         INSERT INTO git_forgejo_actor_aliases (actor_id, desired_username, applied_username, state)
         VALUES (${actor.id}, ${username}, NULL, 'pending')
         ON CONFLICT (actor_id) DO UPDATE
         SET desired_username = EXCLUDED.desired_username,
-            state = CASE WHEN git_forgejo_actor_aliases.applied_username = EXCLUDED.desired_username THEN 'ready' ELSE 'pending' END,
+            state = CASE WHEN git_forgejo_actor_aliases.forgejo_user_id IS NOT NULL AND git_forgejo_actor_aliases.applied_username = EXCLUDED.desired_username THEN 'ready' ELSE 'pending' END,
             last_error_code = NULL,
             updated_at = NOW()
         RETURNING *
@@ -146,19 +177,21 @@ export async function listPendingForgejoActorAliases(sql: DbClient = getDb()) {
 
 export async function listForgejoActorBindings(sql: DbClient = getDb()) {
   const rows = await sql<any[]>`
-    SELECT alias.actor_id, alias.applied_username, alias.forgejo_user_id
+    SELECT alias.actor_id, alias.applied_username, alias.forgejo_user_id, alias.desired_username, alias.state
     FROM git_forgejo_actor_aliases alias
     ORDER BY alias.actor_id
   `;
   return rows.map((row) => ({
     actor_id: row.actor_id,
     current_username: row.applied_username || forgejoShadowUsername(row.actor_id),
+    desired_username: row.desired_username,
+    state: row.state,
     forgejo_user_id: row.forgejo_user_id === null ? null : Number(row.forgejo_user_id),
   }));
 }
 
 export async function syncForgejoActorBinding(input: {
-  actorId: string; forgejoUserId: number; username: string;
+  actorId: string; forgejoUserId: number; username: string; desiredUsername?: string;
 }, sql: DbClient = getDb()) {
   const username = String(input.username || '').trim().toLowerCase();
   if (!canonicalNamePattern.test(username) || !Number.isSafeInteger(input.forgejoUserId) || input.forgejoUserId <= 0) {
@@ -170,9 +203,11 @@ export async function syncForgejoActorBinding(input: {
       SET desired_username = ${username}, applied_username = ${username}, forgejo_user_id = ${input.forgejoUserId},
           state = 'ready', last_error_code = NULL, reconciled_at = NOW(), updated_at = NOW()
       WHERE actor_id = ${input.actorId}
+        AND (forgejo_user_id IS NULL OR forgejo_user_id = ${input.forgejoUserId})
+        AND (${input.desiredUsername ?? null}::text IS NULL OR desired_username = ${input.desiredUsername ?? null})
       RETURNING *
     `;
-    if (!row) throw new GitAuthorityError('git_forgejo_actor_binding_not_found', 'Tower actor binding was not found', 404);
+    if (!row) throw new GitAuthorityError('git_forgejo_actor_binding_conflict', 'Actor binding changed or is already linked to another provider ID; reread current state', 409);
     return serializeActorUsername(row, input.actorId);
   } catch (error: any) {
     if (error instanceof GitAuthorityError) throw error;
@@ -215,6 +250,7 @@ function serializeWorkspaceBinding(row: any): GitForgejoWorkspaceBinding {
   return {
     workspace_id: row.workspace_id,
     forgejo_owner: row.forgejo_owner,
+    desired_generation: Number(row.desired_generation),
     state: row.state,
     reconciled_at: row.reconciled_at?.toISOString() ?? null,
   };
@@ -230,6 +266,8 @@ export async function ensureForgejoWorkspaceBinding(
     VALUES (${workspaceId}, ${forgejoOwner})
     ON CONFLICT (workspace_id) DO UPDATE
     SET forgejo_owner = EXCLUDED.forgejo_owner,
+        desired_generation = git_forgejo_workspace_bindings.desired_generation +
+          CASE WHEN git_forgejo_workspace_bindings.forgejo_owner = EXCLUDED.forgejo_owner THEN 0 ELSE 1 END,
         state = CASE
           WHEN git_forgejo_workspace_bindings.forgejo_owner = EXCLUDED.forgejo_owner
           THEN git_forgejo_workspace_bindings.state ELSE 'pending'
@@ -293,11 +331,11 @@ export async function readForgejoOrganizationDesiredState(
 export async function acknowledgeForgejoOrganizationReconciliation(input: {
   workspaceId: string;
   forgejoOwner: string;
+  desiredGeneration: number;
   ok: boolean;
   errorCode?: string | null;
 }, sql: DbClient = getDb()): Promise<GitForgejoWorkspaceBinding> {
-  const binding = await ensureForgejoWorkspaceBinding(input.workspaceId, sql);
-  if (binding.forgejo_owner !== input.forgejoOwner) {
+  if (!Number.isSafeInteger(input.desiredGeneration) || input.desiredGeneration < 1) {
     throw new GitAuthorityError('git_organization_reconciliation_stale', 'Organization reconciliation is stale', 409);
   }
   const [row] = await sql<any[]>`
@@ -307,6 +345,7 @@ export async function acknowledgeForgejoOrganizationReconciliation(input: {
         reconciled_at = ${input.ok ? new Date() : null},
         updated_at = NOW()
     WHERE workspace_id = ${input.workspaceId} AND forgejo_owner = ${input.forgejoOwner}
+      AND desired_generation = ${input.desiredGeneration}
     RETURNING *
   `;
   if (!row) throw new GitAuthorityError('git_organization_reconciliation_stale', 'Organization reconciliation is stale', 409);

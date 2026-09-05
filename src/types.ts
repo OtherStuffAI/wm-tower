@@ -2579,6 +2579,16 @@ export interface UpdateGitActorUsernameRequest {
   username: string;
 }
 
+export interface GitActorBootstrap {
+  actor_id: string;
+  workspace_id: string;
+  state: 'not_requested' | 'pending' | 'ready' | 'error';
+  account_state: 'not_requested' | 'pending' | 'ready' | 'error';
+  organization_state: 'pending' | 'ready' | 'error';
+  last_error_code: string | null;
+  actor_username: GitActorUsername;
+}
+
 export interface GitActorUsername {
   actor_id: string;
   username: string;
@@ -2601,6 +2611,7 @@ export interface GitForgejoRepositoryBinding {
 }
 
 export interface GitForgejoWorkspaceBinding {
+  desired_generation: number;
   workspace_id: string;
   forgejo_owner: string;
   state: 'pending' | 'ready' | 'error';

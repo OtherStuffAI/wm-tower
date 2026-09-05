@@ -223,6 +223,7 @@ export async function claimGitWorkspaceNamespace(
         VALUES (${workspaceId}, ${namespace}, 'pending')
         ON CONFLICT (workspace_id) DO UPDATE
         SET forgejo_owner = EXCLUDED.forgejo_owner, state = 'pending',
+            desired_generation = git_forgejo_workspace_bindings.desired_generation + 1,
             last_error_code = NULL, reconciled_at = NULL, updated_at = NOW()
       `;
       await appendGitAuditEvent({

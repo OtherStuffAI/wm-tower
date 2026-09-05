@@ -10,12 +10,13 @@ describe('Forgejo workspace organization reconciler', () => {
       const method = init.method || 'GET';
       const body = init.body ? JSON.parse(String(init.body)) : null;
       calls.push({ url, method, body });
+      if (url.endsWith('/internal/forgejo/repositories/pending')) return Response.json({ repositories: [] });
       if (url.endsWith('/internal/forgejo/organizations/pending')) {
-        return Response.json({ organizations: [{ workspace_id: workspaceId, forgejo_owner: 'other-stuff', state: 'pending', reconciled_at: null }] });
+        return Response.json({ organizations: [{ workspace_id: workspaceId, forgejo_owner: 'other-stuff', desired_generation: 7, state: 'pending', reconciled_at: null }] });
       }
       if (url.endsWith(`/internal/forgejo/organizations/${workspaceId}/desired-state`)) {
         return Response.json({
-          workspace_id: workspaceId, forgejo_owner: 'other-stuff', state: 'pending', reconciled_at: null,
+          workspace_id: workspaceId, forgejo_owner: 'other-stuff', desired_generation: 7, state: 'pending', reconciled_at: null,
           display_name: 'Other Stuff', actor_access: [], managed_usernames: [],
         });
       }
@@ -34,7 +35,7 @@ describe('Forgejo workspace organization reconciler', () => {
     expect(result).toEqual({ processed: 1, reconciled: 1, failed: 0 });
     expect(calls).toContainEqual(expect.objectContaining({
       url: `http://tower.internal/api/v4/git/internal/forgejo/organizations/${workspaceId}/ack`,
-      method: 'POST', body: { forgejo_owner: 'other-stuff', ok: true },
+      method: 'POST', body: { forgejo_owner: 'other-stuff', desired_generation: 7, ok: true },
     }));
   });
 });

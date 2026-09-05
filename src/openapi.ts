@@ -2697,6 +2697,16 @@ export function buildOpenApiDocument(origin: string) {
           type: 'object', additionalProperties: false, required: ['username'],
           properties: { username: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,38}$' } },
         },
+        GitActorBootstrap: {
+          type: 'object', required: ['actor_id', 'workspace_id', 'state', 'account_state', 'organization_state', 'actor_username', 'last_error_code'],
+          properties: {
+            actor_id: { type: 'string', format: 'uuid' }, workspace_id: { type: 'string', format: 'uuid' },
+            state: { type: 'string', enum: ['not_requested', 'pending', 'ready', 'error'] },
+            account_state: { type: 'string', enum: ['not_requested', 'pending', 'ready', 'error'] },
+            organization_state: { type: 'string', enum: ['pending', 'ready', 'error'] },
+            last_error_code: { type: 'string', nullable: true }, actor_username: { $ref: '#/components/schemas/GitActorUsername' },
+          },
+        },
         GitActorUsername: {
           type: 'object', additionalProperties: false,
           required: ['actor_id', 'username', 'applied_username', 'state', 'last_error_code', 'created_at', 'updated_at'],
@@ -9347,6 +9357,25 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/git/workspaces/{workspaceId}/actor-bootstrap': {
+        get: {
+          tags: ['Git'], summary: 'Read authenticated actor Forgejo bootstrap',
+          description: 'Account and organization readiness are separate from repository grants. Uses only the authenticated workspace member identity. Provider work runs in isolated reconcilers.',
+          security: [{ NostrAuth: [] }],
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '200': { description: 'Bootstrap state', content: { 'application/json': { schema: { type: 'object', properties: { bootstrap: { $ref: '#/components/schemas/GitActorBootstrap' } } } } } }, '404': { description: 'Workspace unavailable to actor' } },
+        },
+        post: {
+          tags: ['Git'], summary: 'Request idempotent headless authenticated actor Forgejo bootstrap',
+          description: 'Account and organization readiness are separate from repository grants. Uses only the authenticated workspace member identity. Provider work runs in isolated reconcilers.',
+          security: [{ NostrAuth: [] }],
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '202': { description: 'Bootstrap state', content: { 'application/json': { schema: { type: 'object', properties: { bootstrap: { $ref: '#/components/schemas/GitActorBootstrap' } } } } } }, '404': { description: 'Workspace unavailable to actor' } },
+        },
+      },
+      '/api/v4/git/internal/forgejo/repositories/pending': {
+        get: { tags: ['Git'], summary: 'Isolated reconciler pending repository queue', responses: { '200': { description: 'Pending repository UUIDs' }, '401': { description: 'Internal service token required' } } },
+      },
       '/api/v4/git/workspaces/{workspaceId}/actor-username': {
         get: {
           tags: ['Git Authority'], security: [{ nip98: [] }], summary: 'Read the current actor’s Forgejo username projection',
@@ -9685,15 +9714,15 @@ export function buildOpenApiDocument(origin: string) {
         get: {
           tags: ['Git Authority'], security: [{ gitInternalService: [] }], summary: 'Read Tower-canonical workspace organization and team membership state',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          responses: { '200': { description: 'Private organization name and provider-linked owner/member access', content: { 'application/json': { schema: { type: 'object' } } } }, '404': { description: 'Workspace not found' } },
+          responses: { '200': { description: 'Private organization name, desired generation, and provider-linked owner/member access. Echo desired_generation in both success and failure acknowledgements.', content: { 'application/json': { schema: { type: 'object', required: ['desired_generation'], properties: { desired_generation: { type: 'integer', minimum: 1 } } } } } }, '404': { description: 'Workspace not found' } },
         },
       },
       '/api/v4/git/internal/forgejo/organizations/{workspaceId}/ack': {
         post: {
           tags: ['Git Authority'], security: [{ gitInternalService: [] }], summary: 'Acknowledge exact workspace organization reconciliation state',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['forgejo_owner', 'ok'], properties: { forgejo_owner: { type: 'string' }, ok: { type: 'boolean' }, error_code: { type: 'string' } } } } } },
-          responses: { '200': { description: 'Workspace organization reconciliation state' }, '409': { description: 'Stale organization name' } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['forgejo_owner', 'desired_generation', 'ok'], properties: { forgejo_owner: { type: 'string' }, desired_generation: { type: 'integer', minimum: 1 }, ok: { type: 'boolean' }, error_code: { type: 'string' } } } } } },
+          responses: { '200': { description: 'Workspace organization reconciliation state' }, '409': { description: 'Stale organization name or desired generation (including missing generation)' } },
         },
       },
       '/api/v4/git/internal/forgejo/actor-usernames/pending': {

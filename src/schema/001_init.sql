@@ -3031,6 +3031,10 @@ CREATE TABLE IF NOT EXISTS git_forgejo_workspace_bindings (
   CHECK (state IN ('pending', 'ready', 'error'))
 );
 
+-- Also applied on existing databases by ensureRuntimeSchema's Git block.
+ALTER TABLE git_forgejo_workspace_bindings
+  ADD COLUMN IF NOT EXISTS desired_generation INTEGER NOT NULL DEFAULT 1;
+
 CREATE OR REPLACE FUNCTION git_ensure_workspace_forgejo_binding_for(
   target_workspace_id UUID,
   target_slug TEXT,
@@ -3206,7 +3210,7 @@ BEGIN
   SET desired_policy_revision = changed.policy_revision, state = 'pending', updated_at = NOW()
   FROM changed WHERE binding.repository_id = changed.id;
   UPDATE git_forgejo_workspace_bindings
-  SET state = 'pending', last_error_code = NULL, updated_at = NOW()
+  SET desired_generation = desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
   WHERE workspace_id = affected_workspace;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
@@ -3219,7 +3223,7 @@ DECLARE
 BEGIN
   affected_workspace := CASE WHEN TG_OP = 'DELETE' THEN OLD.workspace_id ELSE NEW.workspace_id END;
   UPDATE git_forgejo_workspace_bindings
-  SET state = 'pending', last_error_code = NULL, updated_at = NOW()
+  SET desired_generation = desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
   WHERE workspace_id = affected_workspace;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
@@ -3231,7 +3235,7 @@ BEGIN
   IF NEW.forgejo_user_id IS DISTINCT FROM OLD.forgejo_user_id
      OR NEW.applied_username IS DISTINCT FROM OLD.applied_username THEN
     UPDATE git_forgejo_workspace_bindings binding
-    SET state = 'pending', last_error_code = NULL, updated_at = NOW()
+    SET desired_generation = binding.desired_generation + 1, state = 'pending', last_error_code = NULL, updated_at = NOW()
     FROM flightdeck_pg_workspace_memberships membership
     WHERE membership.actor_id = NEW.actor_id
       AND binding.workspace_id = membership.workspace_id;

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,6 +59,7 @@ function authHeader(input: {
   const tags: string[][] = [
     ['u', `http://localhost${input.signedPath ?? input.path}`],
     ['method', input.signedMethod ?? input.method.toUpperCase()],
+    ['nonce', randomUUID()],
   ];
   if (input.payloadHash !== null && input.rawBody !== undefined) {
     tags.push(['payload', input.payloadHash ?? sha256Hex(input.rawBody)]);
@@ -256,7 +257,7 @@ describe('Tower Git authority v1', () => {
   test('owner registers a private repository with non-writable protected refs and explicit actor/group grants', async () => {
     const initialActorUsername = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/actor-username`, 'GET', ownerSecret);
     expect(initialActorUsername.response.status).toBe(200);
-    expect(initialActorUsername.json.actor_username).toMatchObject({ actor_id: ownerId, state: 'ready' });
+    expect(initialActorUsername.json.actor_username).toMatchObject({ actor_id: ownerId, state: 'pending' });
     expect(initialActorUsername.json.actor_username.username).toMatch(/^wm-[a-f0-9]{32}$/);
     const invalidActorUsername = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/actor-username`, 'PUT', ownerSecret, { username: `wm-${'b'.repeat(32)}` });
     expect(invalidActorUsername.response.status).toBe(400);
@@ -277,7 +278,7 @@ describe('Tower Git authority v1', () => {
       body: JSON.stringify({ desired_username: 'git-owner', ok: true }),
     });
     expect(actorUsernameAck.status).toBe(200);
-    expect((await actorUsernameAck.json() as any).actor_username).toMatchObject({ username: 'git-owner', applied_username: 'git-owner', state: 'ready' });
+    expect((await actorUsernameAck.json() as any).actor_username).toMatchObject({ username: 'git-owner', applied_username: 'git-owner', state: 'pending' });
     const invalidNamespace = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/namespace`, 'PUT', ownerSecret, { namespace: 'assets' });
     expect(invalidNamespace.response.status).toBe(400);
     expect(invalidNamespace.json.code).toBe('git_namespace_invalid');
@@ -897,4 +898,99 @@ describe('Tower Git authority v1', () => {
     expect(counts).toMatchObject({ deliveries: 1, events: 1, audit: 1 });
     config.git.forgejoWebhookSecret = configuredSecret;
   });
+});
+
+const bootstrapSecret = new Uint8Array(32).fill(97);
+let bootstrapId: string;
+describe('headless identity authority and races', () => {
+  test('no-grant member can request bootstrap repeatedly without acquiring repository grants', async () => {
+    const [actor] = await sql`INSERT INTO flightdeck_pg_actors (npub, kind, display_name) VALUES (${nip19.npubEncode(getPublicKey(bootstrapSecret))}, 'agent', 'Headless actor') RETURNING id`;
+    bootstrapId = actor.id;
+    await sql`INSERT INTO flightdeck_pg_workspace_memberships (workspace_id, actor_id, role, created_by_actor_id) VALUES (${workspaceId}, ${bootstrapId}, 'agent', ${ownerId})`;
+    const before = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM git_repository_grants`;
+    const path = `/api/v4/git/workspaces/${workspaceId}/actor-bootstrap`;
+    for (let i = 0; i < 2; i++) {
+      const result = await publicRequest(path, 'POST', bootstrapSecret, {});
+      expect(result.response.status).toBe(202);
+      expect(result.json.bootstrap.account_state).toBe('pending');
+      expect(result.json.bootstrap.actor_id).toBe(bootstrapId);
+    }
+    const rows = await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].forgejo_user_id).toBeNull();
+    const after = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM git_repository_grants`;
+    expect(after[0].count).toBe(before[0].count);
+    const denied = await exchangeRequest({ repository_id: repositoryId, audience: GIT_AUDIENCE }, bootstrapSecret);
+    expect(denied.response.status).toBe(404);
+    const foreign = await publicRequest(`/api/v4/git/workspaces/${foreignWorkspaceId}/actor-bootstrap`, 'POST', bootstrapSecret, {});
+    expect(foreign.response.status).toBe(404);
+  });
+
+  test('simultaneous provider binding writers cannot replace an immutable provider ID', async () => {
+    const { syncForgejoActorBinding } = await import('../src/services/forgejo-authority');
+    const [alias] = await sql`SELECT desired_username FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+    const orgPath = `/api/v4/git/internal/forgejo/organizations/${workspaceId}`;
+    const desired = async () => (await (await app.request(`${orgPath}/desired-state`, {
+      headers: { 'x-wingman-git-service-token': INTERNAL_TOKEN },
+    })).json()) as any;
+    const before = await desired();
+    expect(before.actor_access.some((actor: any) => actor.actor_id === bootstrapId)).toBeFalse();
+    const results = await Promise.allSettled([71001, 71002].map(forgejoUserId => syncForgejoActorBinding({
+      actorId: bootstrapId, forgejoUserId, username: alias.desired_username, desiredUsername: alias.desired_username,
+    }, sql)));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason.code).toBe('git_forgejo_actor_binding_conflict');
+    const [linked] = await sql`SELECT forgejo_user_id FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+    const id = Number(linked.forgejo_user_id);
+    for (const ok of [true, false]) {
+      const stale = await internalRequest(`${orgPath}/ack`, { forgejo_owner: before.forgejo_owner, desired_generation: before.desired_generation, ok });
+      expect(stale.response.status).toBe(409);
+    }
+    const current = await desired();
+    expect(current.state).toBe('pending');
+    expect(current.desired_generation).toBeGreaterThan(before.desired_generation);
+    expect(current.actor_access).toContainEqual(expect.objectContaining({ actor_id: bootstrapId, organization_role: 'member' }));
+    expect((await publicRequest(`/api/v4/git/workspaces/${workspaceId}/actor-bootstrap`, 'GET', bootstrapSecret)).json.bootstrap.state).toBe('pending');
+    expect((await internalRequest(`${orgPath}/ack`, { forgejo_owner: current.forgejo_owner, desired_generation: current.desired_generation, ok: true })).response.status).toBe(200);
+    expect((await publicRequest(`/api/v4/git/workspaces/${workspaceId}/actor-bootstrap`, 'GET', bootstrapSecret)).json.bootstrap.state).toBe('ready');
+    expect(await sql`SELECT id FROM git_repository_grants WHERE principal_actor_id = ${bootstrapId} AND revoked_at IS NULL`).toHaveLength(0);
+
+    await expect(syncForgejoActorBinding({ actorId: bootstrapId, forgejoUserId: id === 71001 ? 71002 : 71001,
+      username: alias.desired_username, desiredUsername: alias.desired_username }, sql)).rejects.toMatchObject({ code: 'git_forgejo_actor_binding_conflict' });
+    await expect(syncForgejoActorBinding({ actorId: bootstrapId, forgejoUserId: id,
+      username: alias.desired_username, desiredUsername: alias.desired_username }, sql)).resolves.toMatchObject({ state: 'ready' });
+  });
+
+  test('a newer alias request survives both stale success and stale failure acknowledgements', async () => {
+    const { syncForgejoActorBinding, acknowledgeForgejoActorAlias } = await import('../src/services/forgejo-authority');
+    const [before] = await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+    const request = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/actor-username`, 'PUT', bootstrapSecret, { username: 'new-spare-alias' });
+    expect(request.response.status).toBe(202);
+    await expect(syncForgejoActorBinding({ actorId: bootstrapId, forgejoUserId: Number(before.forgejo_user_id), username: before.desired_username,
+      desiredUsername: before.desired_username }, sql)).rejects.toMatchObject({ code: 'git_forgejo_actor_binding_conflict' });
+    await expect(acknowledgeForgejoActorAlias({ actorId: bootstrapId, desiredUsername: before.desired_username, ok: false, errorCode: 'old_failure' }, sql))
+      .rejects.toMatchObject({ code: 'git_actor_username_reconciliation_stale' });
+    const [after] = await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+    expect(after.desired_username).toBe('new-spare-alias');
+    expect(after.state).toBe('pending');
+    expect(after.last_error_code).toBeNull();
+    expect(after.forgejo_user_id).toBe(before.forgejo_user_id);
+  });
+});
+
+test('revocation during pending bootstrap remains effective after provider linking', async () => {
+  const { syncForgejoActorBinding } = await import('../src/services/forgejo-authority');
+  const grant = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/repositories/${repositoryId}/grants`, 'POST', ownerSecret,
+    { principal_type: 'actor', principal_id: bootstrapId, permission: 'git.repo.read' });
+  expect(grant.response.status).toBe(201);
+  const revoked = await publicRequest(`/api/v4/git/workspaces/${workspaceId}/repositories/${repositoryId}/grants/${grant.json.grant.grant_id}`, 'DELETE', ownerSecret);
+  expect(revoked.response.status).toBe(200);
+  const [alias] = await sql`SELECT * FROM git_forgejo_actor_aliases WHERE actor_id = ${bootstrapId}`;
+  expect(alias.state).toBe('pending');
+  await syncForgejoActorBinding({ actorId: bootstrapId, forgejoUserId: Number(alias.forgejo_user_id), username: alias.desired_username, desiredUsername: alias.desired_username }, sql);
+  const denied = await exchangeRequest({ repository_id: repositoryId, audience: GIT_AUDIENCE }, bootstrapSecret);
+  expect(denied.response.status).toBe(404);
+  const grants = await sql`SELECT * FROM git_repository_grants WHERE principal_actor_id = ${bootstrapId} AND revoked_at IS NULL`;
+  expect(grants).toHaveLength(0);
 });

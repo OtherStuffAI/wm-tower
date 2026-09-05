@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: headless-fixture-only
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:35432:5432"]
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.3-rootless
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__ROOT_URL: http://127.0.0.1:33300/
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_INTERNAL_SIGNIN: "false"
+      FORGEJO__service__ENABLE_BASIC_AUTHENTICATION: "false"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION_API: "true"
+      FORGEJO__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION: "false"
+      FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES: 127.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      FORGEJO__actions__ENABLED: "false"
+      FORGEJO__security__DISABLE_GIT_HOOKS: "true"
+    ports: ["127.0.0.1:33300:3000"]
+    volumes:
+      - fixture-data:/var/lib/gitea
+      - fixture-config:/etc/gitea
+volumes:
+  fixture-data:
+  fixture-config:
