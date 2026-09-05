@@ -18,6 +18,7 @@ describe('native Forgejo boundary', () => {
     const app = createForgejoGateway({ forgejoUrl: 'http://provider:3000', fetchImpl: (async (url: URL, init: RequestInit) => {
       calls.push(url.toString());
       const headers = new Headers(init.headers);
+      expect(headers.get('host')).toBe('forgejo.test');
       expect(headers.get('authorization')).toBe('Bearer native-fixture-token');
       expect(headers.get('cookie')).toBe('session=native');
       expect(headers.get('x-webauth-user')).toBeNull();
@@ -31,6 +32,17 @@ describe('native Forgejo boundary', () => {
     }
     expect(calls).toHaveLength(3);
     expect(calls.every(url => url.startsWith('http://provider:3000/'))).toBe(true);
+  });
+
+  test('keeps native CSRF Origin and Host aligned through an internal proxy hop', async () => {
+    const app = createForgejoGateway({ forgejoUrl: 'http://provider:3000', publicOrigin: 'https://forgejo.test', fetchImpl: (async (_url: URL, init: RequestInit) => {
+      const headers = new Headers(init.headers);
+      expect(headers.get('host')).toBe('forgejo.test');
+      expect(headers.get('origin')).toBe('https://forgejo.test');
+      expect(headers.get('referer')).toBe('https://forgejo.test/login/oauth/authorize');
+      return new Response('native consent');
+    }) as typeof fetch });
+    expect((await app.request('http://internal-proxy:3180/login/oauth/grant', { method: 'POST', headers: { origin: 'https://forgejo.test', referer: 'https://forgejo.test/login/oauth/authorize' }, body: 'granted=true' })).status).toBe(200);
   });
 
   test('old worker commands fail before any network access', async () => {
