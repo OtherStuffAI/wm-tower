@@ -4164,6 +4164,9 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   // This block is additive in v1 and can safely run on every startup.
   await sql.unsafe(wappActivityPublishingV1Sql());
 
+  const recordDeltaSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
+  await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
+
   // Git authority v1 is additive and schema-owned here so existing Tower
   // databases receive the same constraints as fresh bootstrap databases.
   await sql.unsafe(gitAuthorityV1Sql());

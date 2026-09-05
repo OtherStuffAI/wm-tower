@@ -3297,3 +3297,213 @@ CREATE TABLE IF NOT EXISTS tower_metadata (
   tower_description TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- flightdeck_record_delta_v1
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_context(r JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
+ SELECT jsonb_build_object('scope_id',r->'scope_id','channel_id',r->'channel_id',
+ 'owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id',
+ 'resource_type',r->'resource_type','resource_id',r->'resource_id',
+ 'task_id',r->'task_id','doc_id',r->'doc_id','thread_id',r->'thread_id')
+$$;
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_clock (
+ workspace_id UUID PRIMARY KEY REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ position BIGINT NOT NULL DEFAULT 0, epoch UUID NOT NULL DEFAULT gen_random_uuid()
+);
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_current (
+ workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ family TEXT NOT NULL, id TEXT NOT NULL, row JSONB NOT NULL,
+ bytes INTEGER GENERATED ALWAYS AS (octet_length(row::text)) STORED,
+ context JSONB GENERATED ALWAYS AS (flightdeck_pg_record_context(row)) STORED,
+ PRIMARY KEY(workspace_id, family, id)
+);
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_journal (
+ workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ position BIGINT NOT NULL, family TEXT NOT NULL, id TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(operation IN ('upsert','delete')), row JSONB NOT NULL,
+ bytes INTEGER GENERATED ALWAYS AS (octet_length(row::text)) STORED,
+ context JSONB GENERATED ALWAYS AS (flightdeck_pg_record_context(row)) STORED,
+ PRIMARY KEY(workspace_id, position)
+);
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_cursors (
+ token UUID PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ actor_id UUID NOT NULL REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE,
+ epoch UUID NOT NULL, state JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_cursor_workspace ON flightdeck_pg_record_cursors(workspace_id,actor_id,created_at DESC,token);
+CREATE INDEX IF NOT EXISTS idx_fd_record_cursor_expiry ON flightdeck_pg_record_cursors(created_at,token);
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_identity(f TEXT, r JSONB) RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $$ SELECT CASE f
+ WHEN 'task_assignment' THEN r->>'task_id' || ':' || (r->>'actor_id')
+ WHEN 'resource_view_state' THEN r->>'viewer_actor_id' || ':' || (r->>'resource_type') || ':' || (r->>'resource_id')
+ ELSE r->>'id' END $$;
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_emit(w UUID, f TEXT, r JSONB, op TEXT) RETURNS VOID
+LANGUAGE plpgsql AS $$ DECLARE p BIGINT; ident TEXT; BEGIN
+ IF NOT EXISTS (SELECT 1 FROM flightdeck_pg_workspaces WHERE id=w) THEN RETURN; END IF;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(w) ON CONFLICT DO NOTHING;
+ UPDATE flightdeck_pg_record_clock SET position=position+1 WHERE workspace_id=w RETURNING position INTO p;
+ ident := flightdeck_pg_record_identity(f,r);
+ INSERT INTO flightdeck_pg_record_journal(workspace_id,position,family,id,operation,row) VALUES(w,p,f,ident,op,r);
+ IF op='delete' THEN DELETE FROM flightdeck_pg_record_current WHERE workspace_id=w AND family=f AND id=ident;
+ ELSE INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) VALUES(w,f,ident,r)
+ ON CONFLICT(workspace_id,family,id) DO UPDATE SET row=EXCLUDED.row; END IF;
+END $$;
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_capture() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$ DECLARE r JSONB; oldr JSONB; w UUID; BEGIN
+ IF TG_OP='UPDATE' AND to_jsonb(OLD)=to_jsonb(NEW) THEN RETURN NEW; END IF;
+ r := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ w := (r->>'workspace_id')::uuid;
+ IF TG_OP='UPDATE' THEN
+ oldr:=to_jsonb(OLD);
+ IF (oldr->>'channel_id') IS DISTINCT FROM (r->>'channel_id') OR (oldr->>'owner_actor_id') IS DISTINCT FROM (r->>'owner_actor_id') OR flightdeck_pg_record_identity(TG_ARGV[0],oldr) IS DISTINCT FROM flightdeck_pg_record_identity(TG_ARGV[0],r) THEN
+ PERFORM flightdeck_pg_record_emit((oldr->>'workspace_id')::uuid,TG_ARGV[0],oldr,'delete');
+ END IF; END IF;
+ PERFORM flightdeck_pg_record_emit(w,TG_ARGV[0],r,CASE WHEN TG_OP='DELETE' OR r->>'deleted_at' IS NOT NULL THEN 'delete' ELSE 'upsert' END);
+ IF TG_ARGV[0] IN ('task','doc','thread') AND (TG_OP='DELETE' OR r->>'deleted_at' IS NOT NULL) THEN
+ UPDATE flightdeck_pg_record_clock SET epoch=gen_random_uuid() WHERE workspace_id=w;
+ END IF;
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_reset() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$ DECLARE r JSONB; w UUID; BEGIN
+ r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ IF TG_OP='UPDATE' AND TG_TABLE_NAME IN ('flightdeck_pg_scopes','flightdeck_pg_channels')
+ AND (to_jsonb(OLD)->'archived_at') IS NOT DISTINCT FROM (r->'archived_at')
+ AND (to_jsonb(OLD)->'scope_id') IS NOT DISTINCT FROM (r->'scope_id')
+ AND (to_jsonb(OLD)->'owner_actor_id') IS NOT DISTINCT FROM (r->'owner_actor_id')
+ AND (to_jsonb(OLD)->'owner_group_id') IS NOT DISTINCT FROM (r->'owner_group_id')
+ AND (to_jsonb(OLD)->'participant_npubs') IS NOT DISTINCT FROM (r->'participant_npubs')
+ THEN RETURN NEW; END IF;
+ IF TG_TABLE_NAME='flightdeck_pg_actors' AND TG_OP='UPDATE'
+ AND (to_jsonb(OLD)->'npub') IS NOT DISTINCT FROM (r->'npub')
+ AND (to_jsonb(OLD)->'kind') IS NOT DISTINCT FROM (r->'kind') THEN RETURN NEW; END IF;
+ IF TG_TABLE_NAME='flightdeck_pg_workspaces' AND TG_OP='UPDATE'
+ AND (to_jsonb(OLD)->'workspace_owner_npub') IS NOT DISTINCT FROM (r->'workspace_owner_npub')
+ AND (to_jsonb(OLD)->'app_npub') IS NOT DISTINCT FROM (r->'app_npub')
+ AND (to_jsonb(OLD)->'workspace_service_npub') IS NOT DISTINCT FROM (r->'workspace_service_npub')
+ AND (to_jsonb(OLD)->'tower_service_npub') IS NOT DISTINCT FROM (r->'tower_service_npub') THEN RETURN NEW; END IF;
+ IF TG_TABLE_NAME='flightdeck_pg_actors' THEN
+ UPDATE flightdeck_pg_record_clock SET epoch=gen_random_uuid() WHERE workspace_id IN
+ (SELECT workspace_id FROM flightdeck_pg_workspace_memberships WHERE actor_id=(r->>'id')::uuid);
+ ELSE
+ w:=COALESCE(r->>'workspace_id',r->>'id')::uuid;
+ IF NOT EXISTS (SELECT 1 FROM flightdeck_pg_workspaces WHERE id=w) THEN RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END; END IF;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(w) ON CONFLICT DO NOTHING;
+ UPDATE flightdeck_pg_record_clock SET epoch=gen_random_uuid() WHERE workspace_id=w;
+ END IF;
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_scope') THEN
+ LOCK TABLE flightdeck_pg_scopes IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_scopes ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'scope', flightdeck_pg_record_identity('scope',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_scopes r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_scope AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_scopes FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('scope');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_channel') THEN
+ LOCK TABLE flightdeck_pg_channels IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_channels ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'channel', flightdeck_pg_record_identity('channel',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_channels r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_channel AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_channels FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('channel');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_thread') THEN
+ LOCK TABLE flightdeck_pg_threads IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_threads ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'thread', flightdeck_pg_record_identity('thread',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_threads r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_thread AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_threads FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('thread');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_message') THEN
+ LOCK TABLE flightdeck_pg_messages IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_messages ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'message', flightdeck_pg_record_identity('message',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_messages r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_message AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_messages FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('message');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_task') THEN
+ LOCK TABLE flightdeck_pg_tasks IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_tasks ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'task', flightdeck_pg_record_identity('task',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_tasks r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_task AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_tasks FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('task');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_task_comment') THEN
+ LOCK TABLE flightdeck_pg_task_comments IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_task_comments ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'task_comment', flightdeck_pg_record_identity('task_comment',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_task_comments r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_task_comment AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_task_comments FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('task_comment');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_task_assignment') THEN
+ LOCK TABLE flightdeck_pg_task_assignments IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_task_assignments ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'task_assignment', flightdeck_pg_record_identity('task_assignment',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_task_assignments r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_task_assignment AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_task_assignments FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('task_assignment');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_doc') THEN
+ LOCK TABLE flightdeck_pg_docs IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_docs ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'doc', flightdeck_pg_record_identity('doc',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_docs r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_doc AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_docs FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('doc');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_doc_comment') THEN
+ LOCK TABLE flightdeck_pg_doc_comments IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_doc_comments ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'doc_comment', flightdeck_pg_record_identity('doc_comment',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_doc_comments r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_doc_comment AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_doc_comments FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('doc_comment');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_file') THEN
+ LOCK TABLE flightdeck_pg_files IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_files ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'file', flightdeck_pg_record_identity('file',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_files r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_file AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_files FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('file');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_file_folder') THEN
+ LOCK TABLE flightdeck_pg_file_folders IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_file_folders ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'file_folder', flightdeck_pg_record_identity('file_folder',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_file_folders r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_file_folder AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_file_folders FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('file_folder');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_audio_note') THEN
+ LOCK TABLE flightdeck_pg_audio_notes IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_audio_notes ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'audio_note', flightdeck_pg_record_identity('audio_note',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_audio_notes r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_audio_note AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_audio_notes FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('audio_note');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_daily_note') THEN
+ LOCK TABLE flightdeck_pg_daily_notes IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_daily_notes ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'daily_note', flightdeck_pg_record_identity('daily_note',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_daily_notes r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_daily_note AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_daily_notes FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('daily_note');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_personal_wapp') THEN
+ LOCK TABLE flightdeck_pg_personal_wapps IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_personal_wapps ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'personal_wapp', flightdeck_pg_record_identity('personal_wapp',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_personal_wapps r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_personal_wapp AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_personal_wapps FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('personal_wapp');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_resource_view_state') THEN
+ LOCK TABLE flightdeck_pg_resource_view_states IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_resource_view_states ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'resource_view_state', flightdeck_pg_record_identity('resource_view_state',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_resource_view_states r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_resource_view_state AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_resource_view_states FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('resource_view_state');
+ END IF;
+END $$;
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_permission_grants;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_permission_grants FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_group_memberships;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_group_memberships FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_group_edges;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_group_edges FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_workspace_memberships;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_workspace_memberships FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_actors;
+CREATE TRIGGER fd_record_reset AFTER UPDATE ON flightdeck_pg_actors FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_scopes;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_scopes FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_channels;
+CREATE TRIGGER fd_record_reset AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_channels FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_workspaces;
+CREATE TRIGGER fd_record_reset AFTER UPDATE ON flightdeck_pg_workspaces FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_reset();
+CREATE INDEX IF NOT EXISTS idx_fd_message_timeline ON flightdeck_pg_messages(workspace_id,channel_id,(date_trunc('milliseconds',created_at AT TIME ZONE 'UTC')),id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_message_thread_timeline ON flightdeck_pg_messages(workspace_id,channel_id,thread_id,(date_trunc('milliseconds',created_at AT TIME ZONE 'UTC')),id) WHERE thread_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_task_board ON flightdeck_pg_tasks(workspace_id,channel_id,state,(-extract(epoch FROM updated_at AT TIME ZONE 'UTC')),id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_task_comment_timeline ON flightdeck_pg_task_comments(workspace_id,task_id,created_at,id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_doc_comment_timeline ON flightdeck_pg_doc_comments(workspace_id,doc_id,created_at,id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_task_channel_window ON flightdeck_pg_tasks(workspace_id,channel_id,(-extract(epoch FROM updated_at AT TIME ZONE 'UTC')),id) WHERE deleted_at IS NULL;
+-- end_flightdeck_record_delta_v1

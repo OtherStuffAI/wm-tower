@@ -3849,6 +3849,28 @@ describe('Flight Deck PG API routes', () => {
     expect(memberEvents.json.events.every((event: any) => [channelId, dmChannelId].includes(event.channel_id))).toBe(true);
     expect(memberEvents.json.events.every((event: any) => event.cursor && event.event_id && event.timestamp && event.refetch)).toBe(true);
 
+    const recordSyncPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/record-sync`;
+    expect((await app.request(`${recordSyncPath}?protocol_version=1`)).status).toBe(401);
+    expect((await requestJson(recordSyncPath, 'GET', memberSecret)).res.status).toBe(400);
+    let recordCursor = '';
+    let recordHasMore = true;
+    const recordChanges: any[] = [];
+    let recordPages = 0;
+    while (recordHasMore) {
+      const recordPage = await requestJson(`${recordSyncPath}?protocol_version=1&limit=2${recordCursor ? `&cursor=${recordCursor}` : ''}`, 'GET', memberSecret);
+      expect(recordPage.res.status).toBe(200);
+      expect(recordPage.json.protocol_version).toBe(1);
+      expect(recordPage.json.changes.length).toBeLessThanOrEqual(2);
+      expect(Buffer.byteLength(JSON.stringify(recordPage.json))).toBeLessThanOrEqual(1048576);
+      recordChanges.push(...recordPage.json.changes);
+      recordCursor = recordPage.json.next_cursor;
+      recordHasMore = recordPage.json.has_more;
+      if (++recordPages > 100) throw new Error('Record snapshot did not converge');
+    }
+    expect(recordChanges.some((change) => change.id === taskId)).toBe(true);
+    expect(recordChanges.some((change) => change.id === siblingTaskId)).toBe(false);
+    expect(recordChanges.some((change) => change.id === siblingMessageId)).toBe(false);
+
     const memberSnapshotPages = [];
     let memberSnapshotCursor = '';
     do {

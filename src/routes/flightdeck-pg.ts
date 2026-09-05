@@ -1,3 +1,4 @@
+import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createHash } from 'crypto';
@@ -2067,6 +2068,23 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/drive/delta', async (c) => {
       since: 'returns visible file and folder events with row_version greater than the decoded cursor rowVersion',
     },
   });
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  if (c.req.query('protocol_version') !== '1') return c.json({ error: 'unsupported_protocol_version' }, 400);
+  try {
+    return c.json(await readFlightDeckRecordPage({ workspaceId: result.context.workspace.id,
+      actorId: result.context.actor.id, cursor: c.req.query('cursor'),
+      limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) }));
+  } catch (error) {
+    if (!(error instanceof RecordSyncError)) throw error;
+    return c.json({ error: error.code, protocol_version: 1,
+      ...(error.code === 'reset_required' ? { reset: { discard_authoritative: true, preserve_pending: true } } : {}) }, error.status);
+  }
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
@@ -6526,16 +6544,21 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/docs/:docId/comments', async (c
   });
   if (!access.allowed) return storageAuthorizationError(c, access, identity, 'doc.read or channel.read');
 
+  const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
+  if (!cursor) return c.json({ error: 'invalid_cursor' }, 400);
+  const limit = parseLimit(c);
   const comments = await listFlightDeckPgDocComments({
     workspaceId: context.workspace.id,
     docId: doc.id,
-    limit: parseLimit(c),
+    limit: limit + 1,
+    afterCreatedAt: cursor.createdAt, afterId: cursor.id,
   });
   return c.json({
     identity,
     doc_id: doc.id,
-    comments: comments.map(serializeFlightDeckPgDocComment),
-    next_cursor: null,
+    comments: comments.slice(0, limit).map(serializeFlightDeckPgDocComment),
+    next_cursor: comments.length > limit ? encodeFlightDeckPgMessageCursor(comments[limit - 1]!) : null,
+    has_more: comments.length > limit,
   });
 });
 
@@ -10165,17 +10188,22 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/channels/:channelId/tasks', asy
   });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'task.read');
 
+  const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
+  if (!cursor) return c.json({ error: 'invalid_cursor' }, 400);
+  const limit = parseLimit(c);
   const tasks = await listFlightDeckPgChannelTasks({
     workspaceId: context.workspace.id,
     channelId,
-    limit: parseLimit(c),
+    limit: limit + 1,
+    state: c.req.query('state'), beforeUpdatedAt: cursor.createdAt, afterId: cursor.id,
   });
-  const tasksWithAssignments = await withFlightDeckPgTaskAssignments(context.workspace.id, tasks);
+  const tasksWithAssignments = await withFlightDeckPgTaskAssignments(context.workspace.id, tasks.slice(0, limit));
   return c.json({
     identity,
     channel_id: channelId,
     tasks: tasksWithAssignments.map(serializeFlightDeckPgTask),
-    next_cursor: null,
+    next_cursor: tasks.length > limit ? encodeFlightDeckPgMessageCursor({ id: tasks[limit - 1]!.id, created_at: tasks[limit - 1]!.updated_at, cursor_created_at: (tasks[limit - 1] as unknown as { cursor_updated_at: string }).cursor_updated_at }) : null,
+    has_more: tasks.length > limit,
   });
 });
 
@@ -10615,16 +10643,21 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/tasks/:taskId/comments', async 
   });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'task.read');
 
+  const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
+  if (!cursor) return c.json({ error: 'invalid_cursor' }, 400);
+  const limit = parseLimit(c);
   const comments = await listFlightDeckPgTaskComments({
     workspaceId: context.workspace.id,
     taskId: task.id,
-    limit: parseLimit(c),
+    limit: limit + 1,
+    afterCreatedAt: cursor.createdAt, afterId: cursor.id,
   });
   return c.json({
     identity,
     task_id: task.id,
-    comments: comments.map(serializeFlightDeckPgTaskComment),
-    next_cursor: null,
+    comments: comments.slice(0, limit).map(serializeFlightDeckPgTaskComment),
+    next_cursor: comments.length > limit ? encodeFlightDeckPgMessageCursor(comments[limit - 1]!) : null,
+    has_more: comments.length > limit,
   });
 });
 

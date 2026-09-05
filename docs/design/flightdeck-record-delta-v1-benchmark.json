@@ -1,0 +1,1200 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "postgres": "16 isolated localhost",
+  "samples": 30,
+  "insert_batch_rows": 1000,
+  "results": [
+    {
+      "history": 1000,
+      "insert_ms": 94.16324999999999,
+      "baseline_window": {
+        "median_ms": 0.3568339999999921,
+        "p95_ms": 0.4619999999999891,
+        "rows": 50,
+        "payload_bytes": 27201
+      },
+      "indexed_window": {
+        "median_ms": 0.19633299999998144,
+        "p95_ms": 0.5230420000000038,
+        "rows": 50,
+        "payload_bytes": 27201
+      },
+      "legacy_message_bundle": {
+        "median_ms": 1.3678330000000187,
+        "p95_ms": 1.8432090000000017,
+        "rows": 1011,
+        "payload_bytes": 549820
+      },
+      "record_delta": {
+        "median_ms": 1.2851670000000013,
+        "p95_ms": 1.9499169999999992,
+        "rows": 1,
+        "payload_bytes": 1259
+      },
+      "old_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 59.31,
+            "Total Cost": 59.44,
+            "Plan Rows": 50,
+            "Plan Width": 230,
+            "Actual Startup Time": 0.215,
+            "Actual Total Time": 0.218,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 22,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Sort",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 59.31,
+                "Total Cost": 60.15,
+                "Plan Rows": 337,
+                "Plan Width": 230,
+                "Actual Startup Time": 0.214,
+                "Actual Total Time": 0.216,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Sort Key": [
+                  "(date_trunc('milliseconds'::text, created_at))",
+                  "id"
+                ],
+                "Sort Method": "quicksort",
+                "Sort Space Used": 40,
+                "Sort Space Type": "Memory",
+                "Shared Hit Blocks": 22,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Seq Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Relation Name": "flightdeck_pg_messages",
+                    "Alias": "flightdeck_pg_messages",
+                    "Startup Cost": 0,
+                    "Total Cost": 48.12,
+                    "Plan Rows": 337,
+                    "Plan Width": 230,
+                    "Actual Startup Time": 0.004,
+                    "Actual Total Time": 0.198,
+                    "Actual Rows": 62,
+                    "Actual Loops": 1,
+                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:00.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                    "Rows Removed by Filter": 950,
+                    "Shared Hit Blocks": 22,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.042,
+          "Triggers": [],
+          "Execution Time": 0.226
+        }
+      ],
+      "indexed_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.28,
+            "Total Cost": 12.43,
+            "Plan Rows": 50,
+            "Plan Width": 230,
+            "Actual Startup Time": 0.005,
+            "Actual Total Time": 0.017,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 4,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "idx_fd_message_timeline",
+                "Relation Name": "flightdeck_pg_messages",
+                "Alias": "flightdeck_pg_messages",
+                "Startup Cost": 0.28,
+                "Total Cost": 82.23,
+                "Plan Rows": 337,
+                "Plan Width": 230,
+                "Actual Startup Time": 0.005,
+                "Actual Total Time": 0.015,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:00.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 4,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.037,
+          "Triggers": [],
+          "Execution Time": 0.024
+        }
+      ],
+      "delta_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.28,
+            "Total Cost": 8.3,
+            "Plan Rows": 1,
+            "Plan Width": 762,
+            "Actual Startup Time": 0.001,
+            "Actual Total Time": 0.001,
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "flightdeck_pg_record_journal_pkey",
+                "Relation Name": "flightdeck_pg_record_journal",
+                "Alias": "flightdeck_pg_record_journal",
+                "Startup Cost": 0.28,
+                "Total Cost": 8.3,
+                "Plan Rows": 1,
+                "Plan Width": 762,
+                "Actual Startup Time": 0.001,
+                "Actual Total Time": 0.001,
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '1448'::bigint))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 3,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 0,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.01,
+          "Triggers": [],
+          "Execution Time": 0.003
+        }
+      ],
+      "sizes": [
+        {
+          "relname": "flightdeck_pg_messages",
+          "bytes": "835584"
+        },
+        {
+          "relname": "flightdeck_pg_record_current",
+          "bytes": "1286144"
+        },
+        {
+          "relname": "flightdeck_pg_record_journal",
+          "bytes": "6422528"
+        },
+        {
+          "relname": "idx_fd_message_timeline",
+          "bytes": "172032"
+        },
+        {
+          "relname": "idx_fd_message_thread_timeline",
+          "bytes": "8192"
+        }
+      ]
+    },
+    {
+      "history": 10000,
+      "insert_ms": 924.9119589999999,
+      "baseline_window": {
+        "median_ms": 2.0289170000000922,
+        "p95_ms": 2.946042000000034,
+        "rows": 50,
+        "payload_bytes": 27251
+      },
+      "indexed_window": {
+        "median_ms": 0.19533400000000256,
+        "p95_ms": 0.5191669999999249,
+        "rows": 50,
+        "payload_bytes": 27251
+      },
+      "legacy_message_bundle": {
+        "median_ms": 14.501167000000123,
+        "p95_ms": 16.882249999999885,
+        "rows": 10000,
+        "payload_bytes": 5448895
+      },
+      "record_delta": {
+        "median_ms": 1.2183330000000296,
+        "p95_ms": 1.9227499999999509,
+        "rows": 1,
+        "payload_bytes": 1260
+      },
+      "old_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 583.5,
+            "Total Cost": 583.62,
+            "Plan Rows": 50,
+            "Plan Width": 231,
+            "Actual Startup Time": 2.374,
+            "Actual Total Time": 2.377,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 214,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Sort",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 583.5,
+                "Total Cost": 591.84,
+                "Plan Rows": 3337,
+                "Plan Width": 231,
+                "Actual Startup Time": 2.373,
+                "Actual Total Time": 2.374,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Sort Key": [
+                  "(date_trunc('milliseconds'::text, created_at))",
+                  "id"
+                ],
+                "Sort Method": "quicksort",
+                "Sort Space Used": 41,
+                "Sort Space Type": "Memory",
+                "Shared Hit Blocks": 214,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Seq Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Relation Name": "flightdeck_pg_messages",
+                    "Alias": "flightdeck_pg_messages",
+                    "Startup Cost": 0,
+                    "Total Cost": 472.64,
+                    "Plan Rows": 3337,
+                    "Plan Width": 231,
+                    "Actual Startup Time": 0.01,
+                    "Actual Total Time": 2.353,
+                    "Actual Rows": 63,
+                    "Actual Loops": 1,
+                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:09.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                    "Rows Removed by Filter": 9950,
+                    "Shared Hit Blocks": 214,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.112,
+          "Triggers": [],
+          "Execution Time": 2.395
+        }
+      ],
+      "indexed_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.41,
+            "Total Cost": 11.56,
+            "Plan Rows": 50,
+            "Plan Width": 231,
+            "Actual Startup Time": 0.005,
+            "Actual Total Time": 0.016,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 5,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "idx_fd_message_timeline",
+                "Relation Name": "flightdeck_pg_messages",
+                "Alias": "flightdeck_pg_messages",
+                "Startup Cost": 0.41,
+                "Total Cost": 744.86,
+                "Plan Rows": 3337,
+                "Plan Width": 231,
+                "Actual Startup Time": 0.005,
+                "Actual Total Time": 0.015,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:09.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 5,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.061,
+          "Triggers": [],
+          "Execution Time": 0.024
+        }
+      ],
+      "delta_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.29,
+            "Total Cost": 8.3,
+            "Plan Rows": 1,
+            "Plan Width": 903,
+            "Actual Startup Time": 0.005,
+            "Actual Total Time": 0.005,
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "flightdeck_pg_record_journal_pkey",
+                "Relation Name": "flightdeck_pg_record_journal",
+                "Alias": "flightdeck_pg_record_journal",
+                "Startup Cost": 0.29,
+                "Total Cost": 8.3,
+                "Plan Rows": 1,
+                "Plan Width": 903,
+                "Actual Startup Time": 0.004,
+                "Actual Total Time": 0.005,
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '10449'::bigint))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 3,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 0,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.044,
+          "Triggers": [],
+          "Execution Time": 0.008
+        }
+      ],
+      "sizes": [
+        {
+          "relname": "flightdeck_pg_messages",
+          "bytes": "6135808"
+        },
+        {
+          "relname": "flightdeck_pg_record_current",
+          "bytes": "11485184"
+        },
+        {
+          "relname": "flightdeck_pg_record_journal",
+          "bytes": "15998976"
+        },
+        {
+          "relname": "idx_fd_message_timeline",
+          "bytes": "1433600"
+        },
+        {
+          "relname": "idx_fd_message_thread_timeline",
+          "bytes": "8192"
+        }
+      ]
+    },
+    {
+      "history": 100000,
+      "insert_ms": 11095.572833,
+      "baseline_window": {
+        "median_ms": 9.816417000000001,
+        "p95_ms": 10.186666000001424,
+        "rows": 50,
+        "payload_bytes": 27301
+      },
+      "indexed_window": {
+        "median_ms": 0.16470900000058464,
+        "p95_ms": 0.18029199999909906,
+        "rows": 50,
+        "payload_bytes": 27301
+      },
+      "legacy_message_bundle": {
+        "median_ms": 11.759500000000116,
+        "p95_ms": 12.347541999999521,
+        "rows": 10000,
+        "payload_bytes": 5448895
+      },
+      "record_delta": {
+        "median_ms": 0.6505419999994047,
+        "p95_ms": 0.7348340000007738,
+        "rows": 1,
+        "payload_bytes": 1261
+      },
+      "old_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 5385.24,
+            "Total Cost": 5390.99,
+            "Plan Rows": 50,
+            "Plan Width": 232,
+            "Actual Startup Time": 9.109,
+            "Actual Total Time": 9.937,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 2229,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Gather Merge",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 5385.24,
+                "Total Cost": 7640.39,
+                "Plan Rows": 19610,
+                "Plan Width": 232,
+                "Actual Startup Time": 9.109,
+                "Actual Total Time": 9.935,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Workers Planned": 1,
+                "Workers Launched": 1,
+                "Shared Hit Blocks": 2229,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Sort",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 4385.23,
+                    "Total Cost": 4434.26,
+                    "Plan Rows": 19610,
+                    "Plan Width": 232,
+                    "Actual Startup Time": 8.049,
+                    "Actual Total Time": 8.049,
+                    "Actual Rows": 26,
+                    "Actual Loops": 2,
+                    "Sort Key": [
+                      "(date_trunc('milliseconds'::text, created_at))",
+                      "id"
+                    ],
+                    "Sort Method": "quicksort",
+                    "Sort Space Used": 39,
+                    "Sort Space Type": "Memory",
+                    "Shared Hit Blocks": 2229,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Workers": [
+                      {
+                        "Worker Number": 0,
+                        "Sort Method": "quicksort",
+                        "Sort Space Used": 26,
+                        "Sort Space Type": "Memory"
+                      }
+                    ],
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": true,
+                        "Async Capable": false,
+                        "Relation Name": "flightdeck_pg_messages",
+                        "Alias": "flightdeck_pg_messages",
+                        "Startup Cost": 0,
+                        "Total Cost": 3733.8,
+                        "Plan Rows": 19610,
+                        "Plan Width": 232,
+                        "Actual Startup Time": 3.521,
+                        "Actual Total Time": 8.036,
+                        "Actual Rows": 32,
+                        "Actual Loops": 2,
+                        "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:01:39.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                        "Rows Removed by Filter": 49975,
+                        "Shared Hit Blocks": 2214,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0,
+                        "Workers": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.054,
+          "Triggers": [],
+          "Execution Time": 9.945
+        }
+      ],
+      "indexed_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.42,
+            "Total Cost": 11.66,
+            "Plan Rows": 50,
+            "Plan Width": 232,
+            "Actual Startup Time": 0.007,
+            "Actual Total Time": 0.016,
+            "Actual Rows": 50,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 6,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "idx_fd_message_timeline",
+                "Relation Name": "flightdeck_pg_messages",
+                "Alias": "flightdeck_pg_messages",
+                "Startup Cost": 0.42,
+                "Total Cost": 7496.5,
+                "Plan Rows": 33337,
+                "Plan Width": 232,
+                "Actual Startup Time": 0.006,
+                "Actual Total Time": 0.014,
+                "Actual Rows": 50,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:01:39.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 6,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 3,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.06,
+          "Triggers": [],
+          "Execution Time": 0.023
+        }
+      ],
+      "delta_plan": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 0.42,
+            "Total Cost": 24.93,
+            "Plan Rows": 10,
+            "Plan Width": 925,
+            "Actual Startup Time": 0.002,
+            "Actual Total Time": 0.003,
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 4,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "flightdeck_pg_record_journal_pkey",
+                "Relation Name": "flightdeck_pg_record_journal",
+                "Alias": "flightdeck_pg_record_journal",
+                "Startup Cost": 0.42,
+                "Total Cost": 24.93,
+                "Plan Rows": 10,
+                "Plan Width": 925,
+                "Actual Startup Time": 0.002,
+                "Actual Total Time": 0.002,
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '100450'::bigint))",
+                "Rows Removed by Index Recheck": 0,
+                "Shared Hit Blocks": 4,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 0,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.014,
+          "Triggers": [],
+          "Execution Time": 0.005
+        }
+      ],
+      "sizes": [
+        {
+          "relname": "flightdeck_pg_messages",
+          "bytes": "60203008"
+        },
+        {
+          "relname": "flightdeck_pg_record_current",
+          "bytes": "114073600"
+        },
+        {
+          "relname": "flightdeck_pg_record_journal",
+          "bytes": "111845376"
+        },
+        {
+          "relname": "idx_fd_message_timeline",
+          "bytes": "14041088"
+        },
+        {
+          "relname": "idx_fd_message_thread_timeline",
+          "bytes": "8192"
+        }
+      ]
+    }
+  ],
+  "secondary": {
+    "tasks": 10000,
+    "comments": 10000,
+    "board_plan": [
+      {
+        "Plan": {
+          "Node Type": "Limit",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.41,
+          "Total Cost": 7.74,
+          "Plan Rows": 20,
+          "Plan Width": 236,
+          "Actual Startup Time": 0.006,
+          "Actual Total Time": 0.012,
+          "Actual Rows": 20,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 5,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Index Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Scan Direction": "Forward",
+              "Index Name": "idx_fd_task_channel_window",
+              "Relation Name": "flightdeck_pg_tasks",
+              "Alias": "flightdeck_pg_tasks",
+              "Startup Cost": 0.41,
+              "Total Cost": 1221.8,
+              "Plan Rows": 3333,
+              "Plan Width": 236,
+              "Actual Startup Time": 0.006,
+              "Actual Total Time": 0.011,
+              "Actual Rows": 20,
+              "Actual Loops": 1,
+              "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'efc576e3-a6b8-417e-8923-aeb04b731544'::uuid) AND (ROW((- EXTRACT(epoch FROM (updated_at AT TIME ZONE 'UTC'::text))), id) > ROW('-1735689601.000000'::numeric, '00000000-0000-0000-0000-000000000000'::uuid)))",
+              "Rows Removed by Index Recheck": 0,
+              "Filter": "(state = 'new'::text)",
+              "Rows Removed by Filter": 0,
+              "Shared Hit Blocks": 5,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            }
+          ]
+        },
+        "Planning": {
+          "Shared Hit Blocks": 147,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.242,
+        "Triggers": [],
+        "Execution Time": 0.023
+      }
+    ],
+    "comment_plan": [
+      {
+        "Plan": {
+          "Node Type": "Limit",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.57,
+          "Total Cost": 25.49,
+          "Plan Rows": 20,
+          "Plan Width": 205,
+          "Actual Startup Time": 0.014,
+          "Actual Total Time": 0.401,
+          "Actual Rows": 20,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 5,
+          "Shared Read Blocks": 2,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 2,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Nested Loop",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Join Type": "Left",
+              "Startup Cost": 0.57,
+              "Total Cost": 623.61,
+              "Plan Rows": 500,
+              "Plan Width": 205,
+              "Actual Startup Time": 0.014,
+              "Actual Total Time": 0.4,
+              "Actual Rows": 20,
+              "Actual Loops": 1,
+              "Inner Unique": true,
+              "Shared Hit Blocks": 5,
+              "Shared Read Blocks": 2,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 2,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "idx_fd_task_comment_timeline",
+                  "Relation Name": "flightdeck_pg_task_comments",
+                  "Alias": "tc",
+                  "Startup Cost": 0.41,
+                  "Total Cost": 610.6,
+                  "Plan Rows": 500,
+                  "Plan Width": 173,
+                  "Actual Startup Time": 0.004,
+                  "Actual Total Time": 0.005,
+                  "Actual Rows": 20,
+                  "Actual Loops": 1,
+                  "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (task_id = 'a83f8035-40c3-44f0-a83b-ff25650f0e31'::uuid) AND (ROW(created_at, id) > ROW('2025-01-01 08:00:09+08'::timestamp with time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                  "Rows Removed by Index Recheck": 0,
+                  "Shared Hit Blocks": 5,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                },
+                {
+                  "Node Type": "Memoize",
+                  "Parent Relationship": "Inner",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 0.16,
+                  "Total Cost": 0.27,
+                  "Plan Rows": 1,
+                  "Plan Width": 48,
+                  "Actual Startup Time": 0.02,
+                  "Actual Total Time": 0.02,
+                  "Actual Rows": 1,
+                  "Actual Loops": 20,
+                  "Cache Key": "tc.created_by_actor_id",
+                  "Cache Mode": "logical",
+                  "Cache Hits": 19,
+                  "Cache Misses": 1,
+                  "Cache Evictions": 0,
+                  "Cache Overflows": 0,
+                  "Peak Memory Usage": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 2,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 2,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Index Scan",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Scan Direction": "Forward",
+                      "Index Name": "flightdeck_pg_actors_pkey",
+                      "Relation Name": "flightdeck_pg_actors",
+                      "Alias": "creator",
+                      "Startup Cost": 0.15,
+                      "Total Cost": 0.26,
+                      "Plan Rows": 1,
+                      "Plan Width": 48,
+                      "Actual Startup Time": 0.008,
+                      "Actual Total Time": 0.008,
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Index Cond": "(id = tc.created_by_actor_id)",
+                      "Rows Removed by Index Recheck": 0,
+                      "Shared Hit Blocks": 0,
+                      "Shared Read Blocks": 2,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 2,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "Planning": {
+          "Shared Hit Blocks": 141,
+          "Shared Read Blocks": 3,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 3,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.239,
+        "Triggers": [],
+        "Execution Time": 0.41
+      }
+    ]
+  }
+}

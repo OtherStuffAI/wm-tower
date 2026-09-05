@@ -2712,3 +2712,27 @@ export interface GitAuditEvent {
   correlation_id: string | null;
   occurred_at: string;
 }
+
+/** Versioned canonical record-family stream; independent of legacy outbox cursors. */
+export interface FlightDeckRecordChange {
+  family: string;
+  id: string;
+  operation: 'upsert' | 'delete';
+  version: string;
+  workspace_id: string;
+  scope_id: string | null;
+  channel_id: string | null;
+  row: Record<string, unknown> | null;
+}
+export interface FlightDeckRecordPage {
+  protocol_version: 1;
+  families: string[];
+  mode: 'snapshot' | 'delta';
+  changes: FlightDeckRecordChange[];
+  next_cursor: string;
+  has_more: boolean;
+  snapshot_id: string | null;
+  snapshot_complete: boolean;
+  partitions_complete: string[];
+  bounds: { max_rows: number; max_bytes: number };
+}

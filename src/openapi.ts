@@ -5677,6 +5677,49 @@ export function buildOpenApiDocument(origin: string) {
           responses: { '200': { description: 'SSE event stream' }, '400': { description: 'Invalid cursor or audience' }, '401': { description: 'Invalid NIP-98 auth' }, '403': { description: 'Workspace membership or audience authorization required' }, '404': { description: 'Workspace not found' } },
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync': {
+        get: {
+          summary: 'Bounded canonical record-family sync v1',
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }],
+          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes; see docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1] } },
+            { name: 'cursor', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 200 } },
+          ],
+          responses: {
+            '200': {
+              description: 'At most 200 scanned entries and 1048576 UTF-8 response bytes. Empty hidden-entry pages may have has_more=true.',
+              content: { 'application/json': { schema: {
+                type: 'object', required: ['protocol_version','families','mode','changes','next_cursor','has_more','snapshot_id','snapshot_complete','partitions_complete','bounds'],
+                properties: {
+                  protocol_version: { type: 'integer', enum: [1] },
+                  families: { type: 'array', items: { type: 'string' } },
+                  mode: { type: 'string', enum: ['snapshot','delta'] },
+                  next_cursor: { type: 'string', format: 'uuid' }, has_more: { type: 'boolean' },
+                  snapshot_id: { type: 'string', nullable: true, format: 'uuid' }, snapshot_complete: { type: 'boolean' },
+                  partitions_complete: { type: 'array', items: { type: 'string' } },
+                  bounds: { type: 'object', properties: { max_rows: { type: 'integer', enum: [200] }, max_bytes: { type: 'integer', enum: [1048576] } } },
+                  changes: { type: 'array', maxItems: 200, items: {
+                    type: 'object', required: ['family','id','operation','version','workspace_id','scope_id','channel_id','row'],
+                    properties: {
+                      family: { type: 'string' }, id: { type: 'string' }, operation: { type: 'string', enum: ['upsert','delete'] },
+                      version: { type: 'string', pattern: '^[0-9]+$', description: 'Workspace commit-order position; compare with BigInt' },
+                      workspace_id: { type: 'string', format: 'uuid' }, scope_id: { type: 'string', nullable: true, format: 'uuid' },
+                      channel_id: { type: 'string', nullable: true, format: 'uuid' }, row: { type: 'object', nullable: true, additionalProperties: true, description: 'Full canonical stored PG row for upsert, null for delete' },
+                    },
+                  } },
+                },
+              } } },
+            },
+            '400': { description: 'Unsupported version or invalid input' },
+            '403': { description: 'Membership lost: hide workspace authoritative cache, preserve pending commands' },
+            '409': { description: 'reset_required: discard authoritative generation, preserve pending commands, restart without cursor' },
+            '413': { description: 'record_too_large: cursor has not advanced' },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/sync': {
         get: {
           tags: ['Flight Deck PG'],
@@ -6161,6 +6204,9 @@ export function buildOpenApiDocument(origin: string) {
           summary: 'List tasks for a channel task board',
           description: 'Implemented PH2-2 runtime channel task list. Authorizes task.read on the channel and returns only tasks anchored to that channel.',
           parameters: [
+            { name: 'state', in: 'query', schema: { type: 'string' }, description: 'Optional exact task state filter' },
+            { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Opaque keyset cursor for this endpoint and filter' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } },
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200 } },
@@ -6372,7 +6418,9 @@ export function buildOpenApiDocument(origin: string) {
         post: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Create a document comment or inline reply',
           description: 'Creates a comment while preserving parent_comment_id. Structured mentions are canonicalized and doc.read access-checked; a non-empty canonical set emits flightdeck_pg.document_comment_mention_added with comment linkage, document body version/hash, logical author, signer provenance, stable event ID, and cursor.',
-          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'docId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          parameters: [
+            { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Opaque keyset cursor for this endpoint and filter' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } },{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'docId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['body'], properties: { body: { type: 'string', minLength: 1 }, parent_comment_id: { type: 'string', format: 'uuid', nullable: true }, mentions: { type: 'array', items: { $ref: '#/components/schemas/FlightDeckPgAgentMentionInput' } }, metadata: { type: 'object', additionalProperties: true } } } } } },
           responses: { '201': { description: 'Created comment plus ordinary and optional mention-trigger outbox evidence' }, '400': { description: 'Invalid or inaccessible mention' }, '403': { description: 'Document write denied' }, '404': { description: 'Document or parent comment not found' } },
         },
@@ -6438,6 +6486,8 @@ export function buildOpenApiDocument(origin: string) {
           summary: 'List task comments',
           description: 'Lists readable task comments in stable creation order, preserving workspace/scope/channel/task/thread linkage, metadata.mentions, row_version, stable comment ID, and resolved creator actor npub.',
           parameters: [
+            { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Opaque keyset cursor for this endpoint and filter' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } },
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
           ],

@@ -3372,10 +3372,10 @@ export async function listFlightDeckPgChannelMessages(
       AND (${input.threadId ?? null}::uuid IS NULL OR m.thread_id = ${input.threadId ?? null})
       AND (
         ${input.afterCreatedAt ?? null}::timestamptz IS NULL
-        OR (date_trunc('milliseconds', m.created_at), m.id) > (date_trunc('milliseconds', ${input.afterCreatedAt ?? null}::timestamptz), ${input.afterId ?? null}::uuid)
+        OR (date_trunc('milliseconds', m.created_at AT TIME ZONE 'UTC'), m.id) > (date_trunc('milliseconds', ${input.afterCreatedAt ?? null}::timestamptz AT TIME ZONE 'UTC'), ${input.afterId ?? null}::uuid)
       )
       AND m.deleted_at IS NULL
-    ORDER BY date_trunc('milliseconds', m.created_at) ASC, m.id ASC
+    ORDER BY date_trunc('milliseconds', m.created_at AT TIME ZONE 'UTC') ASC, m.id ASC
     LIMIT ${input.limit}
   `;
 }
@@ -5740,16 +5740,18 @@ export async function upsertFlightDeckPgAgentActivity(
 }
 
 export async function listFlightDeckPgChannelTasks(
-  input: { workspaceId: string; channelId: string; limit: number },
+  input: { workspaceId: string; channelId: string; limit: number; state?: string | null; beforeUpdatedAt?: string | null; afterId?: string | null },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgTaskRow[]> {
   return sql<FlightDeckPgTaskRow[]>`
-    SELECT *
+    SELECT *, updated_at::text AS cursor_updated_at
     FROM flightdeck_pg_tasks
     WHERE workspace_id = ${input.workspaceId}
       AND channel_id = ${input.channelId}
       AND deleted_at IS NULL
-    ORDER BY updated_at DESC, id ASC
+      AND (${input.state ?? null}::text IS NULL OR state=${input.state ?? null})
+      AND (${input.beforeUpdatedAt ?? null}::timestamptz IS NULL OR (-extract(epoch FROM updated_at AT TIME ZONE 'UTC'),id)>(-extract(epoch FROM ${input.beforeUpdatedAt ?? null}::timestamptz AT TIME ZONE 'UTC'),${input.afterId ?? null}::uuid))
+    ORDER BY (-extract(epoch FROM updated_at AT TIME ZONE 'UTC')) ASC, id ASC
     LIMIT ${input.limit}
   `;
 }
@@ -7549,18 +7551,20 @@ export async function createFlightDeckPgTaskComment(
 }
 
 export async function listFlightDeckPgTaskComments(
-  input: { workspaceId: string; taskId: string; limit: number },
+  input: { workspaceId: string; taskId: string; limit: number; afterCreatedAt?: string | null; afterId?: string | null },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgTaskCommentRow[]> {
   return sql<FlightDeckPgTaskCommentRow[]>`
     SELECT
       tc.*,
+      tc.created_at::text AS cursor_created_at,
       creator.npub AS created_by_actor_npub
     FROM flightdeck_pg_task_comments tc
     LEFT JOIN flightdeck_pg_actors creator ON creator.id = tc.created_by_actor_id
     WHERE tc.workspace_id = ${input.workspaceId}
       AND tc.task_id = ${input.taskId}
       AND tc.deleted_at IS NULL
+      AND (${input.afterCreatedAt ?? null}::timestamptz IS NULL OR (tc.created_at,tc.id)>(${input.afterCreatedAt ?? null}::timestamptz,${input.afterId ?? null}::uuid))
     ORDER BY tc.created_at ASC, tc.id ASC
     LIMIT ${input.limit}
   `;
@@ -7699,18 +7703,20 @@ export async function deleteFlightDeckPgDocComment(
 }
 
 export async function listFlightDeckPgDocComments(
-  input: { workspaceId: string; docId: string; limit: number },
+  input: { workspaceId: string; docId: string; limit: number; afterCreatedAt?: string | null; afterId?: string | null },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgDocCommentRow[]> {
   return sql<FlightDeckPgDocCommentRow[]>`
     SELECT
       dc.*,
+      dc.created_at::text AS cursor_created_at,
       creator.npub AS created_by_actor_npub
     FROM flightdeck_pg_doc_comments dc
     LEFT JOIN flightdeck_pg_actors creator ON creator.id = dc.created_by_actor_id
     WHERE dc.workspace_id = ${input.workspaceId}
       AND dc.doc_id = ${input.docId}
       AND dc.deleted_at IS NULL
+      AND (${input.afterCreatedAt ?? null}::timestamptz IS NULL OR (dc.created_at,dc.id)>(${input.afterCreatedAt ?? null}::timestamptz,${input.afterId ?? null}::uuid))
     ORDER BY dc.created_at ASC, dc.id ASC
     LIMIT ${input.limit}
   `;
