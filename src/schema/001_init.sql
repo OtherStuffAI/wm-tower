@@ -3506,4 +3506,9 @@ CREATE INDEX IF NOT EXISTS idx_fd_task_board ON flightdeck_pg_tasks(workspace_id
 CREATE INDEX IF NOT EXISTS idx_fd_task_comment_timeline ON flightdeck_pg_task_comments(workspace_id,task_id,created_at,id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fd_doc_comment_timeline ON flightdeck_pg_doc_comments(workspace_id,doc_id,created_at,id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_fd_task_channel_window ON flightdeck_pg_tasks(workspace_id,channel_id,(-extract(epoch FROM updated_at AT TIME ZONE 'UTC')),id) WHERE deleted_at IS NULL;
+-- Effective transcripts retain tombstones as fork anchors and read-only rows.
+CREATE INDEX IF NOT EXISTS idx_fd_message_thread_effective_timeline
+  ON flightdeck_pg_messages(workspace_id,channel_id,thread_id,(date_trunc('milliseconds',created_at AT TIME ZONE 'UTC')),id)
+  WHERE thread_id IS NOT NULL;
+
 -- end_flightdeck_record_delta_v1

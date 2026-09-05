@@ -3380,27 +3380,6 @@ export async function listFlightDeckPgChannelMessages(
   `;
 }
 
-async function listFlightDeckPgOwnedThreadMessages(
-  workspaceId: string,
-  threadId: string,
-  sql: DbClient,
-): Promise<FlightDeckPgMessageRow[]> {
-  return sql<FlightDeckPgMessageRow[]>`
-    SELECT
-      m.*,
-      m.created_at::text AS cursor_created_at,
-      t.source_message_id AS thread_source_message_id,
-      creator.npub AS created_by_actor_npub,
-      creator.display_name AS created_by_actor_label
-    FROM flightdeck_pg_messages m
-    JOIN flightdeck_pg_threads t ON t.workspace_id = m.workspace_id AND t.id = m.thread_id
-    LEFT JOIN flightdeck_pg_actors creator ON creator.id = m.created_by_actor_id
-    WHERE m.workspace_id = ${workspaceId}
-      AND m.thread_id = ${threadId}
-    ORDER BY date_trunc('milliseconds', m.created_at) ASC, m.id ASC
-  `;
-}
-
 export function assembleEffectiveFlightDeckPgThreadMessages(
   lineage: FlightDeckPgThreadRow[],
   messagesByThreadId: Map<string, FlightDeckPgMessageRow[]>,
@@ -3422,20 +3401,23 @@ export async function listEffectiveFlightDeckPgThreadMessages(
     workspaceId: string;
     channelId: string;
     threadId: string;
+    limit?: number;
+    messageId?: string;
     afterCreatedAt?: string | Date | null;
     afterId?: string | null;
   },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgEffectiveMessageRow[]> {
-  const lineage: FlightDeckPgThreadRow[] = [];
+  type ThreadInfo = Pick<FlightDeckPgThreadRow, 'id' | 'channel_id' | 'parent_thread_id' | 'branch_point_message_id' | 'source_message_id'>;
+  const lineage: ThreadInfo[] = [];
   const seen = new Set<string>();
   let nextThreadId: string | null = input.threadId;
   while (nextThreadId) {
     if (seen.has(nextThreadId)) throw new Error('thread_lineage_cycle');
     if (lineage.length >= 100) throw new Error('thread_lineage_too_deep');
     seen.add(nextThreadId);
-    const [thread] = await sql<FlightDeckPgThreadRow[]>`
-      SELECT * FROM flightdeck_pg_threads
+    const [thread] = await sql<ThreadInfo[]>`
+      SELECT id,channel_id,parent_thread_id,branch_point_message_id,source_message_id FROM flightdeck_pg_threads
       WHERE workspace_id = ${input.workspaceId} AND id = ${nextThreadId}
       LIMIT 1
     `;
@@ -3445,26 +3427,56 @@ export async function listEffectiveFlightDeckPgThreadMessages(
   }
   lineage.reverse();
 
-  const messagesByThreadId = new Map<string, FlightDeckPgMessageRow[]>();
+  // Represent the effective transcript as at most 100 ordered thread ranges.
+  // A nested fork can truncate an ancestor range and remove intervening threads.
+  type Point = { id: string; thread_id: string; created_at: Date; cursor_created_at: string };
+  const segments: { thread: ThreadInfo; upper: Point | null }[] = [];
   for (const thread of lineage) {
-    messagesByThreadId.set(thread.id, await listFlightDeckPgOwnedThreadMessages(input.workspaceId, thread.id, sql));
+    if (thread.parent_thread_id && thread.branch_point_message_id) {
+      const [point] = await sql<Point[]>`SELECT id,thread_id,created_at,created_at::text AS cursor_created_at
+        FROM flightdeck_pg_messages WHERE workspace_id=${input.workspaceId} AND id=${thread.branch_point_message_id}`;
+      const index = point ? segments.findIndex(segment => segment.thread.id === point.thread_id) : -1;
+      const upper = segments[index]?.upper;
+      if (index < 0 || (upper && (point!.created_at.getTime() > upper.created_at.getTime()
+        || (point!.created_at.getTime() === upper.created_at.getTime() && point!.id > upper.id)))) {
+        throw new Error('thread_branch_point_missing');
+      }
+      segments.splice(index + 1);
+      segments[index]!.upper = point!;
+    }
+    segments.push({ thread, upper: null });
   }
-  const effective = assembleEffectiveFlightDeckPgThreadMessages(lineage, messagesByThreadId);
-
-  const afterTime = input.afterCreatedAt ? new Date(input.afterCreatedAt).getTime() : null;
-  return effective
-    .filter((message) => {
-      if (afterTime === null) return true;
-      const messageTime = new Date(message.created_at).getTime();
-      return messageTime > afterTime || (messageTime === afterTime && message.id > String(input.afterId ?? ''));
-    })
-    .map((message) => ({
-      ...message,
-      cursor_created_at: String((message as FlightDeckPgMessageRow & { cursor_created_at?: string }).cursor_created_at ?? message.created_at.toISOString()),
-      owning_thread_id: String(message.thread_id),
-      effective_thread_id: input.threadId,
-      inherited: message.thread_id !== input.threadId,
-    }));
+  const limit = input.limit ?? 201;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 201) throw new Error('invalid_limit');
+  const effective: FlightDeckPgMessageRow[] = [];
+  for (const { thread, upper } of segments) {
+    if (effective.length >= limit) break;
+    const rows = await sql<FlightDeckPgMessageRow[]>`
+      SELECT m.*,m.created_at::text AS cursor_created_at,
+        ${thread.source_message_id}::uuid AS thread_source_message_id,
+        creator.npub AS created_by_actor_npub,creator.display_name AS created_by_actor_label
+      FROM flightdeck_pg_messages m
+      LEFT JOIN flightdeck_pg_actors creator ON creator.id=m.created_by_actor_id
+      WHERE m.workspace_id=${input.workspaceId} AND m.channel_id=${input.channelId} AND m.thread_id=${thread.id}
+        AND (${input.messageId ?? null}::uuid IS NULL OR m.id=${input.messageId ?? null}::uuid)
+        AND (${upper?.cursor_created_at ?? null}::timestamptz IS NULL
+          OR (date_trunc('milliseconds',m.created_at AT TIME ZONE 'UTC'),m.id)
+            <= (date_trunc('milliseconds',${upper?.cursor_created_at ?? null}::timestamptz AT TIME ZONE 'UTC'),${upper?.id ?? null}::uuid))
+        AND (${input.afterCreatedAt ?? null}::timestamptz IS NULL
+          OR (date_trunc('milliseconds',m.created_at AT TIME ZONE 'UTC'),m.id)
+            > (date_trunc('milliseconds',${input.afterCreatedAt ?? null}::timestamptz AT TIME ZONE 'UTC'),${input.afterId ?? null}::uuid))
+      ORDER BY date_trunc('milliseconds',m.created_at AT TIME ZONE 'UTC'),m.id
+      LIMIT ${limit - effective.length}
+    `;
+    effective.push(...rows);
+  }
+  return effective.map(message => ({
+    ...message,
+    cursor_created_at: String((message as FlightDeckPgMessageRow & { cursor_created_at?: string }).cursor_created_at ?? message.created_at.toISOString()),
+    owning_thread_id: String(message.thread_id),
+    effective_thread_id: input.threadId,
+    inherited: message.thread_id !== input.threadId,
+  }));
 }
 
 export async function resolveFlightDeckPgThread(

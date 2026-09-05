@@ -451,7 +451,15 @@
     "bounds": {
       "max_rows": 200,
       "max_bytes": 1048576
-    }
+    },
+    "actors": [
+      {
+        "actor_id": "20000000-0000-4000-8000-000000000001",
+        "npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul",
+        "display_name": "Example Author",
+        "kind": "human"
+      }
+    ]
   },
   "one_message_delta": {
     "protocol_version": 1,
@@ -509,7 +517,15 @@
     "bounds": {
       "max_rows": 200,
       "max_bytes": 1048576
-    }
+    },
+    "actors": [
+      {
+        "actor_id": "20000000-0000-4000-8000-000000000001",
+        "npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul",
+        "display_name": "Example Author",
+        "kind": "human"
+      }
+    ]
   },
   "explicit_delete": {
     "protocol_version": 1,
@@ -551,7 +567,8 @@
     "bounds": {
       "max_rows": 200,
       "max_bytes": 1048576
-    }
+    },
+    "actors": []
   },
   "reset_required": {
     "error": "reset_required",

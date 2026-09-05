@@ -4530,6 +4530,8 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/threads/:p
       workspaceId: context.workspace.id,
       channelId,
       threadId: parentThreadId,
+      messageId: branchPointMessageId,
+      limit: 1,
     });
   } catch (error) {
     return jsonError(c, 409, 'thread_lineage_invalid', error instanceof Error ? error.message : 'Parent thread lineage could not be resolved', identity);
@@ -4857,13 +4859,14 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/channels/:channelId/messages', 
   let rows;
   try {
     rows = effectiveTranscript
-      ? (await listEffectiveFlightDeckPgThreadMessages({
+      ? await listEffectiveFlightDeckPgThreadMessages({
           workspaceId: context.workspace.id,
           channelId,
           threadId: threadId!,
+          limit: limit + 1,
           afterCreatedAt: cursor.createdAt,
           afterId: cursor.id,
-        })).slice(0, limit + 1)
+        })
       : await listFlightDeckPgChannelMessages({
           workspaceId: context.workspace.id,
           channelId,

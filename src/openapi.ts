@@ -4952,7 +4952,7 @@ export function buildOpenApiDocument(origin: string) {
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'thread_id', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
-            { name: 'effective_transcript', in: 'query', required: false, schema: { type: 'boolean', default: false }, description: 'When true with thread_id, returns inherited lineage through each fork point followed by child-owned messages. Rows include owning_thread_id, effective_thread_id, inherited, and read_only.' },
+            { name: 'effective_transcript', in: 'query', required: false, schema: { type: 'boolean', default: false }, description: 'When true with thread_id, returns inherited lineage through each fork point followed by child-owned messages. At most limit+1 message rows are fetched across indexed lineage ranges (maximum 100 threads); deleted messages remain tombstones/fork anchors. Existing millisecond timestamp/ID cursors and lineage order are preserved. Rows include owning_thread_id, effective_thread_id, inherited, and read_only.' },
             { name: 'cursor', in: 'query', required: false, schema: { type: 'string' } },
             { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200 } },
           ],
@@ -5701,6 +5701,12 @@ export function buildOpenApiDocument(origin: string) {
                   snapshot_id: { type: 'string', nullable: true, format: 'uuid' }, snapshot_complete: { type: 'boolean' },
                   partitions_complete: { type: 'array', items: { type: 'string' } },
                   bounds: { type: 'object', properties: { max_rows: { type: 'integer', enum: [200] }, max_bytes: { type: 'integer', enum: [1048576] } } },
+                  actors: { type: 'array', maxItems: 200, description: 'Optional for older producers. Deduplicated identities referenced only by visible upserts; changes plus actors <=200, entire page <=1048576 bytes. Does not grant directory access.', items: {
+                    type: 'object', additionalProperties: false, required: ['actor_id','npub','display_name','kind'], properties: {
+                      actor_id: { type: 'string', format: 'uuid' }, npub: { type: 'string' },
+                      display_name: { type: 'string', nullable: true }, kind: { type: 'string', enum: ['human','agent','app','service'] },
+                    },
+                  } },
                   changes: { type: 'array', maxItems: 200, items: {
                     type: 'object', required: ['family','id','operation','version','workspace_id','scope_id','channel_id','row'],
                     properties: {

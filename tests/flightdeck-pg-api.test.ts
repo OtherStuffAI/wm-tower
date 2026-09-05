@@ -390,6 +390,79 @@ afterAll(async () => {
 });
 
 describe('Flight Deck PG API routes', () => {
+  test('restricted fresh record-sync resolves authors and assignees without directory access', async () => {
+    const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1sidecarintegration');
+    const [scope]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Sidecar','project') RETURNING id`;
+    const [channel]=await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope!.id},'Visible') RETURNING id`;
+    const [hidden]=await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope!.id},'Hidden') RETURNING id`;
+    const [unrelated]=await sql`INSERT INTO flightdeck_pg_actors(npub,kind,display_name) VALUES('npub1unrelatedsidecar','agent','Unrelated') RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${workspaceId},${unrelated!.id},'agent')`;
+    for(const [c,a] of [[channel!.id,ownerId],[hidden!.id,unrelated!.id]]) await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${c},'sender',${a},${a})`;
+    const [task]=await sql`INSERT INTO flightdeck_pg_tasks(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},'Assigned task',${ownerId},${ownerId}) RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_task_assignments(workspace_id,scope_id,channel_id,task_id,actor_id,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},${task!.id},${groupMemberId},${ownerId},${ownerId})`;
+    const [storage]=await sql`INSERT INTO v4_storage_objects(owner_npub,created_by_npub,file_name,content_type,storage_path) VALUES('owner','creator','doc','text/plain','sidecar-doc') RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_docs(workspace_id,scope_id,channel_id,storage_object_id,title,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},${storage!.id},'Document',${ownerId},${ownerId})`;
+    const path=`/api/v4/flightdeck-pg/workspaces/${workspaceId}`;
+    for(const permission of ['channel.read','task.read','doc.read']) {
+      await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND principal_actor_id=${groupMemberId}`;
+      await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+        VALUES(${workspaceId},'actor',${groupMemberId},'channel',${channel!.id},${permission})`;
+      expect((await requestJson(`${path}/members`,'GET',groupMemberSecret)).res.status).toBe(403);
+      const identities=new Map<string,any>();const changes:any[]=[];
+      let cursor='',more=true;
+      while(more) {
+        const result=await requestJson(`${path}/record-sync?protocol_version=1&limit=2${cursor?`&cursor=${cursor}`:''}`,'GET',groupMemberSecret);
+        expect(result.res.status).toBe(200);
+        for(const actor of result.json.actors) {
+          expect(Object.keys(actor).sort()).toEqual(['actor_id','display_name','kind','npub']);
+          identities.set(actor.actor_id,actor);
+        }
+        for(const change of result.json.changes) if(change.row?.created_by_actor_id) {
+          expect(identities.get(change.row.created_by_actor_id)?.npub).toBe(OWNER_NPUB);
+        }
+        changes.push(...result.json.changes);cursor=result.json.next_cursor;more=result.json.has_more;
+      }
+      expect(identities.has(unrelated!.id)).toBe(false);
+      expect(identities.get(ownerId)).toMatchObject({npub:OWNER_NPUB,display_name:'Owner',kind:'human'});
+      if(permission==='task.read') {
+        expect(changes.some(c=>c.family==='task_assignment')).toBe(true);
+        expect(identities.get(groupMemberId)?.npub).toBe(GROUP_MEMBER_NPUB);
+      }
+      if(permission==='doc.read') expect(changes.some(c=>c.family==='doc')).toBe(true);
+      if(permission==='channel.read') expect(changes.some(c=>c.family==='message')).toBe(true);
+    }
+  });
+
+  test('authenticated branch opening pages inherited tombstones and validates distant fork anchors', async () => {
+    const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1branchintegration');
+    const [scope]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Branch','project') RETURNING id`;
+    const [channel]=await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope!.id},'Branch') RETURNING id`;
+    for(const permission of ['channel.read','channel.write']) await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${ownerId},'channel',${channel!.id},${permission})`;
+    const [root]=await sql`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},'root',${ownerId},${ownerId}) RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_messages(id,workspace_id,scope_id,channel_id,thread_id,body,created_at,created_by_actor_id,updated_by_actor_id)
+      SELECT ('90000000-0000-4000-8000-'||lpad(g::text,12,'0'))::uuid,${workspaceId},${scope!.id},${channel!.id},${root!.id},'original','2026-01-01T00:00:00.123456Z',${ownerId},${ownerId} FROM generate_series(1,220) g`;
+    const anchor='90000000-0000-4000-8000-000000000210';
+    await sql`UPDATE flightdeck_pg_messages SET deleted_at=now() WHERE id=${anchor}`;
+    const base=`/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${channel!.id}`;
+    const branch=await requestJson(`${base}/threads/${root!.id}/branches`,'POST',ownerSecret,{branch_point_message_id:anchor,client_request_id:'distant-anchor'});
+    expect(branch.res.status).toBe(201);
+    const path=`${base}/messages?effective_transcript=true&thread_id=${branch.json.thread.id}&limit=200`;
+    expect((await requestJson(path,'GET',groupMemberSecret)).res.status).toBe(403);
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${groupMemberId},'channel',${channel!.id},'channel.read')`;
+    const first=await requestJson(path,'GET',groupMemberSecret);
+    expect(first.res.status).toBe(200);expect(first.json.messages).toHaveLength(200);expect(first.json.next_cursor).toBeTruthy();
+    const last=await requestJson(`${path}&cursor=${first.json.next_cursor}`,'GET',groupMemberSecret);
+    expect(last.res.status).toBe(200);expect(last.json.messages).toHaveLength(10);expect(last.json.next_cursor).toBeNull();
+    expect(last.json.messages.at(-1)).toMatchObject({id:anchor,body:'',metadata:{},inherited:true,read_only:true,owning_thread_id:root!.id});
+  });
+
   test('atomically rotates a global agent identity with dual proof and preserves actor relationships', async () => {
     const { workspaceId, ownerId } = await seedWorkspace('npub1workspaceidentityrotation');
     const [agent] = await sql<{ id: string }[]>`INSERT INTO flightdeck_pg_actors(npub,kind,display_name) VALUES(${ROTATING_AGENT_NPUB},'agent','Rotating Agent') RETURNING id`;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import { authorizeFlightDeckPgOperation, getEffectiveFlightDeckPgGroupIds } from './flightdeck-pg-authorization';
 import { recordFamilies } from './flightdeck-record-families';
-import type { FlightDeckRecordChange, FlightDeckRecordPage } from '../types';
+import type { FlightDeckRecordActor, FlightDeckRecordChange, FlightDeckRecordPage } from '../types';
 
 type Db = ReturnType<typeof getDb>;
 type State = { mode: 'snapshot' | 'delta'; boundary: string; after: string; family: string; id: string; snapshotId: string | null };
@@ -51,7 +51,7 @@ export async function readFlightDeckRecordPage(input: {
       : await sql<Entry[]>`SELECT family,id,operation,position::text,bytes,context AS row
         FROM flightdeck_pg_record_journal
         WHERE workspace_id=${input.workspaceId} AND position>${state.after}::bigint
-        ORDER BY position LIMIT ${limit + 1}`;
+        ORDER BY flightdeck_pg_record_journal.position LIMIT ${limit + 1}`;
     const decisions = new Map<string, boolean>();
     let effectiveGroups: string[] | undefined;
     async function grant(permission: string, type: 'channel' | 'scope', id: string): Promise<boolean> {
@@ -113,11 +113,12 @@ export async function readFlightDeckRecordPage(input: {
     }
     const nextToken = randomUUID();
     const response: FlightDeckRecordPage = {
-      protocol_version: 1, families: Object.keys(recordFamilies), mode: state.mode, changes: [],
+      protocol_version: 1, families: Object.keys(recordFamilies), mode: state.mode, changes: [], actors: [],
       next_cursor: nextToken, has_more: entries.length > limit, snapshot_id: state.snapshotId,
       snapshot_complete: false, partitions_complete: [], bounds: { max_rows: RECORD_MAX_ROWS, max_bytes: RECORD_MAX_BYTES },
     };
     const next = { ...state };
+    const actors = new Map<string, FlightDeckRecordActor>();
     let processed = 0;
     for (const entry of entries.slice(0, limit)) {
       if (await visible(entry)) {
@@ -137,8 +138,26 @@ export async function readFlightDeckRecordPage(input: {
             : await sql`SELECT row FROM flightdeck_pg_record_journal WHERE workspace_id=${input.workspaceId} AND position=${entry.position}::bigint`;
           change.row = payload!.row;
         }
-        const actualBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
-        if (actualBytes > RECORD_MAX_BYTES) throw new RecordSyncError(413, 'record_too_large');
+        // Only typed top-level references from the authorized payload, never metadata or hidden rows.
+        const actorIds = [...new Set(['created_by_actor_id', 'updated_by_actor_id', 'deleted_by_actor_id',
+          'owner_actor_id', 'actor_id', 'viewer_actor_id'].map(key => change.row?.[key])
+          .filter((id): id is string => typeof id === 'string' && uuid.test(id) && !actors.has(id)))];
+        const baseBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
+        const remaining = RECORD_MAX_BYTES - baseBytes;
+        // Profiles have unbounded labels. Size them in SQL before decoding any new identity payload.
+        const sizes = actorIds.length ? await sql`SELECT id, octet_length(jsonb_build_object(
+          'actor_id',id,'npub',npub,'display_name',display_name,'kind',kind)::text) AS bytes
+          FROM flightdeck_pg_actors WHERE id IN ${sql(actorIds)}` : [];
+        if (sizes.reduce((sum, actor) => sum + Number(actor.bytes) + 1, 0) > remaining
+          || response.changes.length + 1 + actors.size + sizes.length > RECORD_MAX_ROWS) {
+          if (!response.changes.length) throw new RecordSyncError(413, 'record_too_large');
+          response.has_more = true; break;
+        }
+        const additions = sizes.length ? await sql<FlightDeckRecordActor[]>`
+          SELECT id AS actor_id,npub,display_name,kind FROM flightdeck_pg_actors
+          WHERE id IN ${sql(sizes.map(actor => actor.id))} ORDER BY id` : [];
+        for (const actor of additions) actors.set(actor.actor_id, actor);
+        response.actors = [...actors.values()];
         response.changes.push(change);
       }
       processed++;

@@ -2724,11 +2724,19 @@ export interface FlightDeckRecordChange {
   channel_id: string | null;
   row: Record<string, unknown> | null;
 }
+export interface FlightDeckRecordActor {
+  actor_id: string;
+  npub: string;
+  display_name: string | null;
+  kind: FlightDeckPgActorKind;
+}
 export interface FlightDeckRecordPage {
   protocol_version: 1;
   families: string[];
   mode: 'snapshot' | 'delta';
   changes: FlightDeckRecordChange[];
+  /** Only identities referenced by visible upserts; optional for older v1 producers. */
+  actors?: FlightDeckRecordActor[];
   next_cursor: string;
   has_more: boolean;
   snapshot_id: string | null;

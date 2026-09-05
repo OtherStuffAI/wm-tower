@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import { readFileSync } from 'node:fs';
 import { splitSqlStatements } from '../src/schema/sql-statements';
 import { readFlightDeckRecordPage } from '../src/services/flightdeck-record-delta';
+import { listEffectiveFlightDeckPgThreadMessages } from '../src/services/flightdeck-pg-api';
 import { recordFamilies } from '../src/services/flightdeck-record-families';
 
 // Explicit opt-in: this suite must never point at the shared runtime database.
@@ -35,6 +36,10 @@ async function synced() { let p=await page(); while(p.has_more) p=await page(p.n
 
 test('every advertised family has all-mutation trigger and complete canonical fixture columns', async () => {
   const fixtures=JSON.parse(readFileSync(new URL('./fixtures/flightdeck-record-delta-v1.json',import.meta.url),'utf8'));
+  const fixtureActors = new Map(fixtures.canonical_upserts.actors.map((actor:any)=>[actor.actor_id,actor]));
+  for(const change of fixtures.canonical_upserts.changes) for(const [key,id] of Object.entries(change.row)) {
+    if ((key==='actor_id'||key.endsWith('_actor_id')) && id) expect(fixtureActors.has(id)).toBe(true);
+  }
   for(const [family,table] of Object.entries(recordFamilies)) {
     const [trigger]=await db`SELECT tgtype FROM pg_trigger WHERE tgname=${`fd_record_${family}`}`;
     expect(Number(trigger!.tgtype)&(4|8|16)).toBe(4|8|16);
@@ -43,6 +48,51 @@ test('every advertised family has all-mutation trigger and complete canonical fi
     expect(Object.keys(fixture.row).sort()).toEqual(columns.map(c=>c.column_name).sort());
   }
 });
+test('sidecars resolve only visible typed references, deduplicate and bound identity expansion', async () => {
+  const [hiddenActor] = await db`INSERT INTO flightdeck_pg_actors(npub,kind,display_name) VALUES('npub1hiddenactor','agent','Hidden') RETURNING id`;
+  await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${workspaceId},${hiddenActor!.id},'agent')`;
+  const [hiddenChannel] = await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scopeId},'Hidden actors') RETURNING id`;
+  await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id)
+    VALUES(${workspaceId},${scopeId},${hiddenChannel!.id},'secret',${hiddenActor!.id},${hiddenActor!.id})`;
+  const cursor = await synced();
+  const msg = await message('visible author');
+  await db`UPDATE flightdeck_pg_messages SET metadata=${db.json({actor_id:hiddenActor!.id})} WHERE id=${msg.id}`;
+  const p = await page(cursor);
+  expect(p.actors).toEqual([{actor_id:actorId,npub:'npub1recordtest',display_name:'Record Test',kind:'human'}]);
+  expect(p.actors!.some(a=>a.actor_id===hiddenActor!.id)).toBe(false);
+  let snap = await page();
+  while (true) {
+    expect(snap.actors!.some(a=>a.actor_id===hiddenActor!.id)).toBe(false);
+    expect(snap.changes.length+snap.actors!.length).toBeLessThanOrEqual(200);
+    if (!snap.has_more) break;
+    snap = await page(snap.next_cursor);
+  }
+  const start = await synced();
+  await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id)
+    SELECT ${workspaceId},${scopeId},${channelId},'row bound',${actorId},${actorId} FROM generate_series(1,200)`;
+  const bounded = await page(start);
+  expect(bounded.changes.length).toBe(199);expect(bounded.actors!.length).toBe(1);expect(bounded.has_more).toBe(true);
+  expect((await page(bounded.next_cursor)).changes.length).toBe(1);
+  await db`DELETE FROM flightdeck_pg_messages WHERE workspace_id=${workspaceId} AND body='row bound'`;
+});
+
+test('actor label bytes defer the entire change without cursor loss and oversized identity fails', async () => {
+  const [author] = await db`INSERT INTO flightdeck_pg_actors(npub,kind,display_name) VALUES('npub1largeactor','agent',repeat('L',600000)) RETURNING id`;
+  await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${workspaceId},${author!.id},'agent')`;
+  const start = await synced();
+  await message('x'.repeat(500000));
+  const [second] = await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id)
+    VALUES(${workspaceId},${scopeId},${channelId},'second',${author!.id},${author!.id}) RETURNING id`;
+  const first = await page(start);
+  expect(first.changes.length).toBe(1);expect(first.actors!.some(a=>a.actor_id===author!.id)).toBe(false);
+  const next = await page(first.next_cursor);
+  expect(next.changes[0]!.id).toBe(second!.id);expect(next.actors![0]!.display_name!.length).toBe(600000);
+  expect(Buffer.byteLength(JSON.stringify(next))).toBeLessThanOrEqual(1048576);
+  await db`UPDATE flightdeck_pg_actors SET display_name=repeat('L',1100000) WHERE id=${author!.id}`;
+  await expect(page(first.next_cursor)).rejects.toMatchObject({status:413,code:'record_too_large'});
+  await db`UPDATE flightdeck_pg_actors SET display_name='restored' WHERE id=${author!.id}`;
+});
+
 test('canonical one-record delta, replay and explicit soft/hard deletion',async()=>{
   const cursor=await synced(); const m=await message('hello');
   const p=await page(cursor);expect(p.mode).toBe('delta');expect(p.changes.length).toBe(1);
@@ -230,5 +280,40 @@ test('harmless actor profile updates preserve cursors but authority rotation res
   await expect(page(cursor)).rejects.toMatchObject({status:409,code:'reset_required'});
   await db`UPDATE flightdeck_pg_actors SET npub='npub1recordtest' WHERE id=${actorId}`;
 });
+
+test('deep effective branches keyset huge equal-time history without full payload materialization', async () => {
+  async function thread(parent: string|null = null, point: string|null = null) {
+    const [t] = await db`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,parent_thread_id,branch_point_message_id,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scopeId},${channelId},'branch bound',${parent},${point},${actorId},${actorId}) RETURNING id`;
+    return t!.id as string;
+  }
+  const root = await thread();
+  for(let batch=1;batch<=12000;batch+=1000) await db`INSERT INTO flightdeck_pg_messages(id,workspace_id,scope_id,channel_id,thread_id,body,created_at,created_by_actor_id,updated_by_actor_id)
+    SELECT ('80000000-0000-4000-8000-'||lpad(g::text,12,'0'))::uuid,${workspaceId},${scopeId},${channelId},${root},repeat('body',250),'2026-01-01T00:00:00.123456Z',${actorId},${actorId} FROM generate_series(${batch}::integer,${batch+999}::integer) g`;
+  const anchor = '80000000-0000-4000-8000-000000011990';
+  await db`UPDATE flightdeck_pg_messages SET deleted_at=now() WHERE id=${anchor}`;
+  let leaf = root;
+  for(let depth=0;depth<50;depth++) leaf=await thread(leaf,anchor);
+  const [own] = await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,thread_id,body,created_at,created_by_actor_id,updated_by_actor_id)
+    VALUES(${workspaceId},${scopeId},${channelId},${leaf},'leaf','2026-01-02',${actorId},${actorId}) RETURNING id`;
+  let payloadRows=0,driverBytes=0;
+  const measured=postgres({...conn,database:dbName,transform:{row(row){driverBytes+=Buffer.byteLength(JSON.stringify(row));if('body' in row)payloadRows++;return row;}}});
+  try {
+    const input={workspaceId,channelId,threadId:leaf,limit:20,afterCreatedAt:'2026-01-01T00:00:00.123999Z',afterId:'80000000-0000-4000-8000-000000011970'};
+    const first=await listEffectiveFlightDeckPgThreadMessages(input,measured);
+    expect(first).toHaveLength(20);expect(first.at(-1)!.id).toBe(anchor);expect(first.at(-1)!.deleted_at).not.toBeNull();
+    expect(payloadRows).toBe(20);expect(driverBytes).toBeLessThan(150000);
+    const next=await listEffectiveFlightDeckPgThreadMessages({...input,afterId:anchor},measured);
+    expect(next.map(m=>m.id)).toEqual([own!.id]);expect(next[0]!.inherited).toBe(false);
+    payloadRows=0;
+    expect((await listEffectiveFlightDeckPgThreadMessages({workspaceId,channelId,threadId:leaf,messageId:anchor,limit:1},measured))[0]!.id).toBe(anchor);
+    expect(payloadRows).toBe(1);
+    const invalid=await thread(leaf,'80000000-0000-4000-8000-000000012000');
+    await expect(listEffectiveFlightDeckPgThreadMessages({workspaceId,channelId,threadId:invalid,limit:20},measured)).rejects.toThrow('thread_branch_point_missing');
+    const earlier=await thread(leaf,'80000000-0000-4000-8000-000000000002');
+    const prefix=await listEffectiveFlightDeckPgThreadMessages({workspaceId,channelId,threadId:earlier,limit:20},measured);
+    expect(prefix.map(m=>m.id)).toEqual(['80000000-0000-4000-8000-000000000001','80000000-0000-4000-8000-000000000002']);
+  }finally{await measured.end();}
+},30000);
 
 });

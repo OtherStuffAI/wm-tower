@@ -7,30 +7,30 @@
   "results": [
     {
       "history": 1000,
-      "insert_ms": 94.16324999999999,
+      "insert_ms": 89.55516700000001,
       "baseline_window": {
-        "median_ms": 0.3568339999999921,
-        "p95_ms": 0.4619999999999891,
+        "median_ms": 0.34387499999999704,
+        "p95_ms": 0.4533749999999941,
         "rows": 50,
         "payload_bytes": 27201
       },
       "indexed_window": {
-        "median_ms": 0.19633299999998144,
-        "p95_ms": 0.5230420000000038,
+        "median_ms": 0.15612500000000296,
+        "p95_ms": 0.24774999999999636,
         "rows": 50,
         "payload_bytes": 27201
       },
       "legacy_message_bundle": {
-        "median_ms": 1.3678330000000187,
-        "p95_ms": 1.8432090000000017,
-        "rows": 1011,
-        "payload_bytes": 549820
+        "median_ms": 1.2218750000000114,
+        "p95_ms": 1.771000000000015,
+        "rows": 1001,
+        "payload_bytes": 544442
       },
       "record_delta": {
-        "median_ms": 1.2851670000000013,
-        "p95_ms": 1.9499169999999992,
+        "median_ms": 1.171750000000003,
+        "p95_ms": 1.8562499999999886,
         "rows": 1,
-        "payload_bytes": 1259
+        "payload_bytes": 1391
       },
       "old_plan": [
         {
@@ -38,12 +38,12 @@
             "Node Type": "Limit",
             "Parallel Aware": false,
             "Async Capable": false,
-            "Startup Cost": 59.31,
-            "Total Cost": 59.44,
+            "Startup Cost": 58.89,
+            "Total Cost": 59.02,
             "Plan Rows": 50,
             "Plan Width": 230,
-            "Actual Startup Time": 0.215,
-            "Actual Total Time": 0.218,
+            "Actual Startup Time": 0.168,
+            "Actual Total Time": 0.171,
             "Actual Rows": 50,
             "Actual Loops": 1,
             "Shared Hit Blocks": 22,
@@ -62,12 +62,12 @@
                 "Parent Relationship": "Outer",
                 "Parallel Aware": false,
                 "Async Capable": false,
-                "Startup Cost": 59.31,
-                "Total Cost": 60.15,
-                "Plan Rows": 337,
+                "Startup Cost": 58.89,
+                "Total Cost": 59.73,
+                "Plan Rows": 333,
                 "Plan Width": 230,
-                "Actual Startup Time": 0.214,
-                "Actual Total Time": 0.216,
+                "Actual Startup Time": 0.168,
+                "Actual Total Time": 0.169,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
                 "Sort Key": [
@@ -75,7 +75,7 @@
                   "id"
                 ],
                 "Sort Method": "quicksort",
-                "Sort Space Used": 40,
+                "Sort Space Used": 38,
                 "Sort Space Type": "Memory",
                 "Shared Hit Blocks": 22,
                 "Shared Read Blocks": 0,
@@ -96,15 +96,15 @@
                     "Relation Name": "flightdeck_pg_messages",
                     "Alias": "flightdeck_pg_messages",
                     "Startup Cost": 0,
-                    "Total Cost": 48.12,
-                    "Plan Rows": 337,
+                    "Total Cost": 47.83,
+                    "Plan Rows": 333,
                     "Plan Width": 230,
-                    "Actual Startup Time": 0.004,
-                    "Actual Total Time": 0.198,
-                    "Actual Rows": 62,
+                    "Actual Startup Time": 0.148,
+                    "Actual Total Time": 0.16,
+                    "Actual Rows": 52,
                     "Actual Loops": 1,
-                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:00.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
-                    "Rows Removed by Filter": 950,
+                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:00.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                    "Rows Removed by Filter": 949,
                     "Shared Hit Blocks": 22,
                     "Shared Read Blocks": 0,
                     "Shared Dirtied Blocks": 0,
@@ -121,7 +121,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -132,9 +132,9 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.042,
+          "Planning Time": 0.056,
           "Triggers": [],
-          "Execution Time": 0.226
+          "Execution Time": 0.178
         }
       ],
       "indexed_plan": [
@@ -144,14 +144,14 @@
             "Parallel Aware": false,
             "Async Capable": false,
             "Startup Cost": 0.28,
-            "Total Cost": 12.43,
+            "Total Cost": 10.76,
             "Plan Rows": 50,
             "Plan Width": 230,
-            "Actual Startup Time": 0.005,
-            "Actual Total Time": 0.017,
+            "Actual Startup Time": 0.003,
+            "Actual Total Time": 0.013,
             "Actual Rows": 50,
             "Actual Loops": 1,
-            "Shared Hit Blocks": 4,
+            "Shared Hit Blocks": 5,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -172,16 +172,16 @@
                 "Relation Name": "flightdeck_pg_messages",
                 "Alias": "flightdeck_pg_messages",
                 "Startup Cost": 0.28,
-                "Total Cost": 82.23,
-                "Plan Rows": 337,
+                "Total Cost": 70.12,
+                "Plan Rows": 333,
                 "Plan Width": 230,
-                "Actual Startup Time": 0.005,
-                "Actual Total Time": 0.015,
+                "Actual Startup Time": 0.003,
+                "Actual Total Time": 0.012,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:00.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:00.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
                 "Rows Removed by Index Recheck": 0,
-                "Shared Hit Blocks": 4,
+                "Shared Hit Blocks": 5,
                 "Shared Read Blocks": 0,
                 "Shared Dirtied Blocks": 0,
                 "Shared Written Blocks": 0,
@@ -195,7 +195,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -208,7 +208,7 @@
           },
           "Planning Time": 0.037,
           "Triggers": [],
-          "Execution Time": 0.024
+          "Execution Time": 0.019
         }
       ],
       "delta_plan": [
@@ -218,11 +218,11 @@
             "Parallel Aware": false,
             "Async Capable": false,
             "Startup Cost": 0.28,
-            "Total Cost": 8.3,
+            "Total Cost": 8.29,
             "Plan Rows": 1,
-            "Plan Width": 762,
+            "Plan Width": 925,
             "Actual Startup Time": 0.001,
-            "Actual Total Time": 0.001,
+            "Actual Total Time": 0.002,
             "Actual Rows": 1,
             "Actual Loops": 1,
             "Shared Hit Blocks": 3,
@@ -246,14 +246,14 @@
                 "Relation Name": "flightdeck_pg_record_journal",
                 "Alias": "flightdeck_pg_record_journal",
                 "Startup Cost": 0.28,
-                "Total Cost": 8.3,
+                "Total Cost": 8.29,
                 "Plan Rows": 1,
-                "Plan Width": 762,
+                "Plan Width": 925,
                 "Actual Startup Time": 0.001,
                 "Actual Total Time": 0.001,
                 "Actual Rows": 1,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '1448'::bigint))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (\"position\" > '1002'::bigint))",
                 "Rows Removed by Index Recheck": 0,
                 "Shared Hit Blocks": 3,
                 "Shared Read Blocks": 0,
@@ -280,27 +280,27 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.01,
+          "Planning Time": 0.012,
           "Triggers": [],
-          "Execution Time": 0.003
+          "Execution Time": 0.004
         }
       ],
       "sizes": [
         {
           "relname": "flightdeck_pg_messages",
-          "bytes": "835584"
+          "bytes": "696320"
         },
         {
           "relname": "flightdeck_pg_record_current",
-          "bytes": "1286144"
+          "bytes": "1204224"
         },
         {
           "relname": "flightdeck_pg_record_journal",
-          "bytes": "6422528"
+          "bytes": "1122304"
         },
         {
           "relname": "idx_fd_message_timeline",
-          "bytes": "172032"
+          "bytes": "98304"
         },
         {
           "relname": "idx_fd_message_thread_timeline",
@@ -310,30 +310,30 @@
     },
     {
       "history": 10000,
-      "insert_ms": 924.9119589999999,
+      "insert_ms": 849.325709,
       "baseline_window": {
-        "median_ms": 2.0289170000000922,
-        "p95_ms": 2.946042000000034,
+        "median_ms": 1.6310409999998683,
+        "p95_ms": 1.8187909999999192,
         "rows": 50,
         "payload_bytes": 27251
       },
       "indexed_window": {
-        "median_ms": 0.19533400000000256,
-        "p95_ms": 0.5191669999999249,
+        "median_ms": 0.15308300000015151,
+        "p95_ms": 0.17437500000005457,
         "rows": 50,
         "payload_bytes": 27251
       },
       "legacy_message_bundle": {
-        "median_ms": 14.501167000000123,
-        "p95_ms": 16.882249999999885,
+        "median_ms": 11.860291999999845,
+        "p95_ms": 12.787249999999858,
         "rows": 10000,
         "payload_bytes": 5448895
       },
       "record_delta": {
-        "median_ms": 1.2183330000000296,
-        "p95_ms": 1.9227499999999509,
+        "median_ms": 0.946416999999883,
+        "p95_ms": 1.2667500000000018,
         "rows": 1,
-        "payload_bytes": 1260
+        "payload_bytes": 1392
       },
       "old_plan": [
         {
@@ -341,15 +341,15 @@
             "Node Type": "Limit",
             "Parallel Aware": false,
             "Async Capable": false,
-            "Startup Cost": 583.5,
-            "Total Cost": 583.62,
+            "Startup Cost": 582.11,
+            "Total Cost": 582.24,
             "Plan Rows": 50,
             "Plan Width": 231,
-            "Actual Startup Time": 2.374,
-            "Actual Total Time": 2.377,
+            "Actual Startup Time": 1.619,
+            "Actual Total Time": 1.621,
             "Actual Rows": 50,
             "Actual Loops": 1,
-            "Shared Hit Blocks": 214,
+            "Shared Hit Blocks": 213,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -365,12 +365,12 @@
                 "Parent Relationship": "Outer",
                 "Parallel Aware": false,
                 "Async Capable": false,
-                "Startup Cost": 583.5,
-                "Total Cost": 591.84,
-                "Plan Rows": 3337,
+                "Startup Cost": 582.11,
+                "Total Cost": 590.45,
+                "Plan Rows": 3334,
                 "Plan Width": 231,
-                "Actual Startup Time": 2.373,
-                "Actual Total Time": 2.374,
+                "Actual Startup Time": 1.619,
+                "Actual Total Time": 1.62,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
                 "Sort Key": [
@@ -378,9 +378,9 @@
                   "id"
                 ],
                 "Sort Method": "quicksort",
-                "Sort Space Used": 41,
+                "Sort Space Used": 38,
                 "Sort Space Type": "Memory",
-                "Shared Hit Blocks": 214,
+                "Shared Hit Blocks": 213,
                 "Shared Read Blocks": 0,
                 "Shared Dirtied Blocks": 0,
                 "Shared Written Blocks": 0,
@@ -399,16 +399,16 @@
                     "Relation Name": "flightdeck_pg_messages",
                     "Alias": "flightdeck_pg_messages",
                     "Startup Cost": 0,
-                    "Total Cost": 472.64,
-                    "Plan Rows": 3337,
+                    "Total Cost": 471.36,
+                    "Plan Rows": 3334,
                     "Plan Width": 231,
-                    "Actual Startup Time": 0.01,
-                    "Actual Total Time": 2.353,
-                    "Actual Rows": 63,
+                    "Actual Startup Time": 0.165,
+                    "Actual Total Time": 1.609,
+                    "Actual Rows": 53,
                     "Actual Loops": 1,
-                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:09.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
-                    "Rows Removed by Filter": 9950,
-                    "Shared Hit Blocks": 214,
+                    "Filter": "((deleted_at IS NULL) AND (workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:00:09.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                    "Rows Removed by Filter": 9949,
+                    "Shared Hit Blocks": 213,
                     "Shared Read Blocks": 0,
                     "Shared Dirtied Blocks": 0,
                     "Shared Written Blocks": 0,
@@ -424,7 +424,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -435,9 +435,9 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.112,
+          "Planning Time": 0.053,
           "Triggers": [],
-          "Execution Time": 2.395
+          "Execution Time": 1.63
         }
       ],
       "indexed_plan": [
@@ -446,12 +446,12 @@
             "Node Type": "Limit",
             "Parallel Aware": false,
             "Async Capable": false,
-            "Startup Cost": 0.41,
-            "Total Cost": 11.56,
+            "Startup Cost": 0.29,
+            "Total Cost": 9.85,
             "Plan Rows": 50,
             "Plan Width": 231,
-            "Actual Startup Time": 0.005,
-            "Actual Total Time": 0.016,
+            "Actual Startup Time": 0.003,
+            "Actual Total Time": 0.013,
             "Actual Rows": 50,
             "Actual Loops": 1,
             "Shared Hit Blocks": 5,
@@ -474,15 +474,15 @@
                 "Index Name": "idx_fd_message_timeline",
                 "Relation Name": "flightdeck_pg_messages",
                 "Alias": "flightdeck_pg_messages",
-                "Startup Cost": 0.41,
-                "Total Cost": 744.86,
-                "Plan Rows": 3337,
+                "Startup Cost": 0.29,
+                "Total Cost": 638.34,
+                "Plan Rows": 3334,
                 "Plan Width": 231,
-                "Actual Startup Time": 0.005,
-                "Actual Total Time": 0.015,
+                "Actual Startup Time": 0.003,
+                "Actual Total Time": 0.012,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:09.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:00:09.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
                 "Rows Removed by Index Recheck": 0,
                 "Shared Hit Blocks": 5,
                 "Shared Read Blocks": 0,
@@ -498,7 +498,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -509,9 +509,9 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.061,
+          "Planning Time": 0.038,
           "Triggers": [],
-          "Execution Time": 0.024
+          "Execution Time": 0.019
         }
       ],
       "delta_plan": [
@@ -523,9 +523,9 @@
             "Startup Cost": 0.29,
             "Total Cost": 8.3,
             "Plan Rows": 1,
-            "Plan Width": 903,
-            "Actual Startup Time": 0.005,
-            "Actual Total Time": 0.005,
+            "Plan Width": 926,
+            "Actual Startup Time": 0.002,
+            "Actual Total Time": 0.003,
             "Actual Rows": 1,
             "Actual Loops": 1,
             "Shared Hit Blocks": 3,
@@ -551,12 +551,12 @@
                 "Startup Cost": 0.29,
                 "Total Cost": 8.3,
                 "Plan Rows": 1,
-                "Plan Width": 903,
-                "Actual Startup Time": 0.004,
-                "Actual Total Time": 0.005,
+                "Plan Width": 926,
+                "Actual Startup Time": 0.002,
+                "Actual Total Time": 0.002,
                 "Actual Rows": 1,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '10449'::bigint))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (\"position\" > '10003'::bigint))",
                 "Rows Removed by Index Recheck": 0,
                 "Shared Hit Blocks": 3,
                 "Shared Read Blocks": 0,
@@ -583,27 +583,27 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.044,
+          "Planning Time": 0.019,
           "Triggers": [],
-          "Execution Time": 0.008
+          "Execution Time": 0.006
         }
       ],
       "sizes": [
         {
           "relname": "flightdeck_pg_messages",
-          "bytes": "6135808"
+          "bytes": "5373952"
         },
         {
           "relname": "flightdeck_pg_record_current",
-          "bytes": "11485184"
+          "bytes": "11419648"
         },
         {
           "relname": "flightdeck_pg_record_journal",
-          "bytes": "15998976"
+          "bytes": "10706944"
         },
         {
           "relname": "idx_fd_message_timeline",
-          "bytes": "1433600"
+          "bytes": "786432"
         },
         {
           "relname": "idx_fd_message_thread_timeline",
@@ -613,30 +613,30 @@
     },
     {
       "history": 100000,
-      "insert_ms": 11095.572833,
+      "insert_ms": 8424.1525,
       "baseline_window": {
-        "median_ms": 9.816417000000001,
-        "p95_ms": 10.186666000001424,
+        "median_ms": 10.549666000000798,
+        "p95_ms": 18.457792000001064,
         "rows": 50,
         "payload_bytes": 27301
       },
       "indexed_window": {
-        "median_ms": 0.16470900000058464,
-        "p95_ms": 0.18029199999909906,
+        "median_ms": 0.147000000000844,
+        "p95_ms": 0.18266599999878963,
         "rows": 50,
         "payload_bytes": 27301
       },
       "legacy_message_bundle": {
-        "median_ms": 11.759500000000116,
-        "p95_ms": 12.347541999999521,
+        "median_ms": 11.81720900000073,
+        "p95_ms": 12.944166999999652,
         "rows": 10000,
         "payload_bytes": 5448895
       },
       "record_delta": {
-        "median_ms": 0.6505419999994047,
-        "p95_ms": 0.7348340000007738,
+        "median_ms": 0.7196670000012091,
+        "p95_ms": 0.8922500000007858,
         "rows": 1,
-        "payload_bytes": 1261
+        "payload_bytes": 1393
       },
       "old_plan": [
         {
@@ -644,15 +644,15 @@
             "Node Type": "Limit",
             "Parallel Aware": false,
             "Async Capable": false,
-            "Startup Cost": 5385.24,
-            "Total Cost": 5390.99,
+            "Startup Cost": 5384.01,
+            "Total Cost": 5389.76,
             "Plan Rows": 50,
             "Plan Width": 232,
-            "Actual Startup Time": 9.109,
-            "Actual Total Time": 9.937,
+            "Actual Startup Time": 9.118,
+            "Actual Total Time": 9.838,
             "Actual Rows": 50,
             "Actual Loops": 1,
-            "Shared Hit Blocks": 2229,
+            "Shared Hit Blocks": 2228,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -668,17 +668,17 @@
                 "Parent Relationship": "Outer",
                 "Parallel Aware": false,
                 "Async Capable": false,
-                "Startup Cost": 5385.24,
-                "Total Cost": 7640.39,
-                "Plan Rows": 19610,
+                "Startup Cost": 5384.01,
+                "Total Cost": 7638.93,
+                "Plan Rows": 19608,
                 "Plan Width": 232,
-                "Actual Startup Time": 9.109,
-                "Actual Total Time": 9.935,
+                "Actual Startup Time": 9.118,
+                "Actual Total Time": 9.836,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
                 "Workers Planned": 1,
                 "Workers Launched": 1,
-                "Shared Hit Blocks": 2229,
+                "Shared Hit Blocks": 2228,
                 "Shared Read Blocks": 0,
                 "Shared Dirtied Blocks": 0,
                 "Shared Written Blocks": 0,
@@ -694,22 +694,22 @@
                     "Parent Relationship": "Outer",
                     "Parallel Aware": false,
                     "Async Capable": false,
-                    "Startup Cost": 4385.23,
-                    "Total Cost": 4434.26,
-                    "Plan Rows": 19610,
+                    "Startup Cost": 4384,
+                    "Total Cost": 4433.02,
+                    "Plan Rows": 19608,
                     "Plan Width": 232,
-                    "Actual Startup Time": 8.049,
-                    "Actual Total Time": 8.049,
-                    "Actual Rows": 26,
+                    "Actual Startup Time": 8.004,
+                    "Actual Total Time": 8.005,
+                    "Actual Rows": 25,
                     "Actual Loops": 2,
                     "Sort Key": [
                       "(date_trunc('milliseconds'::text, created_at))",
                       "id"
                     ],
                     "Sort Method": "quicksort",
-                    "Sort Space Used": 39,
+                    "Sort Space Used": 35,
                     "Sort Space Type": "Memory",
-                    "Shared Hit Blocks": 2229,
+                    "Shared Hit Blocks": 2228,
                     "Shared Read Blocks": 0,
                     "Shared Dirtied Blocks": 0,
                     "Shared Written Blocks": 0,
@@ -723,7 +723,7 @@
                       {
                         "Worker Number": 0,
                         "Sort Method": "quicksort",
-                        "Sort Space Used": 26,
+                        "Sort Space Used": 28,
                         "Sort Space Type": "Memory"
                       }
                     ],
@@ -736,16 +736,16 @@
                         "Relation Name": "flightdeck_pg_messages",
                         "Alias": "flightdeck_pg_messages",
                         "Startup Cost": 0,
-                        "Total Cost": 3733.8,
-                        "Plan Rows": 19610,
+                        "Total Cost": 3732.64,
+                        "Plan Rows": 19608,
                         "Plan Width": 232,
-                        "Actual Startup Time": 3.521,
-                        "Actual Total Time": 8.036,
-                        "Actual Rows": 32,
+                        "Actual Startup Time": 3.559,
+                        "Actual Total Time": 7.991,
+                        "Actual Rows": 27,
                         "Actual Loops": 2,
-                        "Filter": "((deleted_at IS NULL) AND (workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:01:39.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
-                        "Rows Removed by Filter": 49975,
-                        "Shared Hit Blocks": 2214,
+                        "Filter": "((deleted_at IS NULL) AND (workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, created_at), id) > ROW(date_trunc('milliseconds'::text, '2025-01-01 00:01:39.95+08'::timestamp with time zone), '00000000-0000-0000-0000-000000000000'::uuid)))",
+                        "Rows Removed by Filter": 49974,
+                        "Shared Hit Blocks": 2213,
                         "Shared Read Blocks": 0,
                         "Shared Dirtied Blocks": 0,
                         "Shared Written Blocks": 0,
@@ -764,7 +764,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -777,7 +777,7 @@
           },
           "Planning Time": 0.054,
           "Triggers": [],
-          "Execution Time": 9.945
+          "Execution Time": 9.849
         }
       ],
       "indexed_plan": [
@@ -787,14 +787,14 @@
             "Parallel Aware": false,
             "Async Capable": false,
             "Startup Cost": 0.42,
-            "Total Cost": 11.66,
+            "Total Cost": 10.12,
             "Plan Rows": 50,
             "Plan Width": 232,
-            "Actual Startup Time": 0.007,
-            "Actual Total Time": 0.016,
+            "Actual Startup Time": 0.006,
+            "Actual Total Time": 0.014,
             "Actual Rows": 50,
             "Actual Loops": 1,
-            "Shared Hit Blocks": 6,
+            "Shared Hit Blocks": 5,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -815,16 +815,16 @@
                 "Relation Name": "flightdeck_pg_messages",
                 "Alias": "flightdeck_pg_messages",
                 "Startup Cost": 0.42,
-                "Total Cost": 7496.5,
-                "Plan Rows": 33337,
+                "Total Cost": 6470.66,
+                "Plan Rows": 33334,
                 "Plan Width": 232,
-                "Actual Startup Time": 0.006,
-                "Actual Total Time": 0.014,
+                "Actual Startup Time": 0.005,
+                "Actual Total Time": 0.012,
                 "Actual Rows": 50,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'd708ef23-fefa-4d91-9fee-1f9b3ea9bc8c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:01:39.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = '9aeacf86-6223-49df-af5a-7dacd104140c'::uuid) AND (ROW(date_trunc('milliseconds'::text, (created_at AT TIME ZONE 'UTC'::text)), id) > ROW('2024-12-31 16:01:39.95'::timestamp without time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
                 "Rows Removed by Index Recheck": 0,
-                "Shared Hit Blocks": 6,
+                "Shared Hit Blocks": 5,
                 "Shared Read Blocks": 0,
                 "Shared Dirtied Blocks": 0,
                 "Shared Written Blocks": 0,
@@ -838,7 +838,7 @@
             ]
           },
           "Planning": {
-            "Shared Hit Blocks": 3,
+            "Shared Hit Blocks": 4,
             "Shared Read Blocks": 0,
             "Shared Dirtied Blocks": 0,
             "Shared Written Blocks": 0,
@@ -849,9 +849,9 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.06,
+          "Planning Time": 0.052,
           "Triggers": [],
-          "Execution Time": 0.023
+          "Execution Time": 0.022
         }
       ],
       "delta_plan": [
@@ -863,9 +863,9 @@
             "Startup Cost": 0.42,
             "Total Cost": 24.93,
             "Plan Rows": 10,
-            "Plan Width": 925,
+            "Plan Width": 927,
             "Actual Startup Time": 0.002,
-            "Actual Total Time": 0.003,
+            "Actual Total Time": 0.002,
             "Actual Rows": 1,
             "Actual Loops": 1,
             "Shared Hit Blocks": 4,
@@ -891,12 +891,12 @@
                 "Startup Cost": 0.42,
                 "Total Cost": 24.93,
                 "Plan Rows": 10,
-                "Plan Width": 925,
+                "Plan Width": 927,
                 "Actual Startup Time": 0.002,
                 "Actual Total Time": 0.002,
                 "Actual Rows": 1,
                 "Actual Loops": 1,
-                "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (\"position\" > '100450'::bigint))",
+                "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (\"position\" > '100004'::bigint))",
                 "Rows Removed by Index Recheck": 0,
                 "Shared Hit Blocks": 4,
                 "Shared Read Blocks": 0,
@@ -923,27 +923,27 @@
             "Temp Read Blocks": 0,
             "Temp Written Blocks": 0
           },
-          "Planning Time": 0.014,
+          "Planning Time": 0.011,
           "Triggers": [],
-          "Execution Time": 0.005
+          "Execution Time": 0.004
         }
       ],
       "sizes": [
         {
           "relname": "flightdeck_pg_messages",
-          "bytes": "60203008"
+          "bytes": "54165504"
         },
         {
           "relname": "flightdeck_pg_record_current",
-          "bytes": "114073600"
+          "bytes": "113803264"
         },
         {
           "relname": "flightdeck_pg_record_journal",
-          "bytes": "111845376"
+          "bytes": "106545152"
         },
         {
           "relname": "idx_fd_message_timeline",
-          "bytes": "14041088"
+          "bytes": "7749632"
         },
         {
           "relname": "idx_fd_message_thread_timeline",
@@ -962,17 +962,17 @@
           "Parallel Aware": false,
           "Async Capable": false,
           "Startup Cost": 0.41,
-          "Total Cost": 7.74,
+          "Total Cost": 5.32,
           "Plan Rows": 20,
           "Plan Width": 236,
-          "Actual Startup Time": 0.006,
-          "Actual Total Time": 0.012,
+          "Actual Startup Time": 0.009,
+          "Actual Total Time": 0.02,
           "Actual Rows": 20,
           "Actual Loops": 1,
-          "Shared Hit Blocks": 5,
-          "Shared Read Blocks": 0,
+          "Shared Hit Blocks": 4,
+          "Shared Read Blocks": 2,
           "Shared Dirtied Blocks": 0,
-          "Shared Written Blocks": 0,
+          "Shared Written Blocks": 2,
           "Local Hit Blocks": 0,
           "Local Read Blocks": 0,
           "Local Dirtied Blocks": 0,
@@ -990,21 +990,21 @@
               "Relation Name": "flightdeck_pg_tasks",
               "Alias": "flightdeck_pg_tasks",
               "Startup Cost": 0.41,
-              "Total Cost": 1221.8,
+              "Total Cost": 818.04,
               "Plan Rows": 3333,
               "Plan Width": 236,
-              "Actual Startup Time": 0.006,
-              "Actual Total Time": 0.011,
+              "Actual Startup Time": 0.009,
+              "Actual Total Time": 0.019,
               "Actual Rows": 20,
               "Actual Loops": 1,
-              "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (channel_id = 'efc576e3-a6b8-417e-8923-aeb04b731544'::uuid) AND (ROW((- EXTRACT(epoch FROM (updated_at AT TIME ZONE 'UTC'::text))), id) > ROW('-1735689601.000000'::numeric, '00000000-0000-0000-0000-000000000000'::uuid)))",
+              "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (channel_id = 'f80e2330-cfd5-46e9-8890-a269987ce38c'::uuid) AND (ROW((- EXTRACT(epoch FROM (updated_at AT TIME ZONE 'UTC'::text))), id) > ROW('-1735689601.000000'::numeric, '00000000-0000-0000-0000-000000000000'::uuid)))",
               "Rows Removed by Index Recheck": 0,
               "Filter": "(state = 'new'::text)",
               "Rows Removed by Filter": 0,
-              "Shared Hit Blocks": 5,
-              "Shared Read Blocks": 0,
+              "Shared Hit Blocks": 4,
+              "Shared Read Blocks": 2,
               "Shared Dirtied Blocks": 0,
-              "Shared Written Blocks": 0,
+              "Shared Written Blocks": 2,
               "Local Hit Blocks": 0,
               "Local Read Blocks": 0,
               "Local Dirtied Blocks": 0,
@@ -1015,10 +1015,10 @@
           ]
         },
         "Planning": {
-          "Shared Hit Blocks": 147,
-          "Shared Read Blocks": 0,
+          "Shared Hit Blocks": 118,
+          "Shared Read Blocks": 1,
           "Shared Dirtied Blocks": 0,
-          "Shared Written Blocks": 0,
+          "Shared Written Blocks": 1,
           "Local Hit Blocks": 0,
           "Local Read Blocks": 0,
           "Local Dirtied Blocks": 0,
@@ -1026,9 +1026,9 @@
           "Temp Read Blocks": 0,
           "Temp Written Blocks": 0
         },
-        "Planning Time": 0.242,
+        "Planning Time": 0.201,
         "Triggers": [],
-        "Execution Time": 0.023
+        "Execution Time": 0.029
       }
     ],
     "comment_plan": [
@@ -1037,18 +1037,18 @@
           "Node Type": "Limit",
           "Parallel Aware": false,
           "Async Capable": false,
-          "Startup Cost": 0.57,
-          "Total Cost": 25.49,
+          "Startup Cost": 0.45,
+          "Total Cost": 10.66,
           "Plan Rows": 20,
           "Plan Width": 205,
-          "Actual Startup Time": 0.014,
-          "Actual Total Time": 0.401,
+          "Actual Startup Time": 0.008,
+          "Actual Total Time": 0.021,
           "Actual Rows": 20,
           "Actual Loops": 1,
           "Shared Hit Blocks": 5,
-          "Shared Read Blocks": 2,
+          "Shared Read Blocks": 0,
           "Shared Dirtied Blocks": 0,
-          "Shared Written Blocks": 2,
+          "Shared Written Blocks": 0,
           "Local Hit Blocks": 0,
           "Local Read Blocks": 0,
           "Local Dirtied Blocks": 0,
@@ -1062,19 +1062,19 @@
               "Parallel Aware": false,
               "Async Capable": false,
               "Join Type": "Left",
-              "Startup Cost": 0.57,
-              "Total Cost": 623.61,
-              "Plan Rows": 500,
+              "Startup Cost": 0.45,
+              "Total Cost": 511.12,
+              "Plan Rows": 1000,
               "Plan Width": 205,
-              "Actual Startup Time": 0.014,
-              "Actual Total Time": 0.4,
+              "Actual Startup Time": 0.008,
+              "Actual Total Time": 0.02,
               "Actual Rows": 20,
               "Actual Loops": 1,
               "Inner Unique": true,
               "Shared Hit Blocks": 5,
-              "Shared Read Blocks": 2,
+              "Shared Read Blocks": 0,
               "Shared Dirtied Blocks": 0,
-              "Shared Written Blocks": 2,
+              "Shared Written Blocks": 0,
               "Local Hit Blocks": 0,
               "Local Read Blocks": 0,
               "Local Dirtied Blocks": 0,
@@ -1091,17 +1091,17 @@
                   "Index Name": "idx_fd_task_comment_timeline",
                   "Relation Name": "flightdeck_pg_task_comments",
                   "Alias": "tc",
-                  "Startup Cost": 0.41,
-                  "Total Cost": 610.6,
-                  "Plan Rows": 500,
+                  "Startup Cost": 0.29,
+                  "Total Cost": 485.72,
+                  "Plan Rows": 1000,
                   "Plan Width": 173,
                   "Actual Startup Time": 0.004,
                   "Actual Total Time": 0.005,
                   "Actual Rows": 20,
                   "Actual Loops": 1,
-                  "Index Cond": "((workspace_id = 'a250c378-f6f7-40d2-8c58-be33df25f379'::uuid) AND (task_id = 'a83f8035-40c3-44f0-a83b-ff25650f0e31'::uuid) AND (ROW(created_at, id) > ROW('2025-01-01 08:00:09+08'::timestamp with time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
+                  "Index Cond": "((workspace_id = 'aaa896d0-3d3c-43f3-a93a-cc72c68a29c3'::uuid) AND (task_id = '6bc7bc2e-859b-467b-b51e-e9aabb4296a6'::uuid) AND (ROW(created_at, id) > ROW('2025-01-01 08:00:09+08'::timestamp with time zone, '00000000-0000-0000-0000-000000000000'::uuid)))",
                   "Rows Removed by Index Recheck": 0,
-                  "Shared Hit Blocks": 5,
+                  "Shared Hit Blocks": 3,
                   "Shared Read Blocks": 0,
                   "Shared Dirtied Blocks": 0,
                   "Shared Written Blocks": 0,
@@ -1118,11 +1118,11 @@
                   "Parallel Aware": false,
                   "Async Capable": false,
                   "Startup Cost": 0.16,
-                  "Total Cost": 0.27,
+                  "Total Cost": 0.23,
                   "Plan Rows": 1,
                   "Plan Width": 48,
-                  "Actual Startup Time": 0.02,
-                  "Actual Total Time": 0.02,
+                  "Actual Startup Time": 0.001,
+                  "Actual Total Time": 0.001,
                   "Actual Rows": 1,
                   "Actual Loops": 20,
                   "Cache Key": "tc.created_by_actor_id",
@@ -1132,10 +1132,10 @@
                   "Cache Evictions": 0,
                   "Cache Overflows": 0,
                   "Peak Memory Usage": 1,
-                  "Shared Hit Blocks": 0,
-                  "Shared Read Blocks": 2,
+                  "Shared Hit Blocks": 2,
+                  "Shared Read Blocks": 0,
                   "Shared Dirtied Blocks": 0,
-                  "Shared Written Blocks": 2,
+                  "Shared Written Blocks": 0,
                   "Local Hit Blocks": 0,
                   "Local Read Blocks": 0,
                   "Local Dirtied Blocks": 0,
@@ -1153,19 +1153,19 @@
                       "Relation Name": "flightdeck_pg_actors",
                       "Alias": "creator",
                       "Startup Cost": 0.15,
-                      "Total Cost": 0.26,
+                      "Total Cost": 0.22,
                       "Plan Rows": 1,
                       "Plan Width": 48,
-                      "Actual Startup Time": 0.008,
-                      "Actual Total Time": 0.008,
+                      "Actual Startup Time": 0.002,
+                      "Actual Total Time": 0.002,
                       "Actual Rows": 1,
                       "Actual Loops": 1,
                       "Index Cond": "(id = tc.created_by_actor_id)",
                       "Rows Removed by Index Recheck": 0,
-                      "Shared Hit Blocks": 0,
-                      "Shared Read Blocks": 2,
+                      "Shared Hit Blocks": 2,
+                      "Shared Read Blocks": 0,
                       "Shared Dirtied Blocks": 0,
-                      "Shared Written Blocks": 2,
+                      "Shared Written Blocks": 0,
                       "Local Hit Blocks": 0,
                       "Local Read Blocks": 0,
                       "Local Dirtied Blocks": 0,
@@ -1180,10 +1180,10 @@
           ]
         },
         "Planning": {
-          "Shared Hit Blocks": 141,
-          "Shared Read Blocks": 3,
+          "Shared Hit Blocks": 86,
+          "Shared Read Blocks": 2,
           "Shared Dirtied Blocks": 0,
-          "Shared Written Blocks": 3,
+          "Shared Written Blocks": 2,
           "Local Hit Blocks": 0,
           "Local Read Blocks": 0,
           "Local Dirtied Blocks": 0,
@@ -1191,9 +1191,9 @@
           "Temp Read Blocks": 0,
           "Temp Written Blocks": 0
         },
-        "Planning Time": 0.239,
+        "Planning Time": 0.156,
         "Triggers": [],
-        "Execution Time": 0.41
+        "Execution Time": 0.028
       }
     ]
   }
