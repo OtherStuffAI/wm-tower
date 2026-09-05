@@ -31,6 +31,12 @@ SSL_CERT_FILE=/tmp/tower-native-forgejo/cert.pem \
   bun tests/fixtures/native-forgejo/smoke.ts
 ```
 
+The permission checks cover both direct collaborators and an independent native
+organization/team repository. With the identical already-issued OAuth token,
+adding team membership enables clone/push, changing team Write to Read preserves
+fetch but denies push, and removing membership denies clone/fetch/API reads.
+Assertions require unchanged credentials and no additional Tower sign-in.
+
 The fixture intentionally gives native access tokens a 15 second lifetime to
 prove actual expiration and repeat Nostr login. Each run uses new npubs, a fresh
 Tower database and new native usernames/repos. The test drops its Tower database;

@@ -142,6 +142,18 @@ try {
   assert.equal(protectedResult.status, 201);
   assert.notEqual((await command(['git', '-C', checkout, 'push', 'origin', 'HEAD:refs/heads/main'], env, undefined, true)).status, 0);
   evidence.branchProtection = 'main push denied';
+  // Native team grants are independent of direct collaborators and Tower state.
+  const org = `team-org-${suffix}`;
+  assert.equal((await api('/orgs', 'POST', { username: org, visibility: 'private' })).status, 201);
+  const teamRepo = await api(`/orgs/${org}/repos`, 'POST', { name: 'team-only', private: true, auto_init: true, default_branch: 'main' });
+  assert.equal(teamRepo.status, 201);
+  const team = await api(`/orgs/${org}/teams`, 'POST', { name: 'native-writers', permission: 'write', units: ['repo.code', 'repo.issues'] });
+  assert.equal(team.status, 201);
+  const teamPath = `/teams/${team.body.id}`;
+  assert.equal((await api(`${teamPath}/repos/${org}/team-only`, 'PUT')).status, 204);
+  const teamRemote = `${forgejoUrl}/${org}/team-only.git`;
+  const teamCheckout = join(directory, 'team-checkout');
+
   const beforeRelogin = completions;
   await new Promise(resolve => setTimeout(resolve, 16_000));
   assert.equal((await api('/user', 'GET', undefined, token)).status, 401);
@@ -162,6 +174,25 @@ try {
   assert.notEqual((await command(['git', 'clone', remote, join(directory, 'removed-clone')], env, undefined, true)).status, 0);
   assert.equal(completions, loginCount, 'Native read removal must not trigger a new login');
   evidence.nativePermissionChanges = 'same OAuth token: Write→Read denies push; removal denies clone/fetch/read';
+  assert.equal((await api('/user', 'GET', undefined, token)).status, 200);
+  assert.notEqual((await api(`/repos/${org}/team-only`, 'GET', undefined, token)).status, 200);
+  assert.equal((await api(`${teamPath}/members/${native.username}`, 'PUT')).status, 204);
+  assert.equal((await credential(fresh)).password, token, 'Team addition must retain the exact issued token');
+  await command(['git', 'clone', teamRemote, teamCheckout], env);
+  await command(['git', '-C', teamCheckout, '-c', 'user.name=Native Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'test: native team helper'], env);
+  await command(['git', '-C', teamCheckout, 'push', 'origin', 'HEAD:refs/heads/work/team-write'], env);
+  assert.equal((await api(teamPath, 'PATCH', { name: 'native-writers', permission: 'read', units: ['repo.code', 'repo.issues'] })).status, 200);
+  await command(['git', '-C', teamCheckout, 'fetch', 'origin'], env);
+  assert.notEqual((await command(['git', '-C', teamCheckout, 'push', 'origin', 'HEAD:refs/heads/work/team-read-denied'], env, undefined, true)).status, 0);
+  assert.equal((await credential(fresh)).password, token, 'Team downgrade must retain the exact issued token');
+  assert.equal((await api(`${teamPath}/members/${native.username}`, 'DELETE')).status, 204);
+  assert.notEqual((await command(['git', '-C', teamCheckout, 'fetch', 'origin'], env, undefined, true)).status, 0);
+  assert.notEqual((await command(['git', 'clone', teamRemote, join(directory, 'team-removed-clone')], env, undefined, true)).status, 0);
+  assert.notEqual((await api(`/repos/${org}/team-only`, 'GET', undefined, token)).status, 200);
+  assert.equal((await credential(fresh)).password, token, 'Team member removal must retain the exact issued token');
+  assert.equal(completions, loginCount, 'Native team changes must not trigger a Tower sign-in');
+  evidence.nativeTeamPermissionChanges = 'same OAuth token: team addition enables clone/push; Write→Read keeps fetch and denies push; member removal denies clone/fetch/API read; no Tower state change or sign-in';
+
   assert.equal((await api(`${path}/collaborators/${native.username}`, 'PUT', { permission: 'write' })).status, 204);
   token = (await credential(fresh)).password!;
   towerAvailable = false;
