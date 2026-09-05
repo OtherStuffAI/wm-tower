@@ -42,17 +42,13 @@ async function run() {
   const migrationPath = join(__dirname, '001_init.sql');
   const migration = readFileSync(migrationPath, 'utf-8');
 
-  const statements = splitSqlStatements(
-    migration
-      .split('\n')
-      .filter((line) => !line.trim().startsWith('--'))
-      .join('\n'),
-  );
+  const statements = splitSqlStatements(migration);
 
-  const tableBootstrapStatements = statements.filter((statement) =>
-    /^(CREATE\s+TABLE|CREATE\s+SEQUENCE)\s+IF\s+NOT\s+EXISTS\s+/i.test(statement),
+  const bootstrapStatements = statements.filter((statement) =>
+    /^(CREATE\s+TABLE|CREATE\s+SEQUENCE)\s+IF\s+NOT\s+EXISTS\s+/i.test(statement)
+    || /^CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+/i.test(statement),
   );
-  const groupsTableStatement = tableBootstrapStatements.find((statement) =>
+  const groupsTableStatement = bootstrapStatements.find((statement) =>
     /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+v4_groups\b/i.test(statement),
   );
 
@@ -63,7 +59,10 @@ async function run() {
   // A fresh database needs base tables before runtime ALTER/backfill statements
   // can run. Older databases need the runtime ALTER statements before later
   // indexes and foreign keys in 001_init.sql reference newer columns.
-  for (const statement of tableBootstrapStatements) {
+  // Include functions in source order: generated columns/defaults can depend
+  // on functions declared before their table. Do not hoist all tables ahead
+  // of those dependencies (or all functions ahead of their table types).
+  for (const statement of bootstrapStatements) {
     await sql.unsafe(statement);
   }
   await ensureRuntimeSchema();
