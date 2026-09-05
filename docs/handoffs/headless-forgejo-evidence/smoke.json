@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "provider": "Forgejo 16.0.3",
+  "helper": "compiled shipped git-credential-wingman",
+  "brokerCalls": 5,
+  "freshActor": "6e9d6eb3-8b30-4122-a17b-b921e639dd84",
+  "workspaceId": "5cfb3939-022f-441e-afe7-5ac5b180922b",
+  "repositoryId": "b8f88701-c6cf-41fe-a766-286e71b48b4e",
+  "clone": "pass",
+  "fetch": "pass",
+  "workPush": "pass",
+  "protectedPush": "denied",
+  "noGrantClone": "denied with stage/status/code",
+  "foreignWorkspace": "denied",
+  "repeatedConcurrentBootstrap": "one provider account",
+  "browserLogin": false,
+  "grantRevokeRestore": false
+}

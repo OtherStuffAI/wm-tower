@@ -1,0 +1,12 @@
+
+4 tests skipped:
+(skip) Storage API > workspace owner can prepare, upload, complete, and fetch workspace-owned object
+(skip) Storage API > group member can prepare and upload group-owned object
+(skip) Storage API > group member can read object via access_group_ids
+(skip) Storage API > public objects are accessible without auth
+
+ 481 pass
+ 4 skip
+ 0 fail
+ 4661 expect() calls
+Ran 485 tests across 48 files. [26.46s]
