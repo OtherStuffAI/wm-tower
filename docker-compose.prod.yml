@@ -179,7 +179,7 @@ services:
       FORGEJO__repository__ENABLE_PUSH_CREATE_ORG: "false"
       FORGEJO__security__DISABLE_GIT_HOOKS: "true"
       FORGEJO__actions__ENABLED: "false"
-      FORGEJO__webhook__ALLOWED_HOST_LIST: private
+      FORGEJO__webhook__ALLOWED_HOST_LIST: private,captain.a.otherstuff.ai,captain.b.otherstuff.ai,captain.pages.otherstuff.ai
     volumes:
       - tower-forgejo-data:/var/lib/gitea
       - tower-forgejo-config:/etc/gitea
