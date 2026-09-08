@@ -5997,12 +5997,16 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Hydrate current user-visible agent activity snapshots',
-          description: 'Returns only unexpired latest snapshots visible through channel.read. Each snapshot includes immutable turn_id when known, created_at for cross-turn ordering, and commentary_history containing accepted user-visible working commentary for that exact turn in ascending sequence order. Legacy rows may serialize turn_id as null with an empty commentary_history. Use channel_id plus optional thread_id or activity_id after first load or SSE reconnect.',
+          description: 'Returns durable latest snapshots, including expired and terminal lifecycles, visible through channel.read. Expiry describes freshness only; it never deletes a lifecycle or its history. Each snapshot includes immutable turn_id when known, created_at for cross-turn ordering, and bounded commentary_history for that exact turn in ascending sequence order. history_limit defaults to 50 (maximum 200, zero omits history). Use activity_id with before_sequence for older history and commentary_next_before_sequence, or after_sequence for ascending recovery and commentary_next_after_sequence. Sequence cursors are exclusive, mutually exclusive and require activity_id. next_cursor paginates snapshots by immutable created_at and id descending; pass it as cursor. Legacy rows may serialize turn_id as null with an empty commentary_history. Use channel_id plus optional thread_id or activity_id after first load or SSE reconnect.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'channel_id', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'thread_id', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
             { name: 'activity_id', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'cursor', in: 'query', schema: { type: 'string' } },
+            { name: 'history_limit', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 200, default: 50 } },
+            { name: 'before_sequence', in: 'query', schema: { type: 'integer', minimum: 0 } },
+            { name: 'after_sequence', in: 'query', schema: { type: 'integer', minimum: -1 } },
             { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200 } },
           ],
           responses: {
@@ -6018,7 +6022,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Publish a latest user-visible agent activity snapshot',
-          description: 'Authenticates the agent as the publisher, requires channel.write, validates trigger-message/thread correlation, requires an immutable turn_id, accepts only visibility=user_visible, replaces state only when sequence increases, and makes terminal replay idempotent. Accepted working updates with non-empty summary or body are appended transactionally to durable commentary_history; terminal bodies are never appended. Sequence is scoped to one activity lifecycle; consumers order lifecycles by created_at then activity_id. Changed snapshots are delivered through the normal Flight Deck PG SSE event stream as flightdeck_pg.agent_activity.snapshot and clients refetch hydration for history.',
+          description: 'Authenticates the agent as the publisher, requires channel.write, validates trigger-message/thread correlation, requires an immutable turn_id, accepts only visibility=user_visible, replaces state only when sequence increases, and makes terminal replay idempotent. Accepted working updates with non-empty summary or body are appended transactionally to durable commentary_history; terminal bodies are never appended. Previously unseen working commentary is accepted even if its sequence is older or the snapshot is terminal, without regressing that snapshot. Immutable publisher/channel/thread/session/turn identity remains enforced. Sequence is scoped to one activity lifecycle; consumers order lifecycles by created_at then activity_id. Changed snapshots are delivered through the normal Flight Deck PG SSE event stream as flightdeck_pg.agent_activity.snapshot and clients refetch hydration for history.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'activityId', in: 'path', required: true, schema: { type: 'string' } },

@@ -1959,6 +1959,8 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_agent_activities (
 );
 CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_hydrate
   ON flightdeck_pg_agent_activities(workspace_id, channel_id, thread_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_history_page
+  ON flightdeck_pg_agent_activities(workspace_id, channel_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_expiry
   ON flightdeck_pg_agent_activities(workspace_id, expires_at);
 

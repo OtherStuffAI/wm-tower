@@ -1242,6 +1242,9 @@ export interface FlightDeckPgAgentActivity {
   created_at: Date;
   updated_at: Date;
   commentary_history?: FlightDeckPgAgentActivityCommentary[];
+  commentary_next_before_sequence?: number | null;
+  commentary_next_after_sequence?: number | null;
+  cursor_created_at?: string;
 }
 
 export interface FlightDeckPgAgentActivityCommentary {

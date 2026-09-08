@@ -4335,13 +4335,61 @@ describe('Flight Deck PG API routes', () => {
     await sql`UPDATE flightdeck_pg_agent_activities SET expires_at = NOW() - INTERVAL '1 second' WHERE workspace_id = ${workspaceId} AND activity_id = ${activityId}`;
     const expired = await requestJson(`${hydratePath}&activity_id=${activityId}`, 'GET', ownerSecret);
     expect(expired.res.status).toBe(200);
-    expect(expired.json.agent_activities).toEqual([]);
+    expect(expired.json.agent_activities).toHaveLength(1);
+    expect(expired.json.agent_activities[0].commentary_history).toHaveLength(3);
     const [{ count: expiredCommentaryCount }] = await sql<{ count: string }[]>`
       SELECT COUNT(*)::text AS count
       FROM flightdeck_pg_agent_activity_commentary
       WHERE workspace_id = ${workspaceId} AND activity_id = ${activityId}
     `;
-    expect(expiredCommentaryCount).toBe('0');
+    expect(expiredCommentaryCount).toBe('3');
+    // Latest and older history pages are independently bounded, with stable
+    // sequence cursors even when delivery timestamps are identical.
+    await sql`UPDATE flightdeck_pg_agent_activity_commentary SET created_at = '2026-09-08 00:00:00+00' WHERE workspace_id = ${workspaceId}`;
+    await sql`UPDATE flightdeck_pg_agent_activities SET created_at = '2026-09-08 00:00:00.123456+00' WHERE workspace_id = ${workspaceId}`;
+    const latest = await requestJson(`${hydratePath}&activity_id=${activityId}&history_limit=1`, 'GET', ownerSecret);
+    expect(latest.json.agent_activities[0].commentary_history[0].sequence).toBe(timestampScaleSequence + 4);
+    expect(latest.json.agent_activities[0].commentary_next_before_sequence).toBe(timestampScaleSequence + 4);
+    const older = await requestJson(`${hydratePath}&activity_id=${activityId}&history_limit=1&before_sequence=${timestampScaleSequence + 4}`, 'GET', ownerSecret);
+    expect(older.json.agent_activities[0].commentary_history[0].sequence).toBe(timestampScaleSequence + 2);
+    const recovery = await requestJson(`${hydratePath}&activity_id=${activityId}&history_limit=1&after_sequence=${timestampScaleSequence}`, 'GET', ownerSecret);
+    expect(recovery.json.agent_activities[0].commentary_history[0].sequence).toBe(timestampScaleSequence + 1);
+    expect(recovery.json.agent_activities[0].commentary_next_after_sequence).toBe(timestampScaleSequence + 1);
+    const snapshots = await requestJson(`${hydratePath}&limit=1&history_limit=0`, 'GET', ownerSecret);
+    expect(snapshots.json.agent_activities).toHaveLength(1);
+    expect(snapshots.json.agent_activities[0].commentary_history).toBeUndefined();
+    expect(snapshots.json.next_cursor).toBeTruthy();
+    const next = await requestJson(`${hydratePath}&limit=1&cursor=${snapshots.json.next_cursor}`, 'GET', ownerSecret);
+    expect(next.json.agent_activities[0].activity_id).not.toBe(snapshots.json.agent_activities[0].activity_id);
+    expect(next.json.next_cursor).toBeNull();
+    const invalidRecovery = await requestJson(`${hydratePath}&after_sequence=0`, 'GET', ownerSecret);
+    expect(invalidRecovery.res.status).toBe(400);
+
+    const finish = await requestJson(activityPath, 'PUT', agentSecret, { ...base, state: 'failed', sequence: timestampScaleSequence + 10 });
+    expect(finish.res.status).toBe(200);
+    const missed = { ...base, state: 'working', sequence: timestampScaleSequence + 6, body: 'Missed commentary recovered after terminal.' };
+    const late = await requestJson(activityPath, 'PUT', agentSecret, missed);
+    expect(late.res.status).toBe(200);
+    expect(late.json.agent_activity).toMatchObject({ state: 'failed', sequence: timestampScaleSequence + 10 });
+    expect(late.json.agent_activity.commentary_history).toHaveLength(1);
+    expect(late.json.agent_activity.commentary_history[0].body).toBe(missed.body);
+    const lateReplay = await requestJson(activityPath, 'PUT', agentSecret, missed);
+    expect(lateReplay.json.idempotent).toBe(true);
+    expect(lateReplay.json.outbox).toBeNull();
+    const outOfOrder = await requestJson(activityPath, 'PUT', agentSecret, { ...missed, sequence: timestampScaleSequence + 5, body: 'Earlier recovered commentary.' });
+    expect(outOfOrder.res.status).toBe(200);
+    const finished = await requestJson(`${hydratePath}&activity_id=${activityId}&after_sequence=${timestampScaleSequence + 4}`, 'GET', ownerSecret);
+    expect(finished.json.agent_activities[0].commentary_history.map((entry: any) => entry.sequence)).toEqual([timestampScaleSequence + 5, timestampScaleSequence + 6]);
+    const mismatchedSession = await requestJson(activityPath, 'PUT', agentSecret, { ...missed, session_id: 'wrong-session', sequence: timestampScaleSequence + 7 });
+    expect(mismatchedSession.res.status).toBe(409);
+    expect(mismatchedSession.json.code).toBe('agent_activity_turn_identity_mismatch');
+    await sql`UPDATE flightdeck_pg_agent_activities SET expires_at = NOW() - INTERVAL '1 hour' WHERE workspace_id = ${workspaceId} AND activity_id = ${activityId}`;
+    const expiredTerminal = await requestJson(`${hydratePath}&activity_id=${activityId}&after_sequence=-1&history_limit=200`, 'GET', ownerSecret);
+    expect(expiredTerminal.json.agent_activities[0].state).toBe('failed');
+    expect(expiredTerminal.json.agent_activities[0].commentary_history).toHaveLength(5);
+    expect(expiredTerminal.json.agent_activities[0].commentary_next_after_sequence).toBeNull();
+
+
   });
 
   test('allows any permitted actor kind to publish activity with a matching signer', async () => {

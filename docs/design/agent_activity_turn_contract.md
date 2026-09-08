@@ -65,3 +65,67 @@ Flight Deck should:
 `created_at` is assigned when Tower first inserts the activity and is not
 changed by lifecycle updates. `updated_at` describes snapshot mutation time and
 must not be used as the primary cross-turn ordering field.
+
+## Durable history and recovery (2026-09-08)
+
+`expires_at` is a freshness hint, not retention or evidence of completion. GET
+never deletes expired activity rows or commentary; completed, failed and
+cancelled lifecycles remain available after expiry and after later runs.
+The activity foreign key still cascades on intentional parent/workspace removal.
+
+GET requires `channel_id` and accepts optional `thread_id` and `activity_id`.
+Snapshot pages use `limit` (1..200, default 50) and opaque `cursor` / `next_cursor`,
+ordered by immutable `created_at DESC, id DESC`. Timestamps in cursors retain
+Postgres precision. A partial page never authorizes deleting other local rows.
+`history_limit` is 0..200, default 50; zero omits history. Otherwise each returned
+snapshot has its newest bounded `commentary_history`, ordered by sequence ASC.
+
+For one exact `activity_id`, `before_sequence` loads older entries exclusively;
+`commentary_next_before_sequence` is the next cursor or null. Alternatively,
+`after_sequence` loads entries exclusively in ascending order, with
+`commentary_next_after_sequence` when another page remains. Start at -1 to include
+sequence zero. The two sequence cursors are mutually exclusive and require an
+activity ID. All queries retain workspace, channel and optional thread boundaries.
+Never hydrate an unbounded workspace history. TowerSyncService owns scoped pages,
+materialization, reconnect recovery and the browser's persisted paging progress.
+
+Working commentary insertion is transactional with its snapshot/outbox write and
+independent of snapshot freshness and sequence selection. An unseen late working
+entry is accepted even after terminal confirmation, returning HTTP 200 and the
+unchanged current snapshot plus that entry in `commentary_history`. Its new SSE
+outbox event carries the same delta. Replaying the same turn/sequence/content is
+idempotent, including after later writes; conflicting content cannot overwrite
+history. Full immutable publisher, channel, thread, trigger, session and turn
+identity are enforced before accepting commentary. Only `working` user-visible
+summary/body is recorded; terminal bodies are not history.
+
+Consumers must persist each SSE commentary delta before coalescing current
+snapshots. A lower snapshot sequence cannot suppress an attached history delta.
+Producer sequence orders history; the outbox cursor orders delivery, including
+late inserts below previously observed sequences. Reconnect event replay (or a
+scoped history rescan after cursor reset) recovers those late inserts. Autopilot
+should also drain its durable ordered publication queue before terminal delivery.
+
+Validation uses an isolated test database only. The shared Tower runtime must be
+rebuilt/restarted and smoke-tested by the manager after acceptance; the worker
+has no restart authorization.
+
+Worker validation evidence:
+
+- `flightdeck-pg-api`, `flightdeck-pg-schema`, and `flightdeck-pg-outbox-cursors`
+  suites pass (58 tests) against the isolated activity reliability test database.
+  Coverage includes expiry retention, expired terminal refresh, late/out-of-order
+  commentary after terminal, replay deduplication, immutable session/turn checks,
+  bounded bidirectional history pages, and tied microsecond snapshot timestamps.
+- Bun bundles `src/index.ts` successfully with target `bun`; diff whitespace check
+  passes. Tower has no separate production compile script.
+- Existing `tsc --noEmit` configuration includes tests outside `rootDir=src`;
+  overriding rootDir reveals existing repository type errors, with no errors in
+  the modified activity logic. This is not a clean repository typecheck claim.
+- `privacy:check` reports the pre-existing tracked handoff
+  `docs/handoffs/2026-09-05-headless-forgejo-bootstrap-final.md`; unrelated content
+  is preserved. No sensitive detector output is copied here.
+- Concurrent WApp scope-access route/service work was present before this change
+  and remains uncommitted for its owner; its completeness is not established by
+  these activity tests. Shared Tower activation and runtime smoke remain manager
+  work after acceptance. No shared service was restarted or deployed.

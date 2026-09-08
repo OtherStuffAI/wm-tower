@@ -5622,46 +5622,49 @@ export async function clearFlightDeckPgResponseActivity(
 const terminalAgentActivityStates = new Set<FlightDeckPgAgentActivityState>(['completed', 'failed', 'cancelled']);
 
 export async function listFlightDeckPgAgentActivities(
-  input: { workspaceId: string; channelId: string; threadId?: string | null; activityId?: string | null; limit: number },
+  input: { workspaceId: string; channelId: string; threadId?: string | null; activityId?: string | null; limit: number; historyLimit?: number; beforeSequence?: number | null; afterSequence?: number | null; beforeCreatedAt?: string | null; beforeId?: string | null },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgAgentActivityRow[]> {
-  const threadId = input.threadId ?? null;
-  const activityId = input.activityId ?? null;
-  await sql`
-    DELETE FROM flightdeck_pg_agent_activities
-    WHERE workspace_id = ${input.workspaceId} AND expires_at <= NOW()
-  `;
+  // Freshness is not retention or an authoritative lifecycle transition.
   const activities = await sql<FlightDeckPgAgentActivityRow[]>`
-    SELECT *
+    SELECT *, created_at::text AS cursor_created_at
     FROM flightdeck_pg_agent_activities
     WHERE workspace_id = ${input.workspaceId}
       AND channel_id = ${input.channelId}
-      AND (${threadId}::uuid IS NULL OR thread_id = ${threadId})
-      AND (${activityId}::text IS NULL OR activity_id = ${activityId})
-      AND expires_at > NOW()
-    ORDER BY updated_at DESC, id DESC
+      AND (${input.threadId ?? null}::uuid IS NULL OR thread_id = ${input.threadId ?? null})
+      AND (${input.activityId ?? null}::text IS NULL OR activity_id = ${input.activityId ?? null})
+      AND (${input.beforeCreatedAt ?? null}::text::timestamptz IS NULL OR (created_at, id) < (${input.beforeCreatedAt ?? null}::text::timestamptz, ${input.beforeId ?? null}::uuid))
+    ORDER BY created_at DESC, id DESC
     LIMIT ${input.limit}
   `;
   if (!activities.length) return activities;
-  const activityRowIds = activities.map((activity) => activity.id);
+  const historyLimit = Math.max(0, Math.min(200, input.historyLimit ?? 50));
+  if (!historyLimit) return activities;
+  // Lateral limit bounds both SQL work and payload size per lifecycle.
   const commentary = await sql<FlightDeckPgAgentActivityCommentary[]>`
-    SELECT *
-    FROM flightdeck_pg_agent_activity_commentary
-    WHERE workspace_id = ${input.workspaceId}
-      AND agent_activity_id IN ${sql(activityRowIds)}
-    ORDER BY sequence ASC, id ASC
+    SELECT commentary.* FROM flightdeck_pg_agent_activities activity
+    CROSS JOIN LATERAL (
+      SELECT * FROM flightdeck_pg_agent_activity_commentary entry
+      WHERE entry.workspace_id = activity.workspace_id
+        AND entry.agent_activity_id = activity.id AND entry.turn_id = activity.turn_id
+        AND (${input.beforeSequence ?? null}::bigint IS NULL OR entry.sequence < ${input.beforeSequence ?? null})
+        AND (${input.afterSequence ?? null}::bigint IS NULL OR entry.sequence > ${input.afterSequence ?? null})
+      ORDER BY CASE WHEN ${input.afterSequence ?? null}::bigint IS NOT NULL THEN entry.sequence END ASC,
+        entry.sequence DESC, entry.id DESC LIMIT ${historyLimit + 1}
+    ) commentary
+    WHERE activity.workspace_id = ${input.workspaceId}
+      AND activity.id IN ${sql(activities.map((activity) => activity.id))}
+    ORDER BY commentary.sequence DESC, commentary.id DESC
   `;
-  const commentaryByActivityId = new Map<string, FlightDeckPgAgentActivityCommentary[]>();
-  for (const entry of commentary) {
-    const entries = commentaryByActivityId.get(entry.agent_activity_id) ?? [];
-    entries.push(entry);
-    commentaryByActivityId.set(entry.agent_activity_id, entries);
-  }
-  return activities.map((activity) => ({
-    ...activity,
-    commentary_history: (commentaryByActivityId.get(activity.id) ?? [])
-      .filter((entry) => entry.turn_id === activity.turn_id),
-  }));
+  return activities.map((activity) => {
+    const entries = commentary.filter((entry) => entry.agent_activity_id === activity.id);
+    if (input.afterSequence !== undefined && input.afterSequence !== null) entries.reverse();
+    const page = entries.slice(0, historyLimit);
+    if (input.afterSequence === undefined || input.afterSequence === null) page.reverse();
+    return { ...activity, commentary_history: page,
+      commentary_next_before_sequence: input.afterSequence == null && entries.length > historyLimit ? Number(page[0].sequence) : null,
+      commentary_next_after_sequence: input.afterSequence != null && entries.length > historyLimit ? Number(page.at(-1)!.sequence) : null };
+  });
 }
 
 export async function upsertFlightDeckPgAgentActivity(
@@ -5719,35 +5722,46 @@ export async function upsertFlightDeckPgAgentActivity(
     RETURNING *, (xmax = 0) AS inserted
   ` as unknown as Array<FlightDeckPgAgentActivityRow & { inserted: boolean }>;
   const changed = rows[0];
-  if (changed) {
-    const hasCommentary = Boolean(input.summary?.trim() || input.body?.trim());
-    if (input.state === 'working' && hasCommentary) {
-      await sql`
-        INSERT INTO flightdeck_pg_agent_activity_commentary (
-          workspace_id, agent_activity_id, turn_id, activity_id, state,
-          label, summary, body, visibility, sequence
-        ) VALUES (
-          ${input.workspaceId}, ${changed.id}, ${input.turnId}, ${input.activityId}, 'working',
-          ${input.label ?? null}, ${input.summary ?? null}, ${input.body ?? null}, 'user_visible', ${input.sequence}
-        )
-        ON CONFLICT (workspace_id, turn_id, sequence) DO NOTHING
-      `;
-    }
-    return { activity: changed, outcome: changed.inserted ? 'created' : 'updated' };
-  }
-
-  const [current] = await sql<FlightDeckPgAgentActivityRow[]>`
+  const current = changed ?? (await sql<FlightDeckPgAgentActivityRow[]>`
     SELECT * FROM flightdeck_pg_agent_activities
     WHERE workspace_id = ${input.workspaceId} AND activity_id = ${input.activityId}
     LIMIT 1
-  `;
+  `)[0];
   if (!current) throw new Error('agent activity upsert conflict did not resolve an existing row');
-  if (current.turn_id !== null && current.turn_id !== input.turnId) {
+  if (current.channel_id !== input.channelId || current.thread_id !== input.threadId
+      || current.trigger_message_id !== input.triggerMessageId || current.session_id !== input.sessionId
+      || current.agent_npub !== input.agentNpub || current.publisher_actor_id !== input.publisherActorId
+      || (current.turn_id !== null && current.turn_id !== input.turnId)) {
     return { activity: current, outcome: 'identity_mismatch' };
   }
-  if (Number(current.sequence) === input.sequence && current.state === input.state) {
-    return { activity: current, outcome: 'idempotent' };
+  const hasCommentary = Boolean(input.summary?.trim() || input.body?.trim());
+  if (input.state === 'working' && hasCommentary) {
+    // Append independently from the latest snapshot: late delivery must recover
+    // history even after a later sequence or authoritative terminal transition.
+    const entries = await sql<FlightDeckPgAgentActivityCommentary[]>`
+      INSERT INTO flightdeck_pg_agent_activity_commentary (
+        workspace_id, agent_activity_id, turn_id, activity_id, state,
+        label, summary, body, visibility, sequence
+      ) VALUES (
+        ${input.workspaceId}, ${current.id}, ${input.turnId}, ${input.activityId}, 'working',
+        ${input.label ?? null}, ${input.summary ?? null}, ${input.body ?? null}, 'user_visible', ${input.sequence}
+      ) ON CONFLICT (workspace_id, turn_id, sequence) DO NOTHING RETURNING *
+    `;
+    if (entries.length) {
+      return { activity: { ...current, commentary_history: entries }, outcome: changed?.inserted ? 'created' : 'updated' };
+    }
+    const [existing] = await sql<FlightDeckPgAgentActivityCommentary[]>`
+      SELECT * FROM flightdeck_pg_agent_activity_commentary
+      WHERE workspace_id = ${input.workspaceId} AND turn_id = ${input.turnId} AND sequence = ${input.sequence}
+    `;
+    if (!changed && existing?.agent_activity_id === current.id
+        && existing.label === (input.label ?? null) && existing.summary === (input.summary ?? null)
+        && existing.body === (input.body ?? null)) return { activity: current, outcome: 'idempotent' };
   }
+  if (changed) return { activity: changed, outcome: changed.inserted ? 'created' : 'updated' };
+  if (Number(current.sequence) === input.sequence && current.state === input.state
+      && current.label === (input.label ?? null) && current.summary === (input.summary ?? null)
+      && current.body === (input.body ?? null)) return { activity: current, outcome: 'idempotent' };
   return { activity: current, outcome: current.terminal_at ? 'terminal' : 'stale' };
 }
 

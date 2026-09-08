@@ -3286,6 +3286,11 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   `);
 
   await sql.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_history_page
+    ON flightdeck_pg_agent_activities(workspace_id, channel_id, created_at DESC, id DESC)
+  `);
+
+  await sql.unsafe(`
     CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_expiry
     ON flightdeck_pg_agent_activities(workspace_id, expires_at)
   `);

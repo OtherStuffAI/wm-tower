@@ -8262,14 +8262,25 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/agent-activities', async (c) =>
     resource: { type: 'channel', channelId },
   });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'channel.read');
+  const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
+  const historyLimit = Number(c.req.query('history_limit') ?? 50);
+  const afterSequence = c.req.query('after_sequence') === undefined ? null : Number(c.req.query('after_sequence'));
+  const beforeSequence = c.req.query('before_sequence') === undefined ? null : Number(c.req.query('before_sequence'));
+  if (!cursor || !Number.isSafeInteger(historyLimit) || historyLimit < 0 || historyLimit > 200
+      || (afterSequence !== null && (!activityId || !Number.isSafeInteger(afterSequence) || afterSequence < -1 || beforeSequence !== null))
+      || (beforeSequence !== null && (!activityId || !Number.isSafeInteger(beforeSequence) || beforeSequence < 0))) {
+    return validationError(c, identity, [{ path: 'pagination', code: 'invalid', message: 'Invalid cursor, history_limit (0..200), or mutually exclusive sequence cursors (require activity_id)' }]);
+  }
+  const limit = parseLimit(c);
   const activities = await listFlightDeckPgAgentActivities({
     workspaceId: context.workspace.id,
     channelId,
     threadId: threadId || null,
     activityId: activityId || null,
-    limit: parseLimit(c),
+    limit: limit + 1, historyLimit, beforeSequence, afterSequence, beforeCreatedAt: cursor.createdAt, beforeId: cursor.id,
   });
-  return c.json({ identity, agent_activities: activities.map(serializeFlightDeckPgAgentActivity), next_cursor: null });
+  const page = activities.slice(0, limit);
+  return c.json({ identity, agent_activities: page.map(serializeFlightDeckPgAgentActivity), next_cursor: activities.length > limit ? encodeFlightDeckPgMessageCursor(page.at(-1)!) : null });
 });
 
 flightDeckPgRouter.put('/workspaces/:workspaceId/agent-activities/:activityId', async (c) => {
