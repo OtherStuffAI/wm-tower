@@ -102,8 +102,8 @@ summary/body is recorded; terminal bodies are not history.
 Consumers must persist each SSE commentary delta before coalescing current
 snapshots. A lower snapshot sequence cannot suppress an attached history delta.
 Producer sequence orders history; the outbox cursor orders delivery, including
-late inserts below previously observed sequences. Reconnect event replay (or a
-scoped history rescan after cursor reset) recovers those late inserts. Autopilot
+late inserts below previously observed sequences. Reconnect delivery-cursor recovery (described below) recovers those late inserts
+even when SSE replay is unavailable. Autopilot
 should also drain its durable ordered publication queue before terminal delivery.
 
 Validation uses an isolated test database only. The shared Tower runtime must be
@@ -129,3 +129,42 @@ Worker validation evidence:
   and remains uncommitted for its owner; its completeness is not established by
   these activity tests. Shared Tower activation and runtime smoke remain manager
   work after acceptance. No shared service was restarted or deployed.
+
+
+## Delivery cursor recovery
+
+Producer sequence is display order and is insufficient for finding late entries
+below an existing sequence checkpoint. Every commentary row now has a generated
+BIGINT `delivery_cursor`, serialized as a decimal string. Existing rows receive
+values during the additive runtime migration. A per-activity index bounds scans.
+The route transaction holds the parent upsert lock before allocating an entry
+cursor, so committed inserts are ordered per activity. Failed transactions and
+idempotent retries can leave cursor gaps; consumers must never infer missing
+entries from those gaps or compare cursors between workspaces/activities.
+
+Every GET snapshot includes `commentary_cursor` (maximum committed delivery
+cursor for that exact activity/turn, or `"0"`), even with `history_limit=0`.
+Use `activity_id` and `after_commentary_cursor=<saved decimal cursor>` for bounded
+recovery in ascending delivery order. It excludes the saved cursor and cannot be
+combined with sequence cursors. `commentary_next_cursor` is the last returned
+entry cursor when more rows remain, otherwise null. Each returned entry contains
+its own `delivery_cursor`; persist progress only with successful materialization.
+Snapshot `commentary_cursor` is a high-water hint, not permission to skip pages.
+The maximum accepted cursor is the signed BIGINT maximum; start recovery at 0.
+Default/before-sequence history pages remain ordered by producer sequence.
+
+PUT and SSE commentary deltas include `delivery_cursor` and the snapshot's new
+`commentary_cursor`. Clients must recover gaps rather than advance a contiguous
+checkpoint to an SSE high-water hint blindly. On first materialization the newest
+bounded display page can seed its snapshot cursor, while older history remains
+accessible through sequence pages. For known lifecycles, resume their saved
+cursor after reconnect or fallback recovery, including terminal lifecycles that
+can receive delayed producer commentary.
+
+Follow-up validation: the same 58 API/schema/outbox tests pass with 1,990
+assertions. Coverage adds 55 terminal-tail entries hiding a late lower sequence
+from the default 50-row page, delivery-cursor paging of those old entries,
+idempotent replay preserving the high-water mark, mixed-cursor rejection, and
+repeat-safe migration of a schema without the delivery cursor. Bun bundle and
+whitespace checks pass; the previously documented repository-wide check blockers
+remain unchanged.

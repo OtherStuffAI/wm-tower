@@ -1244,6 +1244,8 @@ export interface FlightDeckPgAgentActivity {
   commentary_history?: FlightDeckPgAgentActivityCommentary[];
   commentary_next_before_sequence?: number | null;
   commentary_next_after_sequence?: number | null;
+  commentary_cursor?: string;
+  commentary_next_cursor?: string | null;
   cursor_created_at?: string;
 }
 
@@ -1259,6 +1261,7 @@ export interface FlightDeckPgAgentActivityCommentary {
   body: string | null;
   visibility: 'user_visible';
   sequence: number;
+  delivery_cursor: string;
   created_at: Date;
   updated_at: Date;
 }

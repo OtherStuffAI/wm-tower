@@ -4388,6 +4388,39 @@ describe('Flight Deck PG API routes', () => {
     expect(expiredTerminal.json.agent_activities[0].state).toBe('failed');
     expect(expiredTerminal.json.agent_activities[0].commentary_history).toHaveLength(5);
     expect(expiredTerminal.json.agent_activities[0].commentary_next_after_sequence).toBeNull();
+    // A late entry below every recent producer sequence must still be found
+    // after event replay is lost. More than a default page separates the tail.
+    for (let i = 20; i < 75; i++) {
+      const tail = await requestJson(activityPath, 'PUT', agentSecret, { ...base, state: 'working', sequence: timestampScaleSequence + i, body: `Tail entry ${i}` });
+      expect(tail.res.status).toBe(200);
+      expect(tail.json.agent_activity.state).toBe('failed');
+    }
+    const beforeLate = await requestJson(`${hydratePath}&activity_id=${activityId}&history_limit=1`, 'GET', ownerSecret);
+    const deliveryCheckpoint = beforeLate.json.agent_activities[0].commentary_cursor;
+    expect(typeof deliveryCheckpoint).toBe('string');
+    const lateOldBody = { ...base, state: 'working', sequence: timestampScaleSequence + 7, body: 'Old sequence delivered after the long terminal tail.' };
+    const lateOld = await requestJson(activityPath, 'PUT', agentSecret, lateOldBody);
+    const lateOldCursor = lateOld.json.agent_activity.commentary_history[0].delivery_cursor;
+    expect(BigInt(lateOldCursor)).toBeGreaterThan(BigInt(deliveryCheckpoint));
+    await requestJson(activityPath, 'PUT', agentSecret, { ...lateOldBody, sequence: timestampScaleSequence + 8, body: 'Second old sequence delivered late.' });
+    const recentDefault = await requestJson(`${hydratePath}&activity_id=${activityId}`, 'GET', ownerSecret);
+    expect(recentDefault.json.agent_activities[0].commentary_history).toHaveLength(50);
+    expect(recentDefault.json.agent_activities[0].commentary_history.some((entry: any) => entry.body === lateOldBody.body)).toBe(false);
+    const recoverLate = await requestJson(`${hydratePath}&activity_id=${activityId}&after_commentary_cursor=${deliveryCheckpoint}&history_limit=1`, 'GET', ownerSecret);
+    expect(recoverLate.json.agent_activities[0].commentary_history).toEqual([expect.objectContaining({ body: lateOldBody.body, delivery_cursor: lateOldCursor })]);
+    expect(recoverLate.json.agent_activities[0].commentary_next_cursor).toBe(lateOldCursor);
+    const recoverNext = await requestJson(`${hydratePath}&activity_id=${activityId}&after_commentary_cursor=${lateOldCursor}&history_limit=1`, 'GET', ownerSecret);
+    expect(recoverNext.json.agent_activities[0].commentary_history[0].sequence).toBe(timestampScaleSequence + 8);
+    expect(recoverNext.json.agent_activities[0].commentary_next_cursor).toBeNull();
+    const savedCursor = recoverNext.json.agent_activities[0].commentary_cursor;
+    const replayOld = await requestJson(activityPath, 'PUT', agentSecret, lateOldBody);
+    expect(replayOld.json.idempotent).toBe(true);
+    const replayRecovery = await requestJson(`${hydratePath}&activity_id=${activityId}&after_commentary_cursor=${savedCursor}`, 'GET', ownerSecret);
+    expect(replayRecovery.json.agent_activities[0].commentary_history).toEqual([]);
+    expect(replayRecovery.json.agent_activities[0].commentary_cursor).toBe(savedCursor);
+    const invalidDelivery = await requestJson(`${hydratePath}&activity_id=${activityId}&after_commentary_cursor=0&after_sequence=0`, 'GET', ownerSecret);
+    expect(invalidDelivery.res.status).toBe(400);
+
 
 
   });

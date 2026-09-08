@@ -325,6 +325,15 @@ describe('Flight Deck PG schema foundation', () => {
         AND constraint_name = 'flightdeck_pg_agent_activity_commentary_agent_activity_id_fkey'
     `;
     expect(foreignKey?.delete_rule).toBe('CASCADE');
+    await sql`ALTER TABLE flightdeck_pg_agent_activity_commentary DROP COLUMN delivery_cursor`;
+    await ensureRuntimeSchema(sql);
+    await ensureRuntimeSchema(sql);
+    const [cursorColumn] = await sql<{ is_identity: string }[]>`
+      SELECT is_identity FROM information_schema.columns
+      WHERE table_name = 'flightdeck_pg_agent_activity_commentary' AND column_name = 'delivery_cursor'
+    `;
+    expect(cursorColumn.is_identity).toBe('YES');
+
 
   });
 

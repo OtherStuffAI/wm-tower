@@ -1670,6 +1670,7 @@ export function serializeFlightDeckPgAgentActivity(activity: FlightDeckPgAgentAc
           commentary_history: activity.commentary_history.map((entry) => ({
             ...entry,
             sequence: Number(entry.sequence),
+            delivery_cursor: String(entry.delivery_cursor),
           })),
         }
       : {}),
@@ -5622,13 +5623,17 @@ export async function clearFlightDeckPgResponseActivity(
 const terminalAgentActivityStates = new Set<FlightDeckPgAgentActivityState>(['completed', 'failed', 'cancelled']);
 
 export async function listFlightDeckPgAgentActivities(
-  input: { workspaceId: string; channelId: string; threadId?: string | null; activityId?: string | null; limit: number; historyLimit?: number; beforeSequence?: number | null; afterSequence?: number | null; beforeCreatedAt?: string | null; beforeId?: string | null },
+  input: { workspaceId: string; channelId: string; threadId?: string | null; activityId?: string | null; limit: number; historyLimit?: number; beforeSequence?: number | null; afterSequence?: number | null; afterCommentaryCursor?: string | null; beforeCreatedAt?: string | null; beforeId?: string | null },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgAgentActivityRow[]> {
   // Freshness is not retention or an authoritative lifecycle transition.
   const activities = await sql<FlightDeckPgAgentActivityRow[]>`
-    SELECT *, created_at::text AS cursor_created_at
-    FROM flightdeck_pg_agent_activities
+    SELECT *, created_at::text AS cursor_created_at,
+      COALESCE((SELECT entry.delivery_cursor::text FROM flightdeck_pg_agent_activity_commentary entry
+        WHERE entry.workspace_id = activity.workspace_id AND entry.agent_activity_id = activity.id
+          AND entry.turn_id = activity.turn_id
+        ORDER BY entry.delivery_cursor DESC LIMIT 1), '0') AS commentary_cursor
+    FROM flightdeck_pg_agent_activities activity
     WHERE workspace_id = ${input.workspaceId}
       AND channel_id = ${input.channelId}
       AND (${input.threadId ?? null}::uuid IS NULL OR thread_id = ${input.threadId ?? null})
@@ -5649,7 +5654,9 @@ export async function listFlightDeckPgAgentActivities(
         AND entry.agent_activity_id = activity.id AND entry.turn_id = activity.turn_id
         AND (${input.beforeSequence ?? null}::bigint IS NULL OR entry.sequence < ${input.beforeSequence ?? null})
         AND (${input.afterSequence ?? null}::bigint IS NULL OR entry.sequence > ${input.afterSequence ?? null})
-      ORDER BY CASE WHEN ${input.afterSequence ?? null}::bigint IS NOT NULL THEN entry.sequence END ASC,
+        AND (${input.afterCommentaryCursor ?? null}::bigint IS NULL OR entry.delivery_cursor > ${input.afterCommentaryCursor ?? null}::bigint)
+      ORDER BY CASE WHEN ${input.afterCommentaryCursor ?? null}::bigint IS NOT NULL THEN entry.delivery_cursor END ASC,
+        CASE WHEN ${input.afterSequence ?? null}::bigint IS NOT NULL THEN entry.sequence END ASC,
         entry.sequence DESC, entry.id DESC LIMIT ${historyLimit + 1}
     ) commentary
     WHERE activity.workspace_id = ${input.workspaceId}
@@ -5658,12 +5665,14 @@ export async function listFlightDeckPgAgentActivities(
   `;
   return activities.map((activity) => {
     const entries = commentary.filter((entry) => entry.agent_activity_id === activity.id);
-    if (input.afterSequence !== undefined && input.afterSequence !== null) entries.reverse();
+    if (input.afterCommentaryCursor != null) entries.sort((a, b) => BigInt(a.delivery_cursor) < BigInt(b.delivery_cursor) ? -1 : 1);
+    else if (input.afterSequence != null) entries.reverse();
     const page = entries.slice(0, historyLimit);
-    if (input.afterSequence === undefined || input.afterSequence === null) page.reverse();
+    if (input.afterSequence == null && input.afterCommentaryCursor == null) page.reverse();
     return { ...activity, commentary_history: page,
-      commentary_next_before_sequence: input.afterSequence == null && entries.length > historyLimit ? Number(page[0].sequence) : null,
-      commentary_next_after_sequence: input.afterSequence != null && entries.length > historyLimit ? Number(page.at(-1)!.sequence) : null };
+      commentary_next_before_sequence: input.afterCommentaryCursor == null && input.afterSequence == null && entries.length > historyLimit ? Number(page[0].sequence) : null,
+      commentary_next_after_sequence: input.afterSequence != null && entries.length > historyLimit ? Number(page.at(-1)!.sequence) : null,
+      commentary_next_cursor: input.afterCommentaryCursor != null && entries.length > historyLimit ? String(page.at(-1)!.delivery_cursor) : null };
   });
 }
 
@@ -5748,7 +5757,7 @@ export async function upsertFlightDeckPgAgentActivity(
       ) ON CONFLICT (workspace_id, turn_id, sequence) DO NOTHING RETURNING *
     `;
     if (entries.length) {
-      return { activity: { ...current, commentary_history: entries }, outcome: changed?.inserted ? 'created' : 'updated' };
+      return { activity: { ...current, commentary_history: entries, commentary_cursor: String(entries[0].delivery_cursor) }, outcome: changed?.inserted ? 'created' : 'updated' };
     }
     const [existing] = await sql<FlightDeckPgAgentActivityCommentary[]>`
       SELECT * FROM flightdeck_pg_agent_activity_commentary

@@ -8264,8 +8264,13 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/agent-activities', async (c) =>
   if (!decision.allowed) return authorizationError(c, decision, identity, 'channel.read');
   const cursor = decodeFlightDeckPgMessageCursor(c.req.query('cursor'));
   const historyLimit = Number(c.req.query('history_limit') ?? 50);
+  const afterCommentaryCursor = c.req.query('after_commentary_cursor') ?? null;
   const afterSequence = c.req.query('after_sequence') === undefined ? null : Number(c.req.query('after_sequence'));
   const beforeSequence = c.req.query('before_sequence') === undefined ? null : Number(c.req.query('before_sequence'));
+  if (afterCommentaryCursor !== null && (!activityId || !/^(0|[1-9][0-9]{0,18})$/.test(afterCommentaryCursor)
+      || BigInt(afterCommentaryCursor) > 9223372036854775807n || beforeSequence !== null || afterSequence !== null)) {
+    return validationError(c, identity, [{ path: 'after_commentary_cursor', code: 'invalid', message: 'Delivery cursor must be a non-negative bigint, requires activity_id and excludes sequence cursors' }]);
+  }
   if (!cursor || !Number.isSafeInteger(historyLimit) || historyLimit < 0 || historyLimit > 200
       || (afterSequence !== null && (!activityId || !Number.isSafeInteger(afterSequence) || afterSequence < -1 || beforeSequence !== null))
       || (beforeSequence !== null && (!activityId || !Number.isSafeInteger(beforeSequence) || beforeSequence < 0))) {
@@ -8277,7 +8282,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/agent-activities', async (c) =>
     channelId,
     threadId: threadId || null,
     activityId: activityId || null,
-    limit: limit + 1, historyLimit, beforeSequence, afterSequence, beforeCreatedAt: cursor.createdAt, beforeId: cursor.id,
+    limit: limit + 1, historyLimit, beforeSequence, afterSequence, afterCommentaryCursor, beforeCreatedAt: cursor.createdAt, beforeId: cursor.id,
   });
   const page = activities.slice(0, limit);
   return c.json({ identity, agent_activities: page.map(serializeFlightDeckPgAgentActivity), next_cursor: activities.length > limit ? encodeFlightDeckPgMessageCursor(page.at(-1)!) : null });
