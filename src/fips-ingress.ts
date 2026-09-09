@@ -7,7 +7,12 @@ export interface FipsIngressConfig {
   meshAddress: string;
   port: number;
   origin: string;
+  bindAddress: string;
+  bindPort: number;
 }
+
+// Fixed private Docker seam: the host gateway cannot select an arbitrary target.
+export const FIPS_DOCKER_PORT = 43101;
 
 export function readFipsIngressConfig(env: Record<string, string | undefined>): FipsIngressConfig | null {
   if (!env.TOWER_FIPS_ENABLED || env.TOWER_FIPS_ENABLED === 'false') return null;
@@ -28,12 +33,19 @@ export function readFipsIngressConfig(env: Record<string, string | undefined>): 
   if (!/^[1-9][0-9]*$/.test(portText) || !Number.isSafeInteger(port) || port > 65535) {
     throw new Error('TOWER_FIPS_PORT must be an explicit port from 1 to 65535');
   }
-  return { nodeNpub, meshAddress, port, origin: new URL(`http://${nodeNpub}.fips:${port}`).origin };
+  const mode = env.TOWER_FIPS_INGRESS_MODE || 'mesh';
+  if (!['mesh', 'docker'].includes(mode)) throw new Error('TOWER_FIPS_INGRESS_MODE must be mesh or docker');
+  if (mode === 'docker' && Number(env.PORT || '3100') === FIPS_DOCKER_PORT) {
+    throw new Error('Dedicated ingress must not share the ordinary Tower port');
+  }
+  return { nodeNpub, meshAddress, port, origin: new URL(`http://${nodeNpub}.fips:${port}`).origin,
+    bindAddress: mode === 'docker' ? '0.0.0.0' : meshAddress,
+    bindPort: mode === 'docker' ? FIPS_DOCKER_PORT : port };
 }
 
 type AppFetch = (request: Request) => Response | Promise<Response>;
 
-/** This adapter is only installed on the dedicated mesh socket, never on HTTPS. */
+/** Installed only on the dedicated ingress socket (direct mesh or private Docker). */
 export function createFipsIngressFetch(config: FipsIngressConfig, appFetch: AppFetch): AppFetch {
   const authority = new URL(config.origin).host;
   return (request) => {
@@ -71,16 +83,16 @@ export function startFipsIngress(
     const config = readFipsIngressConfig(env);
     if (!config) return { status: 'disabled' as const };
     const server = serve({
-      hostname: config.meshAddress,
-      port: config.port,
+      hostname: config.bindAddress,
+      port: config.bindPort,
       idleTimeout: 0,
       fetch: createFipsIngressFetch(config, appFetch),
     });
-    report(`[tower-fips] listening ${config.origin} on [${config.meshAddress}]:${config.port}`);
+    report(`[tower-fips] listening ${config.origin} on ${config.bindAddress}:${config.bindPort}`);
     return { status: 'listening' as const, config, server };
   } catch {
     // Do not log supplied config or raw runtime errors: an operator may paste a secret.
-    report('[tower-fips] unavailable: validate TOWER_FIPS_* public settings and ensure the exact mesh IPv6/port is bindable in this network namespace; HTTPS is unchanged');
+    report('[tower-fips] unavailable: validate TOWER_FIPS_* public settings and dedicated ingress bind in this network namespace; HTTPS is unchanged');
     return { status: 'unavailable' as const };
   }
 }

@@ -3,45 +3,107 @@
 Contract for task `b5f96311-d672-46ca-ab2d-e0bb0cdde8f8`, workspace
 `2e5caefd-dd65-45d2-b747-ee874e8e5fc9`.
 
-Tower optionally starts a second HTTP listener in its existing Bun process,
-bound only to the operator-supplied FIPS IPv6 and port. Both listeners use the
-same Hono instance, database pool, service identity, routes, ACLs and SSE hub.
-The ordinary HTTPS deployment is unchanged. This is not a TCP proxy to the
-existing public port, an internal forwarding route, or a signing gateway.
+Tower starts an optional dedicated HTTP ingress in the same Bun process as the
+ordinary listener, sharing Hono, database, identity, ACLs and SSE hub. For this
+Docker Desktop deployment, a native macOS TCP forwarder connects the exact host
+mesh interface to a **dedicated loopback-published Docker port**:
 
-## Explicit setup
-
-Supply these public settings to the **Tower process**, initially disabled:
-
-```dotenv
-TOWER_FIPS_ENABLED=true
-TOWER_FIPS_NODE_NPUB=<actual checksummed lowercase node npub>
-TOWER_FIPS_MESH_ADDRESS=<actual node fd00::/8 IPv6, without brackets>
-TOWER_FIPS_PORT=43100
+```text
+WMapp/native client signs http://<node>.fips:43100/exactpath?query
+  -> native [fd87:f2eb:de48:6212:be46:3c95:4494:49ec]:43100
+  -> fixed 127.0.0.1:43101 on macOS (Docker publish)
+  -> dedicated Tower 0.0.0.0:43101 inside Docker
+  -> fixed mesh Host/canonical URL adapter -> existing Hono app
 ```
 
-The wire base URL is `http://<valid-node-npub>.fips:<configured-port>`.
-The npub identifies the FIPS node, not Tower's service or the user's identity.
-Use the public npub and IPv6 belonging to the same operator-provisioned node.
-Tower validates the npub checksum/type, IPv6 range and explicit port; it does
-not discover nodes, resolve `.fips`, inspect daemon files, read private keys,
-or attest that the operator's supplied npub and address belong together.
-The operator owns that mapping and interface/firewall provisioning.
+The public Tower listener stays on its existing port 3100. The gateway has no
+HTTP target selection, DNS, discovery, signing, keys, redirects or fallback.
+TCP pipes preserve request/response bytes, backpressure, SSE and disconnects.
+An upstream connection failure closes the mesh connection; it never selects
+another destination. Upstream connect timeout is five seconds; streams have no
+idle timeout. SIGTERM closes the listener and all gateway connections.
 
-The exact address must exist in Tower's network namespace and the port must
-be free. Do not substitute `::`, a LAN/public address, or a wildcard publish.
-On Docker Desktop, a host macOS FIPS address is not automatically available
-inside the Linux Tower container. The existing Compose configuration does not
-provision this interface or pass these new settings. A manager must arrange
-the FIPS interface in the Tower namespace and explicitly inject the four
-settings before enabling it. An env-file used only for Compose interpolation
-does not automatically inject arbitrary variables into the container.
-Do not forward raw mesh TCP to Tower's existing HTTPS/proxy listener: that
-bypasses this adapter's fixed-origin security boundary.
+## Public configuration and deployment modes
 
-No shared runtime was restarted for this implementation. After coordination,
-the manager must rebuild/restart Tower with the reviewed network/environment
-configuration, retaining the existing database and public HTTPS route.
+`.env.fips.example` contains the supplied public node identity/address and port.
+Copy it to ignored `.env.fips`. Keep this file public-settings-only, unquoted
+`TOWER_FIPS_*=value` lines. Do not copy Tower or FIPS daemon keys into it.
+
+- `TOWER_FIPS_ENABLED=true` explicitly enables the ingress and gateway.
+- `TOWER_FIPS_NODE_NPUB` is a checksummed lowercase node npub, not Tower/user identity.
+- `TOWER_FIPS_MESH_ADDRESS` is the exact native fd00::/8 IPv6, without brackets.
+- `TOWER_FIPS_PORT=43100` is the **external mesh port**, used in the signed URL.
+- `TOWER_FIPS_INGRESS_MODE=docker` selects internal `0.0.0.0:43101` in Tower;
+  this is exposed only as `127.0.0.1:43101` by `docker-compose.fips.yml`.
+  The native gateway always binds the mesh address and external port, regardless
+  of ingress mode. Its target is hardcoded `127.0.0.1:43101`, never configurable.
+- Omitted ingress mode defaults to `mesh` for native Tower installations, where
+  Tower itself binds the mesh address/port and no host gateway is needed.
+
+Docker never assumes the macOS mesh address exists in its namespace. The overlay
+explicitly injects every FIPS variable. Its wildcard **internal container** bind
+is necessary for Docker port forwarding and is not a host wildcard publish.
+Other containers on Tower networks can reach this ingress; they still face the
+fixed Host and existing route authentication. Do not publish 43101 on LAN/public
+interfaces or change the gateway destination to 3100. Ordinary and dedicated
+ports cannot be equal in Docker mode. The operator owns the supplied node/address
+mapping; no key material or daemon discovery is used to infer it.
+
+## Manager activation (not performed by the source worker)
+
+Run from `/Users/mini/code/wm/tower` after reviewing the source commit and
+concurrent WApp state. These commands affect Tower and its host gateway only;
+they do not restart Autopilot, Flight Deck, Postgres, MinIO or other services.
+
+```bash
+cp -n .env.fips.example .env.fips
+# Review .env.fips against the currently provisioned native node.
+docker compose --env-file .env.prod --env-file .env.fips \
+  -f docker-compose.prod.yml -f docker-compose.fips.yml config --quiet
+docker compose --env-file .env.prod --env-file .env.fips \
+  -f docker-compose.prod.yml -f docker-compose.fips.yml up -d --no-deps --build tower
+curl --fail http://127.0.0.1:3100/health
+
+# Check the dedicated ingress before activating the host service:
+FIPS_HOST=npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:43100
+curl --fail -H "Host: $FIPS_HOST" http://127.0.0.1:43101/health
+curl -i -H 'Host: wrong.example' http://127.0.0.1:43101/health
+# Required: 200 health above; 421 fips_host_mismatch for wrong Host.
+
+mkdir -p .runtime/fips-host "$HOME/Library/LaunchAgents"
+bun scripts/fips-host-launchd.ts .env.fips > .runtime/fips-host/gateway.plist
+plutil -lint .runtime/fips-host/gateway.plist
+cp .runtime/fips-host/gateway.plist "$HOME/Library/LaunchAgents/studio.otherstuff.tower-fips-host.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/studio.otherstuff.tower-fips-host.plist"
+launchctl print "gui/$(id -u)/studio.otherstuff.tower-fips-host"
+
+curl --noproxy '*' --fail -H "Host: $FIPS_HOST" \
+  'http://[fd87:f2eb:de48:6212:be46:3c95:4494:49ec]:43100/health'
+curl --fail https://sb4.otherstuff.studio/health
+```
+
+The launch agent uses the renderer's absolute Bun/repo paths and `/var/empty`
+working directory, avoiding automatic repository `.env` loading. It contains
+only validated public FIPS settings. Logs are `.runtime/fips-host/stdout.log`
+and `stderr.log`. launchd retries startup every ten seconds if the native mesh
+interface is not ready. This is a user-login service; it needs the same logged-in
+macOS user as the native FIPS node. For a later config update, regenerate the
+plist and explicitly `bootout` then `bootstrap` this service. Do not bootstrap a
+second copy or run the gateway in Docker. Inspect logs and `lsof -nP -iTCP:43100
+-sTCP:LISTEN` / `lsof -nP -iTCP:43101 -sTCP:LISTEN` to confirm exact host binds.
+
+Scoped gateway stop/recovery check (manager only):
+
+```bash
+launchctl bootout "gui/$(id -u)/studio.otherstuff.tower-fips-host"
+# Mesh must now fail; HTTPS health must remain usable.
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/studio.otherstuff.tower-fips-host.plist"
+```
+
+For full rollback, stop the host service, then recreate only Tower using the base
+Compose file without the FIPS overlay (keep FIPS settings out of `.env.prod`).
+Do not remove volumes. Always retain the overlay on subsequent Tower deployments
+while FIPS is enabled.
 
 ## Authentication and HTTP behavior
 
@@ -55,7 +117,9 @@ fetched on behalf of a requested target. There is no open proxy or gateway key.
 Use the broker to sign NIP-98 for the **actual mesh URL**, including the full
 path and query in order, method and required body hash. For example the `u`
 tag for a read is `http://<valid-node-npub>.fips:43100/api/v4/user/workspace-key-mappings`.
-Existing canonical URL rules apply (HTTP port 80 canonicalizes away).
+Existing canonical URL rules apply (HTTP port 80 canonicalizes away). Bun may
+normalize unusual leading `//` paths on real sockets; signatures for changed
+paths fail closed. Use the exact normal API path, not an alternative spelling.
 An HTTPS signature cannot be reused on mesh, even with forwarding headers.
 Route-specific auth, replay protection, workspace identity resolution and ACLs
 remain in Tower. No global auth gate is added: public health and explicitly
@@ -99,21 +163,66 @@ Tower's normal health contract. A lost daemon/interface must surface as a
 client connection failure. There is no automatic fallback or retry; after
 repair, coordinate a Tower restart. No availability claim comes from HTTPS.
 
-Source-only verification (no DB or shared listener required):
+Source and isolated socket verification (no DB or shared runtime required;
+43101 must be free because the test exercises the fixed production target):
 
 ```bash
 set -a; . ./.env.example; set +a
-bun test tests/fips-ingress.test.ts tests/auth.test.ts
+bun test tests/fips-ingress.test.ts tests/fips-host-gateway.test.ts tests/auth.test.ts
 git diff --check
 ```
 
-The ingress tests use an ephemeral synthetic signing identity, never an
-operator key. Real signed requests must use the broker.
+The tests use ephemeral synthetic signing identities, never operator keys.
+The real-socket test uses an ephemeral IPv6 loopback listener in place of the
+native FIPS interface and the fixed 43101 loopback ingress; it proves TCP/HTTP
+integration, not mesh daemon connectivity or live database state. It covers a
+512 KiB signed POST/body integrity, exact encoded path/ordered query, forged
+forwarding headers, Host rejection before dispatch, auth failures, redirect
+passthrough, first SSE event, disconnect propagation and upstream loss.
+
+An additional isolated **native host -> Docker publish** check is reproducible
+with the current local Tower image (43101 must be free). It creates only a
+throwaway fixture container, not Tower or its database. Run cleanup even if the
+smoke command fails:
+
+```bash
+docker run --detach --rm --name tower-fips-isolated-review --entrypoint bun \
+  --publish 127.0.0.1:43101:43101 \
+  --mount type=bind,source=/Users/mini/code/wm/tower,target=/source,readonly \
+  --workdir /source --env-file .env.example --env-file .env.fips.example \
+  wingman-tower-tower tests/fixtures/fips-docker-ingress.ts
+bun tests/fixtures/fips-docker-seam.ts
+docker stop tower-fips-isolated-review
+```
+
+Source pickup evidence (2026-09-09): 18 tests / 139 assertions passed on native
+Bun 1.3.0 and on Bun 1.2.23 in a disposable network-isolated container using the
+current Tower image with source mounted read-only. The separate native host to
+Docker publish fixture passed signed POST 200/body preservation, HTTPS-signed
+401, and wrong Host 421. TypeScript checking of changed runtime/scripts passed;
+Compose rendered exact loopback ports and all FIPS env; `plutil -lint` and
+`git diff --check` passed. No shared container rebuild or gateway activation
+was performed. The fixture is a synthetic authenticated echo, not live Tower
+DB/ACL/SSE/storage acceptance.
+
+For live brokered reads after activation, in an authorized manager session:
+
+```bash
+bun scripts/fips-live-smoke.ts
+```
+
+That script reads only Flight Deck's public app npub, signs each exact HTTPS or
+mesh URL using the existing local capability broker, connects the mesh request
+to the explicit native IPv6 with the fixed Host, and compares the task/workspace
+identity. It also requires unsigned and HTTPS-signature-on-mesh rejection. It
+prints no authorization tokens. Broker mesh signing denial is an explicit
+failure to resolve with the supervisor, never a reason to load a raw key.
+Live writes/SSE/storage acceptance still belongs to the primary supervisor.
 
 Pending manager activation checks:
 
-1. Rebuild/restart Tower only after coordinating the namespace, exact bind
-   and environment. Confirm the listening log and both HTTPS and mesh health.
+1. Execute the scoped activation above. Confirm dedicated/mesh/HTTPS health
+   and native host/Docker binds. Do not treat source tests as live validation.
 2. With a FIPS-capable client, broker-sign the exact endpoint for the same
    workspace reads and writes over each transport. Confirm common state,
    identity, ACL rejection and no duplicate records.

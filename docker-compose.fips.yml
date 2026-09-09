@@ -1,0 +1,12 @@
+# Opt-in overlay for Docker Desktop with a native host FIPS node.
+# Use together with docker-compose.prod.yml, never on its own.
+services:
+  tower:
+    environment:
+      TOWER_FIPS_ENABLED: "true"
+      TOWER_FIPS_INGRESS_MODE: docker
+      TOWER_FIPS_NODE_NPUB: ${TOWER_FIPS_NODE_NPUB:?set public FIPS node npub}
+      TOWER_FIPS_MESH_ADDRESS: ${TOWER_FIPS_MESH_ADDRESS:?set native host mesh IPv6}
+      TOWER_FIPS_PORT: ${TOWER_FIPS_PORT:?set external mesh port}
+    ports:
+      - "127.0.0.1:43101:43101"

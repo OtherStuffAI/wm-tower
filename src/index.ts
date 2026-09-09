@@ -26,7 +26,7 @@ try {
 console.log(`[coworker-be] listening on :${config.port}`);
 console.log(`[coworker-be] service npub: ${identity.npub}`);
 
-// Optional exact-address mesh socket; shares this app, DB pool and SSE hub.
+// Optional dedicated ingress (native mesh or Docker seam); shares app/DB/SSE hub.
 startFipsIngress(app.fetch);
 
 export default {

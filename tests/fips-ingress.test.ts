@@ -53,6 +53,15 @@ describe('explicit FIPS endpoint', () => {
     expect(startFipsIngress(app.fetch, { ...env, TOWER_FIPS_NODE_NPUB: 'secret-input' }, () => { throw new Error(); }, message => logs.push(message)).status).toBe('unavailable');
     expect(logs.join(' ')).not.toContain('secret-input');
   });
+  test('Docker mode separates internal bind from the canonical mesh identity', () => {
+    const docker = readFipsIngressConfig({ ...env, TOWER_FIPS_INGRESS_MODE: 'docker' })!;
+    expect(docker.bindAddress).toBe('0.0.0.0');
+    expect(docker.bindPort).toBe(43101);
+    expect(docker.origin).toBe(config.origin);
+    expect(docker.meshAddress).toBe(config.meshAddress);
+    expect(() => readFipsIngressConfig({ ...env, TOWER_FIPS_INGRESS_MODE: 'arbitrary' })).toThrow();
+    expect(() => readFipsIngressConfig({ ...env, TOWER_FIPS_INGRESS_MODE: 'docker', PORT: '43101' })).toThrow();
+  });
 });
 
 describe('fixed mesh request boundary', () => {
