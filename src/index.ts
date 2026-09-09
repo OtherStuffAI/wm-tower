@@ -1,4 +1,5 @@
 import { ensureServiceIdentity } from './service-identity';
+import { startFipsIngress } from './fips-ingress';
 
 const identity = await ensureServiceIdentity();
 
@@ -24,6 +25,9 @@ try {
 
 console.log(`[coworker-be] listening on :${config.port}`);
 console.log(`[coworker-be] service npub: ${identity.npub}`);
+
+// Optional exact-address mesh socket; shares this app, DB pool and SSE hub.
+startFipsIngress(app.fetch);
 
 export default {
   port: config.port,

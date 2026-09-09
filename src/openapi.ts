@@ -2438,7 +2438,7 @@ export function buildOpenApiDocument(origin: string) {
           in: 'header',
           name: 'Authorization',
           description:
-            'NIP-98 auth header in the format `Nostr <base64-encoded event-json>`. The event must contain exactly one non-empty `u` tag signing the complete canonical request URL, including the exact query parameters and their order, and exactly one non-empty `method` tag. Trailing slashes are significant.',
+            'NIP-98 auth header in the format `Nostr <base64-encoded event-json>`. The event must contain exactly one non-empty `u` tag signing the complete canonical request URL, including the exact query parameters and their order, and exactly one non-empty `method` tag. Trailing slashes are significant. On the optional dedicated FIPS listener, sign the configured http://<node-npub>.fips:<port> endpoint; forwarding headers cannot override that origin. HTTPS signatures cannot be reused on mesh.',
         },
 
       },

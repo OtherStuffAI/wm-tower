@@ -42,6 +42,10 @@ groups, record sync, storage, service discovery, and connection/bootstrap packag
 
 ## Production
 
+Optional, explicitly configured mesh transport is documented in
+[Tower FIPS ingress](docs/fips-ingress.md). It shares the existing app/database
+and leaves public HTTPS in place.
+
 Production deployment notes and the Docker Compose stack live in:
 
 - `docs/prod-deploy.md`
