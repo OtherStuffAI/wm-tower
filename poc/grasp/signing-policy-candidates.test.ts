@@ -28,9 +28,17 @@ test('source pins and required emitted shapes remain reviewable', () => {
   expect(pin.revision).toBe(ngitCommit);
   expect(Bun.spawnSync(['git', '-C', ngit, 'rev-parse', 'HEAD']).stdout.toString().trim()).toBe(pin.effective_revision ?? ngitCommit);
   expect(Bun.spawnSync(['git', '-C', ngit, 'merge-base', '--is-ancestor', ngitCommit, 'HEAD']).exitCode).toBe(0);
-  expect(Bun.spawnSync(['git', '-C', ngit, 'diff', '--exit-code', ngitCommit, '--', 'src/lib/repo_ref.rs', 'src/lib/repo_state.rs', 'src/lib/event_ordering.rs', 'src/lib/login/user.rs', 'src/bin/ngit/sub_commands/init.rs']).exitCode).toBe(0);
+  expect(Bun.spawnSync(['git', '-C', ngit, 'diff', '--exit-code', ngitCommit, '--', 'src/lib/repo_state.rs', 'src/lib/event_ordering.rs', 'src/lib/login/user.rs']).exitCode).toBe(0);
   expect(Bun.spawnSync(['git', '-C', autopilot, 'merge-base', '--is-ancestor', '8143790', 'HEAD']).exitCode).toBe(0);
   const source = readFileSync(`${ngit}/src/lib/repo_ref.rs`, 'utf8');
+  // URL compatibility and explicit private init changed; event emission did not.
+  const base = Bun.spawnSync(['git', '-C', ngit, 'show', `${ngitCommit}:src/lib/repo_ref.rs`]).stdout.toString();
+  const emission = (text: string) => {
+    const start=text.indexOf('    pub async fn to_event(');
+    const next=text.indexOf('\n    pub ',start+1);
+    return text.slice(start,next);
+  };
+  expect(emission(source)).toBe(emission(base));
   expect(source).toContain('Tag::parse(["alt", &format!("git repository: {}", self.name)])');
   expect(source).toContain('Tag::parse(["private", "true"])');
   expect(source).toContain('self.maintainers.as_slice() == [public_key]');

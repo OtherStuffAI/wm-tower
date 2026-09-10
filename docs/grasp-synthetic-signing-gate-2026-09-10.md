@@ -1,5 +1,10 @@
 # Synthetic signing passes; stock private discovery remains blocked
 
+Historical diagnostic checkpoint. Subsequent manager-directed opt-in client work
+is recorded in [the synthetic Git handoff](grasp-synthetic-git-handoff-2026-09-10.md).
+The stock10318 limitation remains, but the explicit private-service-only PoC mode
+now completes same-host synthetic Git without that account discovery operation.
+
 Task `3455c77b-7781-47f8-85a8-024c6f784f9e`, fresh worker
 `07295882-6dfb-4678-9e4e-f8f0e8262910`. This is a bounded diagnostic handoff,
 not synthetic Git acceptance or completion of the GRASP/GitWorkshop PoC.

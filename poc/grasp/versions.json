@@ -19,9 +19,19 @@
           "commit": "2f03694ec4b7c7e4c41b5f3cf96ceae0c2c91999",
           "path": "poc/grasp/ngit-broker-diagnostic.patch",
           "scope": "nonpublishing explicit signer diagnostic; not CLI login integration"
+        },
+        {
+          "commit": "c2a7a35e1b8752ae23a6a8c0577d295138b4e346",
+          "path": "poc/grasp/ngit-private-service.patch",
+          "scope": "explicit private synthetic CLI mode and FIPS path identity/normalization compatibility"
+        },
+        {
+          "commit": "bc1b89164308ef63590956252799781172f04d29",
+          "path": "poc/grasp/ngit-destination-spy.patch",
+          "scope": "offline native destination spy companion"
         }
       ],
-      "effective_revision": "2f03694ec4b7c7e4c41b5f3cf96ceae0c2c91999"
+      "effective_revision": "bc1b89164308ef63590956252799781172f04d29"
     },
     {
       "name": "GitWorkshop",
@@ -32,12 +42,15 @@
       "patches": []
     }
   ],
-  "compatibility": "not yet proven together",
+  "compatibility": "patched ngit publisher Git and populated privacy pass over same-host canonical FIPS; distinct-peer and GitWorkshop not accepted",
   "docker_image": "tower-grasp-poc:3.0.1-b990d218",
   "image_id": "sha256:0a47c3f873d4f483b418b5121b96c1177dc118ed089318fc709523bd0dc0a144",
   "grasp_linux_binary_sha256": "ecb829b0c5453ebeb1e4dd1b363cbac1b9ea58d480c4a792ff86b350b420ca35",
   "grasp_native_debug_sha256": "2a459aaeae0cad3804d138c442885f222eb6bc3d4f068bdaf36678447ba0bb60",
   "ingress_image": "nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236",
   "ngit_diagnostic_native_sha256": "0be8645c2810ff4b27586debd8b94b5db12ea4c8705ca35da4e8a3ef68a003a2",
-  "ngit_diagnostic_toolchain": "rustc 1.98.0 (88d9e12ae 2026-08-18)"
+  "ngit_diagnostic_toolchain": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "ngit_native_binary_sha256": "bb786aebc7fcadb241783ad2941934ca00603deb98b501459b04ebcd0f592478",
+  "git_remote_nostr_native_binary_sha256": "75879c4e653295f1eb4a69cb2d478e03cf07d3172e0018a41f8f2feb2cab2fc1",
+  "ngit_native_build_revision": "c2a7a35e1b8752ae23a6a8c0577d295138b4e346"
 }

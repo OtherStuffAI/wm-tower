@@ -1,0 +1,106 @@
+diff --git a/examples/poc_destination_probe.rs b/examples/poc_destination_probe.rs
+new file mode 100644
+index 0000000..61195b3
+--- /dev/null
++++ b/examples/poc_destination_probe.rs
+@@ -0,0 +1,100 @@
++//! Offline network-spy companion: caller supplies only loopback trap URLs.
++use anyhow::{Result, bail};
++use ngit::{
++    client::{Client, Connect, Params},
++    git::{Repo, nostr_url::NostrUrlDecoded},
++    poc_private,
++};
++use nostr::prelude::{
++    Coordinate, EventBuilder, FinalizeUnsignedEvent, Keys, Kind, Nip19Coordinate, RelayUrl,
++    SignEvent,
++};
++fn denied<T>(result: Result<T>) -> Result<()> {
++    match result {
++        Err(e) if e.to_string() == "PoC refuses noncanonical destination" => Ok(()),
++        _ => bail!("destination guard did not reject explicitly"),
++    }
++}
++#[tokio::main]
++async fn main() -> Result<()> {
++    if !poc_private::enabled() {
++        bail!("explicit mode required");
++    }
++    let relay = std::env::args()
++        .nth(1)
++        .ok_or_else(|| anyhow::anyhow!("trap relay required"))?;
++    let git = std::env::args()
++        .nth(2)
++        .ok_or_else(|| anyhow::anyhow!("trap Git required"))?;
++    if !relay.starts_with("ws://127.0.0.1:") || !git.starts_with("http://127.0.0.1:") {
++        bail!("loopback traps only");
++    }
++    let mut params = Params::default();
++    params.relay_default_set = vec![relay.clone()];
++    params.announcement_indexer_relays = vec![relay.clone()];
++    params.fallback_signer_relays = vec![relay.clone()];
++    params.blaster_relays = vec![relay.clone()];
++    params.grasp_default_set = vec![git.clone()];
++    let client = Client::new(params);
++    assert_eq!(
++        client.get_relay_default_set(),
++        &vec![poc_private::RELAY.to_string()]
++    );
++    assert!(client.get_announcement_indexer_relays().is_empty());
++    assert!(client.get_blaster_relays().is_empty());
++    assert!(client.get_grasp_default_set().is_empty());
++    assert_eq!(
++        client.get_fallback_signer_relays(),
++        &vec![poc_private::RELAY.to_string()]
++    );
++    let hint = RelayUrl::parse(&relay)?;
++    client.nip42_register_private_repo_relays(vec![hint.clone()]);
++    denied(client.connect(&hint).await)?;
++    denied(client.get_events(vec![relay.clone()], vec![]).await)?;
++    // Test-only ephemeral event; trap closes TCP immediately if a guard regresses.
++    let keys = Keys::generate();
++    let event = keys.sign_event(
++        EventBuilder::new(Kind::Custom(1), "offline guard fixture")
++            .finalize_unsigned(keys.public_key()),
++    )?;
++    denied(client.send_event_to(None, &relay, event).await)?;
++    let dir = tempfile::tempdir()?;
++    git2::Repository::init(dir.path())?;
++    let repo = Repo::from_path(&dir.path().to_path_buf())?;
++    let decoded = NostrUrlDecoded {
++        original_string: String::new(),
++        coordinate: Nip19Coordinate {
++            coordinate: Coordinate {
++                kind: Kind::GitRepoAnnouncement,
++                public_key: poc_private::public_key(),
++                identifier: "synthetic".into(),
++            },
++            relays: vec![hint],
++        },
++        protocol: None,
++        ssh_key_file: None,
++        nip05: None,
++    };
++    let term = console::Term::buffered_stderr();
++    denied(ngit::list::list_from_remote(
++        &term, &repo, &git, &decoded, false,
++    ))?;
++    denied(ngit::fetch::fetch_from_git_server(
++        &repo,
++        &[],
++        &git,
++        &decoded,
++        &term,
++        false,
++    ))?;
++    denied(ngit::push::push_to_remote_url(
++        &repo,
++        &git,
++        None,
++        &["main:main".into()],
++        &term,
++        &[],
++    ))?;
++    println!("six native destination operations denied before network");
++    Ok(())
++}

@@ -1,8 +1,10 @@
 # Private GRASP PoC operations
 
 This is a partial, local deployment for task `3455c77b-7781-47f8-85a8-024c6f784f9e`.
-Latest: [post-enablement signing gate](../../docs/grasp-synthetic-signing-gate-2026-09-10.md)
-passes 22 live broker checks; native private-list kind10318 remains denied.
+Latest: [synthetic Git handoff](../../docs/grasp-synthetic-git-handoff-2026-09-10.md)
+records 22 live broker checks, native push/clone/update/fetch through an explicit
+private-only compatibility mode, and 8 populated same-host privacy checks.
+Distinct-peer, member-role/removal/expiry and later PoC acceptance remain pending.
 The older origin-denied/activation-pending notes below are historical evidence.
 Read [the authorised brief](../../docs/grasp-fips-poc-handoff-2026-09-10.md) and
 [the pickup evidence](../../docs/grasp-fips-poc-progress-2026-09-10.md).

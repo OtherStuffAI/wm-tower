@@ -1,0 +1,382 @@
+diff --git a/src/bin/ngit/sub_commands/init.rs b/src/bin/ngit/sub_commands/init.rs
+index ea3e16e..bf01558 100644
+--- a/src/bin/ngit/sub_commands/init.rs
++++ b/src/bin/ngit/sub_commands/init.rs
+@@ -501,0 +502,3 @@ fn resolve_web(
++    if ngit::poc_private::enabled() {
++        return args_web.to_vec();
++    }
+@@ -1827,0 +1831,3 @@ async fn publish_and_finalize(
++    if ngit::poc_private::enabled() {
++        ngit::poc_private::require_repo(&repo_ref)?;
++    }
+@@ -1981 +1987,3 @@ async fn publish_and_finalize(
+-    if repo_ref.private {
++    // Explicit synthetic mode uses only its repository relay; no account discovery publication.
++    // require_repo above rejects any other identity, metadata or destination.
++    if repo_ref.private && !ngit::poc_private::enabled() {
+diff --git a/src/lib/client.rs b/src/lib/client.rs
+index 0f5caa2..cf5c78f 100644
+--- a/src/lib/client.rs
++++ b/src/lib/client.rs
+@@ -555 +555,4 @@ impl Connect for Client {
+-    fn new(opts: Params) -> Self {
++    fn new(mut opts: Params) -> Self {
++        if crate::poc_private::enabled() {
++            crate::poc_private::constrain_params(&mut opts);
++        }
+@@ -556,0 +560,6 @@ impl Connect for Client {
++        if crate::poc_private::enabled() {
++            auth_policy.set_signer(crate::poc_private::signer());
++            auth_policy.register_private_repo_relays([
++                RelayUrl::parse(crate::poc_private::RELAY).expect("fixed relay")
++            ]);
++        }
+@@ -579,0 +589 @@ impl Connect for Client {
++        crate::poc_private::require_relay(relay_url.as_str())?;
+@@ -652,0 +663 @@ impl Connect for Client {
++        crate::poc_private::require_relay(url)?;
+@@ -731,0 +743 @@ impl Connect for Client {
++            crate::poc_private::require_relay(relay.as_str())?;
+@@ -909,0 +922 @@ impl Connect for Client {
++                crate::poc_private::require_relay(relay.as_str())?;
+@@ -950 +963,2 @@ impl Connect for Client {
+-                        ensure_onion_url_reachable(relay_url.as_str())?;
++                        crate::poc_private::require_relay(relay_url.as_str())?;
++        ensure_onion_url_reachable(relay_url.as_str())?;
+@@ -1222,0 +1237 @@ impl Connect for Client {
++        crate::poc_private::require_relay(relay_url.as_str())?;
+diff --git a/src/lib/fetch.rs b/src/lib/fetch.rs
+index f8d1c21..a840fcf 100644
+--- a/src/lib/fetch.rs
++++ b/src/lib/fetch.rs
+@@ -112,0 +113 @@ pub fn fetch_from_git_server(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -229,0 +231 @@ pub fn fetch_refs_from_git_server(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -312,0 +315 @@ fn fetch_from_git_server_url(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -328,0 +332,3 @@ fn fetch_from_git_server_url(
++    if crate::poc_private::enabled() {
++        fetch_options.follow_redirects(git2::RemoteRedirect::None);
++    }
+diff --git a/src/lib/git_http_auth.rs b/src/lib/git_http_auth.rs
+index c179f13..c007192 100644
+--- a/src/lib/git_http_auth.rs
++++ b/src/lib/git_http_auth.rs
+@@ -95,0 +96 @@ async fn build_private_git_authorization(
++    crate::poc_private::require_git(server_url)?;
+diff --git a/src/lib/list.rs b/src/lib/list.rs
+index 4a07e8b..f6a52d9 100644
+--- a/src/lib/list.rs
++++ b/src/lib/list.rs
+@@ -484,0 +485 @@ fn list_from_remote_sync(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -566,0 +568 @@ fn list_from_remote_url(
++    crate::poc_private::require_git(git_server_remote_url)?;
+@@ -587,0 +590,3 @@ fn list_from_remote_url(
++    if crate::poc_private::enabled() {
++        fetch_options.follow_redirects(git2::RemoteRedirect::None);
++    }
+diff --git a/src/lib/login/existing.rs b/src/lib/login/existing.rs
+index 6eb065f..c3dfaa6 100644
+--- a/src/lib/login/existing.rs
++++ b/src/lib/login/existing.rs
+@@ -81,0 +82,10 @@ pub async fn load_existing_login(
++    if crate::poc_private::enabled() {
++        if signer_info.is_some() {
++            bail!("PoC does not permit another signer selection");
++        }
++        return Ok((
++            crate::poc_private::signer(),
++            crate::poc_private::user(),
++            SignerInfoSource::CommandLineArguments,
++        ));
++    }
+diff --git a/src/lib/mod.rs b/src/lib/mod.rs
+index 765276f..4396c58 100644
+--- a/src/lib/mod.rs
++++ b/src/lib/mod.rs
+@@ -21,0 +22 @@ pub mod output_mode;
++pub mod poc_private;
+diff --git a/src/lib/poc_private.rs b/src/lib/poc_private.rs
+new file mode 100644
+index 0000000..4cbff74
+--- /dev/null
++++ b/src/lib/poc_private.rs
+@@ -0,0 +1,188 @@
++//! Explicit isolated synthetic mode; never enabled by normal CLI use.
++use crate::{
++    NgitSigner,
++    client::Params,
++    login::user::{UserGraspList, UserMetadata, UserRef, UserRelayRef, UserRelays},
++    repo_ref::RepoRef,
++};
++use anyhow::{Result, bail};
++use nostr::prelude::{PublicKey, RelayUrl, Timestamp};
++use std::sync::Arc;
++pub const RELAY: &str =
++    "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/";
++pub const CLONE: &str = "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git";
++pub fn enabled() -> bool {
++    std::env::var("NGIT_POC_PRIVATE_SERVICE").as_deref() == Ok("1")
++}
++pub fn public_key() -> PublicKey {
++    PublicKey::parse("ffdc30446bede234446a69124bae94cdbddebf24f0abee4a5cabfc1124313c2e")
++        .expect("fixed public key")
++}
++pub fn signer() -> Arc<NgitSigner> {
++    Arc::new(NgitSigner::PocBroker {
++        public_key: public_key(),
++        bridge: "/Users/mini/code/wm/tower/poc/grasp/signer-bridge.ts".into(),
++    })
++}
++pub fn user() -> UserRef {
++    UserRef {
++        public_key: public_key(),
++        metadata: UserMetadata {
++            name: "synthetic publisher".into(),
++            created_at: Timestamp::from(0),
++            nip05: None,
++        },
++        relays: UserRelays {
++            relays: vec![UserRelayRef {
++                url: RELAY.into(),
++                read: true,
++                write: true,
++            }],
++            created_at: Timestamp::from(0),
++        },
++        grasp_list: UserGraspList {
++            urls: vec![],
++            created_at: Timestamp::from(0),
++        },
++    }
++}
++pub fn constrain_params(params: &mut Params) {
++    params.keys = None;
++    params.relay_default_set = vec![RELAY.into()];
++    params.announcement_indexer_relays = vec![];
++    params.blaster_relays = vec![];
++    params.fallback_signer_relays = vec![RELAY.into()];
++    params.grasp_default_set = vec![];
++}
++pub fn require_relay(url: &str) -> Result<()> {
++    if enabled() {
++        check_destination(url, RELAY)?;
++    }
++    Ok(())
++}
++pub fn require_git(url: &str) -> Result<()> {
++    if enabled() {
++        check_destination(url, CLONE)?;
++    }
++    Ok(())
++}
++pub fn require_repo(repo: &RepoRef) -> Result<()> {
++    if !repo.private
++        || repo.identifier != "synthetic"
++        || repo.name != "synthetic"
++        || repo.git_server != vec![CLONE.to_string()]
++        || repo.relays != vec![RelayUrl::parse(RELAY)?]
++        || repo.maintainers != vec![public_key()]
++        || repo.selected_maintainer != public_key()
++        || !repo.web.is_empty()
++        || !repo.upstream.is_empty()
++        || !repo.blossoms.is_empty()
++        || !repo.hashtags.is_empty()
++        || !repo.extra_tags.is_empty()
++        || !repo.role_tags.is_empty()
++        || !repo.moderators.is_empty()
++        || repo.lead.is_some()
++    {
++        bail!(
++            "PoC requires private synthetic repository: private={}, name={}, identifier={}, clone={:?}, relays={:?}, maintainer_count={}, web_count={}, upstream_count={}, blossom_count={}, hashtag_count={}, extra_count={}, role_count={}, moderator_count={}, lead={}",
++            repo.private,
++            repo.name,
++            repo.identifier,
++            repo.git_server,
++            repo.relays,
++            repo.maintainers.len(),
++            repo.web.len(),
++            repo.upstream.len(),
++            repo.blossoms.len(),
++            repo.hashtags.len(),
++            repo.extra_tags.len(),
++            repo.role_tags.len(),
++            repo.moderators.len(),
++            repo.lead.is_some()
++        );
++    }
++    Ok(())
++}
++
++fn check_destination(url: &str, expected: &str) -> Result<()> {
++    if url != expected {
++        bail!("PoC refuses noncanonical destination");
++    }
++    Ok(())
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn rejects_changed_origin_path_credentials_and_protocol() {
++        assert!(check_destination(RELAY, RELAY).is_ok());
++        assert!(check_destination(CLONE, CLONE).is_ok());
++        for bad in [
++            CLONE.replace("41007", "41008"),
++            CLONE.replace("synthetic", "other"),
++            format!("{CLONE}/"),
++            format!("{CLONE}?x=1"),
++            CLONE.replace("http://", "https://"),
++            CLONE.replace("http://", "http://user@"),
++            "https://example.invalid/synthetic.git".into(),
++        ] {
++            assert!(check_destination(&bad, CLONE).is_err());
++        }
++        assert!(check_destination(RELAY.trim_end_matches('/'), RELAY).is_err());
++    }
++    #[test]
++    fn only_private_sole_publisher_synthetic_metadata_can_skip_discovery() -> Result<()> {
++        let good = RepoRef {
++            name: "synthetic".into(),
++            description: "test".into(),
++            identifier: "synthetic".into(),
++            root_commit: "1234567890abcdef1234567890abcdef12345678".into(),
++            git_server: vec![CLONE.into()],
++            web: vec![],
++            upstream: vec![],
++            relays: vec![RelayUrl::parse(RELAY)?],
++            blossoms: vec![],
++            hashtags: vec![],
++            private: true,
++            maintainers: vec![public_key()],
++            selected_maintainer: public_key(),
++            maintainers_without_annoucnement: None,
++            events: Default::default(),
++            nostr_git_url: None,
++            extra_tags: vec![],
++            role_tags: vec![],
++            moderators: vec![],
++            lead: None,
++        };
++        assert!(require_repo(&good).is_ok());
++        for field in 0..6 {
++            let mut bad = good.clone();
++            match field {
++                0 => bad.private = false,
++                1 => bad.identifier = "other".into(),
++                2 => bad
++                    .git_server
++                    .push("https://example.invalid/repo.git".into()),
++                3 => bad.relays.push(RelayUrl::parse("wss://example.invalid/")?),
++                4 => bad
++                    .maintainers
++                    .push(nostr::prelude::Keys::generate().public_key()),
++                _ => bad.web.push("https://example.invalid/".into()),
++            }
++            assert!(require_repo(&bad).is_err());
++        }
++        Ok(())
++    }
++    #[test]
++    fn overriding_params_removes_every_public_fallback_and_local_key() {
++        let mut params = Params::default();
++        params.keys = Some(nostr::prelude::Keys::generate());
++        constrain_params(&mut params);
++        assert!(params.keys.is_none());
++        assert_eq!(params.relay_default_set, vec![RELAY]);
++        assert_eq!(params.fallback_signer_relays, vec![RELAY]);
++        assert!(params.announcement_indexer_relays.is_empty());
++        assert!(params.blaster_relays.is_empty());
++        assert!(params.grasp_default_set.is_empty());
++    }
++}
+diff --git a/src/lib/push.rs b/src/lib/push.rs
+index 1d96079..bc6d0bb 100644
+--- a/src/lib/push.rs
++++ b/src/lib/push.rs
+@@ -59,0 +60 @@ pub fn push_to_remote(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -211,0 +213 @@ pub fn push_to_remote_url(
++    crate::poc_private::require_git(git_server_url)?;
+@@ -225,0 +228,3 @@ pub fn push_to_remote_url(
++    if crate::poc_private::enabled() {
++        push_options.follow_redirects(git2::RemoteRedirect::None);
++    }
+diff --git a/src/lib/repo_ref.rs b/src/lib/repo_ref.rs
+index b99ef80..6e334cc 100644
+--- a/src/lib/repo_ref.rs
++++ b/src/lib/repo_ref.rs
+@@ -3649,0 +3650,2 @@ pub fn normalize_grasp_server_url(url: &str) -> Result<String> {
++    // Remove a repository namespace only from the path, never an npub hostname.
++    let path = path.find("npub1").map_or(path, |pos| &path[..pos]);
+@@ -3652 +3654 @@ pub fn normalize_grasp_server_url(url: &str) -> Result<String> {
+-    let mut normalized_url = match scheme {
++    let normalized_url = match scheme {
+@@ -3657,5 +3658,0 @@ pub fn normalize_grasp_server_url(url: &str) -> Result<String> {
+-    // If the normalized URL contains "npub1", remove "npub1" and everything after
+-    // it
+-    if let Some(pos) = normalized_url.find("npub1") {
+-        normalized_url.truncate(pos); // Keep everything before "npub1"
+-    }
+@@ -3666,0 +3664,7 @@ pub fn extract_npub(s: &str) -> Result<&str> {
++    let s = if let Some((_, authority_path)) = s.split_once("://") {
++        authority_path
++            .find('/')
++            .map_or("", |pos| &authority_path[pos..])
++    } else {
++        s
++    };
+@@ -3706,2 +3710,7 @@ pub fn is_grasp_server_clone_url(url: &str) -> bool {
+-    // Must contain a valid npub
+-    let npub = match extract_npub(url) {
++    // The host can itself be an npub (FIPS); repository identity is in the path.
++    let parsed = match Url::parse(url) {
++        Ok(parsed) => parsed,
++        Err(_) => return false,
++    };
++    let path = parsed.path();
++    let npub = match extract_npub(path) {
+@@ -3715 +3724 @@ pub fn is_grasp_server_clone_url(url: &str) -> bool {
+-    if let Some(npub_pos) = url.find(&npub_pattern) {
++    if let Some(npub_pos) = path.find(&npub_pattern) {
+@@ -3717 +3726 @@ pub fn is_grasp_server_clone_url(url: &str) -> bool {
+-        let after_npub = &url[npub_pos + npub_pattern.len()..];
++        let after_npub = &path[npub_pos + npub_pattern.len()..];
+@@ -3742 +3751,6 @@ pub fn format_grasp_server_url_as_relay_url(url: &str) -> Result<String> {
+-        return Ok(grasp_server_url.replace("http://", "ws://"));
++        let relay = grasp_server_url.replace("http://", "ws://");
++        if crate::poc_private::enabled() && relay == crate::poc_private::RELAY.trim_end_matches('/')
++        {
++            return Ok(crate::poc_private::RELAY.to_string());
++        }
++        return Ok(relay);
+@@ -9117,0 +9132,26 @@ mod tests {
++
++#[cfg(test)]
++mod poc_fips_url_tests {
++    use super::*;
++    #[test]
++    fn fips_host_identity_is_not_repository_identity() {
++        assert!(is_grasp_server_clone_url(crate::poc_private::CLONE));
++        assert_eq!(
++            normalize_grasp_server_url(crate::poc_private::CLONE).unwrap(),
++            crate::poc_private::RELAY
++                .replace("ws://", "http://")
++                .trim_end_matches('/')
++        );
++        assert_eq!(
++            extract_npub(crate::poc_private::CLONE).unwrap(),
++            "npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr"
++        );
++        assert!(extract_npub(crate::poc_private::RELAY).is_err());
++        assert!(!is_grasp_server_clone_url(
++            &crate::poc_private::CLONE.replace(
++                "/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/",
++                "/invalid/"
++            )
++        ));
++    }
++}
