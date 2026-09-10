@@ -24,7 +24,11 @@ function accepts(event: Candidate): boolean {
     && matchesExactNostrTags(event.tags, rule.exactTags);
 }
 test('source pins and required emitted shapes remain reviewable', () => {
-  expect(Bun.spawnSync(['git', '-C', ngit, 'rev-parse', 'HEAD']).stdout.toString().trim()).toBe(ngitCommit);
+  const pin = JSON.parse(readFileSync(new URL('./versions.json', import.meta.url), 'utf8')).upstreams.find((u: any) => u.name === 'ngit');
+  expect(pin.revision).toBe(ngitCommit);
+  expect(Bun.spawnSync(['git', '-C', ngit, 'rev-parse', 'HEAD']).stdout.toString().trim()).toBe(pin.effective_revision ?? ngitCommit);
+  expect(Bun.spawnSync(['git', '-C', ngit, 'merge-base', '--is-ancestor', ngitCommit, 'HEAD']).exitCode).toBe(0);
+  expect(Bun.spawnSync(['git', '-C', ngit, 'diff', '--exit-code', ngitCommit, '--', 'src/lib/repo_ref.rs', 'src/lib/repo_state.rs', 'src/lib/event_ordering.rs', 'src/lib/login/user.rs', 'src/bin/ngit/sub_commands/init.rs']).exitCode).toBe(0);
   expect(Bun.spawnSync(['git', '-C', autopilot, 'merge-base', '--is-ancestor', '8143790', 'HEAD']).exitCode).toBe(0);
   const source = readFileSync(`${ngit}/src/lib/repo_ref.rs`, 'utf8');
   expect(source).toContain('Tag::parse(["alt", &format!("git repository: {}", self.name)])');

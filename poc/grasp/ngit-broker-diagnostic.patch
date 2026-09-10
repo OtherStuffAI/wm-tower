@@ -1,0 +1,330 @@
+diff --git a/examples/poc_broker_gate.rs b/examples/poc_broker_gate.rs
+new file mode 100644
+index 0000000..60e492f
+--- /dev/null
++++ b/examples/poc_broker_gate.rs
+@@ -0,0 +1,27 @@
++// No Client is created: this gate cannot connect to or publish on any relay.
++use anyhow::Result;
++use ngit::{NgitSigner, login::user::PrivateGitRelayList};
++use nostr::prelude::{EventBuilder, Kind, PublicKey, RelayUrl, Tag};
++use std::sync::Arc;
++#[tokio::main]
++async fn main() -> Result<()> {
++    let signer = Arc::new(NgitSigner::PocBroker {
++        public_key: PublicKey::parse(
++            "ffdc30446bede234446a69124bae94cdbddebf24f0abee4a5cabfc1124313c2e",
++        )?,
++        bridge: std::env::var("NGIT_POC_BROKER_BRIDGE")?.into(),
++    });
++    let relay = "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/";
++    let clone = "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git";
++    signer
++        .sign_event_builder(
++            EventBuilder::new(Kind::Custom(27235), "")
++                .tags([Tag::parse(["u", clone])?, Tag::parse(["method", "GET"])?]),
++        )
++        .await?;
++    println!("native ngit broker HTTP signer: pass (signature discarded)");
++    // The exact stock private-init discovery-list conversion, before any publication.
++    let mut list = PrivateGitRelayList::new(vec![RelayUrl::parse(relay)?])?;
++    list.to_event(&signer).await?;
++    anyhow::bail!("unexpected discovery-list signing success; no event published")
++}
+diff --git a/src/lib/signer.rs b/src/lib/signer.rs
+index f1d75bc..2128bcb 100644
+--- a/src/lib/signer.rs
++++ b/src/lib/signer.rs
+@@ -17,6 +17,11 @@ use crate::output_mode::TransientLine;
+ #[derive(Clone)]
+ pub enum NgitSigner {
+     Keys(Keys),
++    /// Isolated PoC only: broker subprocess, never local key material.
++    PocBroker {
++        public_key: PublicKey,
++        bridge: std::path::PathBuf,
++    },
+     Connect(Arc<NostrConnect>),
+ }
+ 
+@@ -40,6 +45,7 @@ fn validate_remote_signed_event(
+ impl NgitSigner {
+     pub async fn get_public_key(&self) -> Result<PublicKey> {
+         match self {
++            Self::PocBroker { public_key, .. } => Ok(*public_key),
+             Self::Keys(k) => Ok(k.public_key()),
+             Self::Connect(c) => c.get_public_key_async().await.map_err(|e| anyhow!(e)),
+         }
+@@ -65,6 +71,21 @@ impl NgitSigner {
+ 
+     async fn sign_event_inner(&self, unsigned: UnsignedEvent) -> Result<Event> {
+         match self {
++            Self::PocBroker { public_key, bridge } => {
++                let expected = unsigned.clone();
++                let result = poc_broker_call(
++                    bridge,
++                    serde_json::json!({"operation":"sign", "event":unsigned}),
++                )
++                .await?;
++                let event: Event = serde_json::from_value(result["event"].clone())?;
++                validate_poc_signed_event(
++                    *public_key,
++                    &expected,
++                    event,
++                    std::env::var("SESSION_ID").ok().as_deref(),
++                )
++            }
+             Self::Keys(k) => k.sign_event(unsigned).map_err(|e| anyhow!(e)),
+             Self::Connect(c) => {
+                 let expected_public_key = unsigned.pubkey;
+@@ -115,6 +136,13 @@ impl NgitSigner {
+ 
+     pub async fn nip44_encrypt(&self, public_key: &PublicKey, content: &str) -> Result<String> {
+         match self {
++            Self::PocBroker { bridge, .. } => {
++                let result = poc_broker_call(bridge, serde_json::json!({"operation":"encrypt-private-list", "peer":public_key.to_hex(), "content":content})).await?;
++                result["ciphertext"]
++                    .as_str()
++                    .map(str::to_owned)
++                    .context("broker encryption response missing ciphertext")
++            }
+             Self::Keys(keys) => keys
+                 .nip44_encrypt(public_key, content)
+                 .map_err(|error| anyhow!(error)),
+@@ -127,6 +155,7 @@ impl NgitSigner {
+ 
+     pub async fn nip44_decrypt(&self, public_key: &PublicKey, payload: &str) -> Result<String> {
+         match self {
++            Self::PocBroker { .. } => bail!("PoC broker decryption is not granted"),
+             Self::Keys(keys) => keys
+                 .nip44_decrypt(public_key, payload)
+                 .map_err(|error| anyhow!(error)),
+@@ -151,6 +180,7 @@ fn remote_signing_message(description: &str) -> String {
+ impl std::fmt::Debug for NgitSigner {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
++            Self::PocBroker { .. } => write!(f, "NgitSigner::PocBroker"),
+             Self::Keys(k) => write!(f, "NgitSigner::Keys({})", k.public_key()),
+             Self::Connect(_) => write!(f, "NgitSigner::Connect"),
+         }
+@@ -272,3 +302,220 @@ mod tests {
+         assert!(error.to_string().contains("invalid event signature"));
+     }
+ }
++
++// Pipes carry signatures only between ngit and the session broker. No shell,
++// socket listener, credential file, tracing, or publication is involved.
++async fn poc_broker_call(
++    bridge: &std::path::Path,
++    input: serde_json::Value,
++) -> Result<serde_json::Value> {
++    use std::process::Stdio;
++    use tokio::io::AsyncWriteExt;
++    let mut child = tokio::process::Command::new("bun")
++        .arg(bridge)
++        .stdin(Stdio::piped())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped())
++        .kill_on_drop(true)
++        .spawn()
++        .context("could not start PoC broker bridge")?;
++    let mut stdin = child.stdin.take().context("missing bridge stdin")?;
++    stdin.write_all(&serde_json::to_vec(&input)?).await?;
++    drop(stdin);
++    let output = tokio::time::timeout(std::time::Duration::from_secs(15), child.wait_with_output())
++        .await??;
++    if !output.status.success() {
++        // Bridge emits only a sanitized error object, never input or credentials.
++        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap_or_default();
++        bail!(
++            "PoC broker: {}",
++            error["error"].as_str().unwrap_or("request failed")
++        );
++    }
++    serde_json::from_slice(&output.stdout).context("invalid bridge response")
++}
++
++fn validate_poc_signed_event(
++    public_key: PublicKey,
++    expected: &UnsignedEvent,
++    event: Event,
++    session_id: Option<&str>,
++) -> Result<Event> {
++    let mut tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
++    let expected_tags: Vec<Vec<String>> = expected
++        .tags
++        .iter()
++        .map(|t| t.as_slice().to_vec())
++        .collect();
++    if expected.kind.as_u16() == 27235 && tags.len() == 3 {
++        let custody = &tags[2];
++        if custody.len() == 4
++            && custody[0] == "wm-session-capability"
++            && Some(custody[2].as_str()) == session_id
++            && custody[1].len() == 36
++            && custody[1]
++                .chars()
++                .all(|c| c.is_ascii_hexdigit() || c == '-')
++            && custody[3].len() == 64
++            && custody[3].chars().all(|c| c.is_ascii_hexdigit())
++        {
++            tags.pop();
++        }
++    }
++    if event.pubkey != public_key
++        || event.pubkey != expected.pubkey
++        || event.kind != expected.kind
++        || event.content != expected.content
++        || tags != expected_tags
++        || event.created_at < expected.created_at
++        || event.created_at.as_secs() > expected.created_at.as_secs().saturating_add(5)
++    {
++        bail!("broker changed candidate or signing exceeded five seconds");
++    }
++    event.verify().context("invalid broker signature")?;
++    Ok(event)
++}
++
++#[cfg(test)]
++mod poc_tests {
++    use super::*;
++    use nostr::prelude::{Kind, Tag, Timestamp};
++    #[test]
++    fn broker_responses_bind_fields_time_and_signature() -> Result<()> {
++        let keys = Keys::generate();
++        let expected = EventBuilder::new(Kind::Custom(30618), "")
++            .custom_created_at(Timestamp::from(100))
++            .tags([Tag::parse(["d", "synthetic"])?])
++            .finalize_unsigned(keys.public_key());
++        for seconds in [100, 105] {
++            let mut candidate = expected.clone();
++            candidate.created_at = Timestamp::from(seconds);
++            assert!(
++                validate_poc_signed_event(
++                    keys.public_key(),
++                    &expected,
++                    keys.sign_event(candidate)?,
++                    None
++                )
++                .is_ok()
++            );
++        }
++        for field in 0..7 {
++            let mut candidate = expected.clone();
++            match field {
++                0 => candidate.kind = Kind::Custom(1),
++                1 => candidate.content = "wrong".into(),
++                2 => {
++                    candidate.tags =
++                        nostr::prelude::Tags::from_list(vec![Tag::parse(["d", "other"])?])
++                }
++                3 => candidate.created_at = Timestamp::from(99),
++                4 => candidate.created_at = Timestamp::from(106),
++                _ => (),
++            }
++            let mut signed = keys.sign_event(candidate)?;
++            if field == 5 {
++                signed.pubkey = Keys::generate().public_key();
++            }
++            if field == 6 {
++                let other = Keys::generate();
++                let other_event = EventBuilder::new(Kind::Custom(1), "other")
++                    .finalize_unsigned(other.public_key());
++                signed.sig = other.sign_event(other_event)?.sig;
++            }
++            assert!(validate_poc_signed_event(keys.public_key(), &expected, signed, None).is_err());
++        }
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod poc_custody_tests {
++    use super::*;
++    use nostr::prelude::{Kind, Tag, Tags, Timestamp};
++    #[test]
++    fn http_custody_is_exact_and_session_bound() -> Result<()> {
++        let keys = Keys::generate();
++        let expected = EventBuilder::new(Kind::Custom(27235), "")
++            .custom_created_at(Timestamp::from(100))
++            .tags([
++                Tag::parse(["u", "http://test.invalid/synthetic.git"])?,
++                Tag::parse(["method", "GET"])?,
++            ])
++            .finalize_unsigned(keys.public_key());
++        let custody = Tag::parse([
++            "wm-session-capability",
++            "12345678-1234-1234-1234-123456789abc",
++            "session",
++            &"a".repeat(64),
++        ])?;
++        let mut candidate = expected.clone();
++        let mut tags: Vec<Tag> = candidate.tags.iter().cloned().collect();
++        tags.push(custody.clone());
++        candidate.tags = Tags::from_list(tags.clone());
++        let signed = keys.sign_event(candidate.clone())?;
++        assert!(
++            validate_poc_signed_event(
++                keys.public_key(),
++                &expected,
++                signed.clone(),
++                Some("session")
++            )
++            .is_ok()
++        );
++        assert!(
++            validate_poc_signed_event(keys.public_key(), &expected, signed, Some("wrong-session"))
++                .is_err()
++        );
++        tags.push(custody);
++        candidate.tags = Tags::from_list(tags);
++        assert!(
++            validate_poc_signed_event(
++                keys.public_key(),
++                &expected,
++                keys.sign_event(candidate)?,
++                Some("session")
++            )
++            .is_err()
++        );
++        let mut candidate = expected.clone();
++        let mut tags: Vec<Tag> = candidate.tags.iter().cloned().collect();
++        tags.push(Tag::parse([
++            "wm-session-capability",
++            "malformed",
++            "session",
++            "bad",
++        ])?);
++        candidate.tags = Tags::from_list(tags);
++        assert!(
++            validate_poc_signed_event(
++                keys.public_key(),
++                &expected,
++                keys.sign_event(candidate.clone())?,
++                Some("session")
++            )
++            .is_err()
++        );
++        let mut non_http = expected.clone();
++        non_http.kind = Kind::Custom(30618);
++        candidate.kind = non_http.kind;
++        let mut tags: Vec<Tag> = non_http.tags.iter().cloned().collect();
++        tags.push(Tag::parse([
++            "wm-session-capability",
++            "12345678-1234-1234-1234-123456789abc",
++            "session",
++            &"a".repeat(64),
++        ])?);
++        candidate.tags = Tags::from_list(tags);
++        assert!(
++            validate_poc_signed_event(
++                keys.public_key(),
++                &non_http,
++                keys.sign_event(candidate)?,
++                Some("session")
++            )
++            .is_err()
++        );
++        Ok(())
++    }
++}

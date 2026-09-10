@@ -1,0 +1,158 @@
+{
+  "at": "2026-09-10T06:44:06.173Z",
+  "sessionId": "07295882-6dfb-4678-9e4e-f8f0e8262910",
+  "signedBy": "npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr",
+  "evidence": "Signing only; no fixture published or retained; no Git request",
+  "results": [
+    {
+      "name": "canonical root GET",
+      "expected": "allow",
+      "signed": true,
+      "passed": true
+    },
+    {
+      "name": "wrong origin",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "NIP-98 origin is not allowed"
+    },
+    {
+      "name": "wrong repository",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "NIP-98 path is not allowed"
+    },
+    {
+      "name": "wrong path",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "NIP-98 path is not allowed"
+    },
+    {
+      "name": "wrong method",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "NIP-98 method is not allowed"
+    },
+    {
+      "name": "kind 22242 candidate",
+      "expected": "allow",
+      "signed": true,
+      "passed": true
+    },
+    {
+      "name": "kind 22242 extra relay value",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 22242 duplicate relay",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event tags exceed policy"
+    },
+    {
+      "name": "kind 30617 candidate",
+      "expected": "allow",
+      "signed": true,
+      "passed": true
+    },
+    {
+      "name": "kind 30617 duplicate d",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 duplicate d reversed",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 missing d",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 wrong repository",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 extra relays value",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 duplicate relays",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 extra clone value",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30617 duplicate clone",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30618 candidate",
+      "expected": "allow",
+      "signed": true,
+      "passed": true
+    },
+    {
+      "name": "kind 30618 duplicate d",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30618 duplicate d reversed",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30618 missing d",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    },
+    {
+      "name": "kind 30618 wrong repository",
+      "expected": "deny",
+      "signed": false,
+      "passed": true,
+      "error": "Nostr event violates an exact tag constraint"
+    }
+  ]
+}
