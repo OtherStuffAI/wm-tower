@@ -1,10 +1,12 @@
 {
-  "enabled": true,
+  "enabled": false,
   "assignments": {
     "profileIds": [
       "fd-npub1s46587g3k2axql224qz-2e5caefddd47ee874e8e5fc9-npub1hd37razr2rfxsw6dns5"
     ],
-    "workspaceIds": []
+    "workspaceIds": [
+      "2e5caefd-dd65-45d2-b747-ee874e8e5fc9"
+    ]
   },
   "id": "grasp-poc-synthetic-nostr",
   "name": "GRASP PoC synthetic relay and state",
@@ -28,10 +30,10 @@
         "relay",
         "challenge"
       ],
-      "requiredTags": [
+      "exactTags": [
         [
           "relay",
-          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007"
+          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/"
         ]
       ]
     },
@@ -42,28 +44,42 @@
       "maxTagBytes": 4096,
       "allowedTagNames": [
         "d",
+        "r",
         "name",
         "description",
         "clone",
-        "relays",
         "web",
-        "r",
-        "maintainers",
-        "t",
-        "!"
+        "relays",
+        "alt",
+        "private"
       ],
-      "requiredTags": [
+      "exactTags": [
         [
           "d",
           "synthetic"
         ],
         [
           "relays",
-          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007"
+          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/"
         ],
         [
           "clone",
           "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git"
+        ],
+        [
+          "name",
+          "synthetic"
+        ],
+        [
+          "alt",
+          "git repository: synthetic"
+        ],
+        [
+          "private",
+          "true"
+        ],
+        [
+          "web"
         ]
       ]
     },
@@ -75,14 +91,16 @@
       "allowedTagNames": [
         "d",
         "HEAD",
-        "refs/heads/main",
-        "!",
-        "r"
+        "refs/heads/main"
       ],
-      "requiredTags": [
+      "exactTags": [
         [
           "d",
           "synthetic"
+        ],
+        [
+          "HEAD",
+          "ref: refs/heads/main"
         ]
       ]
     }

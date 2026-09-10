@@ -171,16 +171,13 @@ Only this new app was started/restarted. GRASP now uses the FIPS canonical
 origin, and its public service identity survived those configuration recreations.
 This is identity-only evidence, not content-persistence acceptance.
 
-Manager next action: review/apply `poc/grasp/signing-policy-http.draft.json`
-and `poc/grasp/signing-policy-nostr.draft.json`, verify the existing Rick-profile
-assignment, and explicitly reissue this worker session through supported
-administration. Both drafts pass `validateSigningPolicyDraft` from current
-Autopilot source. The HTTP grant allows only canonical `/Rick/synthetic.git`
-GET; Nostr rules separately bind NIP-42 to the relay and 30617/30618 to synthetic
-announcement/state. No issue/PR or final-copy grant is included before its gate.
-No blanket workspace grant is proposed. No policy mutation or Autopilot source
-change/restart was attempted. If supported administration cannot apply these
-bounds, report that specific failure for a bounded Autopilot follow-up.
+The old enabled/pair-only drafts at dd5fcfe failed independent review. They are
+superseded by the corrected **disabled** files at
+`poc/grasp/signing-policy-http.draft.json` and
+`poc/grasp/signing-policy-nostr.draft.json`. Follow the reviewed activation order
+in [the operations README](../poc/grasp/README.md#disabled-policy-correction-review).
+Manager cannot apply these: the admin policy endpoint is broker-denied. Human/admin
+action is required after the explicitly approved Autopilot restart and runtime checks.
 
 | Work package | Status |
 | --- | --- |
@@ -209,3 +206,29 @@ Initial PoC commit: `20cc0e2255807f3afaba0c4778cd19cb709b73f4`.
 The managed adapter follow-up is committed separately.
 All tested nonignored PoC files and the supplied pickup brief are committed;
 machine config, test/build data and private identity remain outside the commit.
+
+## Final disabled draft correction (2026-09-10)
+
+Source prerequisite is Autopilot `8143790`, independently approved but **not
+restarted**. Both drafts now require profile AND workspace and remain disabled.
+Exact singleton d/clone/relays/relay values survive source normalization and
+local temporary-store persistence. Announcement additionally requires exact
+synthetic name/alt, private=true and empty web; unused role/publication tags are
+removed. Initial state is limited to main/HEAD. Unsigned candidates and negative
+checks are in `poc/grasp/signing-policy-candidates{,.test}.ts`.
+Validation: `bun test poc/grasp/signing-policy-candidates.test.ts` — 5 pass,
+0 fail, 125 assertions. `git diff --check` passes. No Tower source/schema
+changed, so no runtime rebuild or live suite was invoked.
+
+Stock ngit's additional kind 10318 self-encrypted private discovery-list update
+and later ordering nonce are evidence-backed compatibility gates, not newly
+allowed permissions. See the [full reviewed constraints and activation/cleanup
+order](../poc/grasp/README.md#disabled-policy-correction-review). The grant applies
+to all future matching Rick-profile + workspace sessions, not just one worker.
+Human/admin must save/verify disabled constraints after explicitly user-approved
+external Autopilot restart and runtime verification, then enable and issue with
+trusted workspace context before positive/negative broker checks and original
+PoC gates. Manager admin access is broker-denied. Use actual issuance expiresAt;
+no policy auto-expiry exists. Disable both policies and revoke every affected
+issued snapshot at completion. No new authenticated/populated GRASP success,
+restart, capability change, application implementation or push in this correction.

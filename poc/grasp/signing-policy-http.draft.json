@@ -1,10 +1,12 @@
 {
-  "enabled": true,
+  "enabled": false,
   "assignments": {
     "profileIds": [
       "fd-npub1s46587g3k2axql224qz-2e5caefddd47ee874e8e5fc9-npub1hd37razr2rfxsw6dns5"
     ],
-    "workspaceIds": []
+    "workspaceIds": [
+      "2e5caefd-dd65-45d2-b747-ee874e8e5fc9"
+    ]
   },
   "id": "grasp-poc-synthetic-http",
   "name": "GRASP PoC synthetic repository GET",
