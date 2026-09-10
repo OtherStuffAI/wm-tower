@@ -1,0 +1,90 @@
+{
+  "enabled": true,
+  "assignments": {
+    "profileIds": [
+      "fd-npub1s46587g3k2axql224qz-2e5caefddd47ee874e8e5fc9-npub1hd37razr2rfxsw6dns5"
+    ],
+    "workspaceIds": []
+  },
+  "id": "grasp-poc-synthetic-nostr",
+  "name": "GRASP PoC synthetic relay and state",
+  "description": "NIP-42 for allocated relay; only synthetic announcement/state. Add final repo and issue/PR grants separately after gates.",
+  "operations": [
+    "nostr.sign"
+  ],
+  "eventKinds": [
+    22242,
+    30617,
+    30618
+  ],
+  "nip98Targets": [],
+  "nostrKindRules": [
+    {
+      "kind": 22242,
+      "maxContentBytes": 0,
+      "maxTags": 2,
+      "maxTagBytes": 4096,
+      "allowedTagNames": [
+        "relay",
+        "challenge"
+      ],
+      "requiredTags": [
+        [
+          "relay",
+          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007"
+        ]
+      ]
+    },
+    {
+      "kind": 30617,
+      "maxContentBytes": 0,
+      "maxTags": 16,
+      "maxTagBytes": 4096,
+      "allowedTagNames": [
+        "d",
+        "name",
+        "description",
+        "clone",
+        "relays",
+        "web",
+        "r",
+        "maintainers",
+        "t",
+        "!"
+      ],
+      "requiredTags": [
+        [
+          "d",
+          "synthetic"
+        ],
+        [
+          "relays",
+          "ws://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007"
+        ],
+        [
+          "clone",
+          "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git"
+        ]
+      ]
+    },
+    {
+      "kind": 30618,
+      "maxContentBytes": 0,
+      "maxTags": 16,
+      "maxTagBytes": 4096,
+      "allowedTagNames": [
+        "d",
+        "HEAD",
+        "refs/heads/main",
+        "!",
+        "r"
+      ],
+      "requiredTags": [
+        [
+          "d",
+          "synthetic"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "grasp-fips-poc-forwarder",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs" }
+}

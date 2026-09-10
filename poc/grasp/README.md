@@ -15,8 +15,9 @@ an ordinary bridge, publishing only `127.0.0.1:60546`. This extra container is
 necessary because Docker Desktop did not publish ports on the internal-only
 network. GRASP has no configured external peers, user-index relays or Sync+;
 nginx forwards only to GRASP and disables request/response buffering for Git and
-WebSocket streaming. The native Autopilot adapter and canonical FIPS address
-remain to be allocated and tested.
+WebSocket streaming. The native Autopilot adapter and canonical FIPS address are recorded in
+`fips.json`; same-host discovery/anonymous denial passes, distinct-peer
+acceptance remains pending.
 
 The service generates and stores its own identity inside `/data`. Never read or
 export its key. NIP-11 exposes the public identity. Git is in `/data/git`, LMDB
@@ -89,8 +90,10 @@ The broker probe currently fails with `NIP-98 origin is not allowed`. It signs
 only the GRASP-08 repository-root GET profile and prints no token. Generic kind
 27235 signing is deliberately not a fallback. The current custom policy
 validator accepts HTTPS or a valid HTTP `npub.fips` origin, not arbitrary
-localhost HTTP. The manager should arrange an allocated canonical FIPS origin
-and a narrow policy assignment/reissue through supported administration. Do not
+localhost HTTP. The exact canonical origin is now allocated in `fips.json`. Both
+`signing-policy-http.draft.json` and `signing-policy-nostr.draft.json` pass the
+current policy validator and remain unapplied. The manager should apply/reissue
+these narrow grants through supported administration. Do not
 broaden the baseline or change Tower authentication to get past this gate.
 
 ## Snapshot/restore acceptance still pending
@@ -104,3 +107,31 @@ Compare public identity, refs and authenticated issue/PR events, then destroy
 only the isolated test resources. No snapshot or restore has been performed;
 the final procedure must record exact filenames, volume IDs and results after
 synthetic/import gates pass.
+
+## Managed FIPS forwarding app
+
+App `12c563d2-a95f-42ef-b510-6eaa74daf22a` is running with allocated port 41007.
+It forwards to the Docker ingress on 60546, preserving HTTP and upgrades, and
+rejects noncanonical Host headers (including the automatically assigned public
+alias, tested 403). Native source is `forwarder/server.mjs`; two transport tests
+cover binary request/response bodies and upgrade initial bytes:
+
+```sh
+node --test poc/grasp/forwarder/server.test.mjs
+bun poc/grasp/anonymous-smoke.ts http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007
+```
+
+Manage only this app, from the Autopilot checkout:
+
+```sh
+bun clis/appctl.ts stop 12c563d2-a95f-42ef-b510-6eaa74daf22a --owner npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy --bot-crypto
+bun clis/appctl.ts start 12c563d2-a95f-42ef-b510-6eaa74daf22a --owner npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy --bot-crypto
+```
+
+The self-space registration route returned 403; the explicit authorised owner
+route succeeded. This is not an outstanding registration blocker. There is no
+frontend yet. `fips-same-host-smoke.json` is same-host mesh evidence only.
+The drafts grant only the synthetic repository. They bind Rick's existing agent
+profile rather than the whole workspace; manager must verify that assignment
+and reissue only the intended worker session. No policy or capability changes
+were performed by this worker.

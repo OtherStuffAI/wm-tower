@@ -1,7 +1,8 @@
 // Run with Bun. Uses only this session's capability; never prints credentials.
 const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
 const { callCapabilityBroker } = await import(`${autopilot}/src/mcp/capability-client.ts`);
-const repository = new URL(process.argv[2] ?? 'http://127.0.0.1:60546/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git');
+const routing = await Bun.file(new URL('./fips.json', import.meta.url)).json();
+const repository = new URL(process.argv[2] ?? new URL('/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git', routing.url).href);
 if (repository.username || repository.password || repository.search || repository.hash
   || !repository.pathname.endsWith('/synthetic.git')) throw new Error('Expected synthetic repository root');
 try {

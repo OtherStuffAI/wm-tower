@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "assignments": {
+    "profileIds": [
+      "fd-npub1s46587g3k2axql224qz-2e5caefddd47ee874e8e5fc9-npub1hd37razr2rfxsw6dns5"
+    ],
+    "workspaceIds": []
+  },
+  "id": "grasp-poc-synthetic-http",
+  "name": "GRASP PoC synthetic repository GET",
+  "description": "Only the allocated canonical synthetic repository-root GET credential; no Tower auth changes.",
+  "operations": [
+    "nip98.sign"
+  ],
+  "eventKinds": [
+    27235
+  ],
+  "nostrKindRules": [],
+  "nip98Targets": [
+    {
+      "origin": "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007",
+      "methods": [
+        "GET"
+      ],
+      "exactPaths": [
+        "/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git"
+      ],
+      "pathPrefixes": [],
+      "requireBodyHash": false
+    }
+  ]
+}

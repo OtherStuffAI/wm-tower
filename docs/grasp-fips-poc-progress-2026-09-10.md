@@ -1,12 +1,13 @@
 # GRASP PoC pickup: private local service, signing gate pending
 
 The routing blocker is resolved with the manager's explicit CLI options. A
-private GRASP container and loopback ingress now run, and native GRASP privacy
+private GRASP container, loopback ingress and managed FIPS forwarder now run; native GRASP privacy
 and push-authorization suites pass. **The six-package PoC is incomplete.**
 The current session cannot obtain a GRASP repository-root credential: the
 capability broker returns `NIP-98 origin is not allowed`. This repeated failure
 is the authorised stopping point. No authenticated synthetic repository,
-Flight Deck import, ngit operation or remote FIPS success is claimed.
+Flight Deck import, ngit operation or distinct-peer FIPS success is claimed.
+The canonical FIPS URL passes discovery and anonymous denial from this host.
 
 ## Routing and custody
 
@@ -30,7 +31,8 @@ bun clis/wingman.ts flightdeck task show 3455c77b-7781-47f8-85a8-024c6f784f9e --
 Milestones posted: `d0a17571-5fb8-43ca-9cea-ff4cb016303a`,
 `abe304aa-c4da-4aed-9495-1ec443aba64e`,
 `70dc9926-2414-44b1-b31c-ef9f64a172f0`,
-`a0646c84-a003-4a27-a8c8-f8199d92ae39`.
+`a0646c84-a003-4a27-a8c8-f8199d92ae39`,
+`8e830fdd-2f30-43a9-9db0-e12b3095188f`.
 
 `poc/grasp/membership.json` binds the live eight-actor snapshot to Tower,
 workspace owner/service and app identities. Rick's stable broker identity is
@@ -62,6 +64,10 @@ are preserved.
 - `poc/grasp/versions.json`, `source-refs.json`, `membership.json`: version,
   source and membership evidence. `README.md` and `local.env.example` document
   reproducible start/stop/refresh and remaining restore acceptance.
+- `poc/grasp/forwarder/`: native managed adapter; two passing transport tests.
+- `poc/grasp/fips.json`, `fips-same-host-smoke.json`: allocated canonical address
+  and same-host evidence. Two signing-policy drafts pass the current validator
+  and are not applied.
 
 All candidate upstream checkouts exist at `/Users/mini/code/ngit-poc/` with
 unchanged origins and detached candidate pins. GRASP `b990d2189ba494944f8e6c875d52056421c061c2`
@@ -94,7 +100,9 @@ reconciliation remains pending. No remote branches are claimed imported.
 | Broker GRASP-08 credential | Fail repeatedly: origin not allowed |
 | ngit/private-GRASP/Git-push suites | Not run; ngit binary/adapter not built at unmet gate |
 | GitWorkshop build/unit/e2e | Not run; later gate |
-| Actual remote FIPS and WMapp | Not run |
+| Managed FIPS URL, same host | Discovery/Git/relay anonymous denial pass; public alias 403 |
+| Forwarder transport tests | 2 pass: binary body/method/URL and upgrade initial bytes |
+| Actual distinct-peer FIPS and WMapp | Not run |
 | Membership removal, origin/expiry on live service | Pending; native private suite includes credential/identity negatives |
 | Full recreation and isolated restore | Pending; no repository/issue/PR exists to reconcile |
 | Flight Deck source preservation | Pass for HEAD, worktree and config at handoff |
@@ -135,35 +143,50 @@ warnings; Docker used upstream Rust 1.96. These are local fixtures only.
   `npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74`,
   mesh `fd87:f2eb:de48:6212:be46:3c95:4494:49ec`; two connected peers observed.
   These descriptors do not prove a peer can access this PoC.
-- No managed frontend/forwarder registration, canonical FIPS URL, issue, PR,
-  imported ref or WMapp device/build result exists yet.
+- Managed forwarder: `12c563d2-a95f-42ef-b510-6eaa74daf22a`, running on allocated
+  port 41007. Canonical URL:
+  `http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/`.
+  It forwards to 60546 and only accepts that canonical Host. The generated
+  public alias `https://full-lap-mint.rick.runwingman.com/` returns 403.
+- No frontend, issue, PR, imported ref or WMapp device/build result exists yet.
 
 ## Exact blocker and next step
 
 From Tower: `bun poc/grasp/broker-probe.ts` exits 1 with
 `NIP-98 origin is not allowed`. It calls supported
 `/api/mcp/capabilities/nip98` with method `GET` and URL
-`http://127.0.0.1:60546/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git`.
-Two direct calls reproduced the denial before the committed probe was run.
+`http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git`.
+Two calls reproduced denial at this allocated FIPS origin; earlier localhost
+diagnostic requests also failed.
 Generic kind 27235 was also denied, correctly; it is not a substitute path.
 
-Manager next action: arrange the allocated canonical FIPS app address and a
-narrow signing policy assignment/reissue for this worker through supported
-administration. The current custom policy validator accepts HTTPS or valid
-HTTP npub.fips origins, not arbitrary localhost HTTP. Prefer configuring the
-service's canonical FIPS origin and testing it through its routed transport;
-do not weaken the baseline solely for localhost. Required grants must separately
-bound repository-root GET (27235), NIP-42 relay challenge (22242), announcement
-and state (30617/30618) to the synthetic coordinate, then add only the issue/PR
-kinds and final repository coordinate demonstrated necessary. No policy mutation
-or Autopilot source change/restart was attempted here. Any missing ability to
-express these bounds belongs to a separately routed Autopilot follow-up.
+Manager follow-up `e3dd885f-cb5d-4e96-bea0-eb12448c06c2` required the
+concrete address before handoff. Self-space app registration returned
+`403 admin-or-execution-delegation-required`; retry through the explicit
+owner-space API succeeded and allocated the address above. Registration and
+start used `bun clis/appctl.ts register grasp-fips-poc-forwarder --directory
+/Users/mini/code/wm/tower/poc/grasp/forwarder --web-app --owner
+npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy --bot-crypto`.
+Only this new app was started/restarted. GRASP now uses the FIPS canonical
+origin, and its public service identity survived those configuration recreations.
+This is identity-only evidence, not content-persistence acceptance.
+
+Manager next action: review/apply `poc/grasp/signing-policy-http.draft.json`
+and `poc/grasp/signing-policy-nostr.draft.json`, verify the existing Rick-profile
+assignment, and explicitly reissue this worker session through supported
+administration. Both drafts pass `validateSigningPolicyDraft` from current
+Autopilot source. The HTTP grant allows only canonical `/Rick/synthetic.git`
+GET; Nostr rules separately bind NIP-42 to the relay and 30617/30618 to synthetic
+announcement/state. No issue/PR or final-copy grant is included before its gate.
+No blanket workspace grant is proposed. No policy mutation or Autopilot source
+change/restart was attempted. If supported administration cannot apply these
+bounds, report that specific failure for a bounded Autopilot follow-up.
 
 | Work package | Status |
 | --- | --- |
 | 1 contract/connectivity | Routing, membership, source and version inventory done; pins not proven together |
 | 2 private GRASP | Live local service and denial/fixture evidence; populated synthetic acceptance blocked |
-| 3 canonical FIPS | Pending gate 2 and scoped signing; no remote claim |
+| 3 canonical FIPS | Managed address/forwarder and same-host anonymous checks done; distinct-peer/authentication pending |
 | 4 broker/ngit/import | Pending; no import or issue/PR |
 | 5 GitWorkshop/WMapp | Pending, including actual Pete signing action |
 | 6 recovery/review | Pending live matrix and manager-commissioned independent review |
@@ -182,5 +205,7 @@ Tower remains on main. Pre-existing `src/routes/wapp-management.ts` and
 They are unrelated, untested concurrent work and are excluded from the tested
 PoC commit. No Tower backend source/schema was changed; its rebuild/test suite
 was not invoked. Autopilot and Flight Deck were neither edited nor restarted.
+Initial PoC commit: `20cc0e2255807f3afaba0c4778cd19cb709b73f4`.
+The managed adapter follow-up is committed separately.
 All tested nonignored PoC files and the supplied pickup brief are committed;
 machine config, test/build data and private identity remain outside the commit.
