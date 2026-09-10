@@ -113,3 +113,69 @@ In the pinned ngit-grasp checkout, run its native `private_mode` and
 and inherited Git author/committer variables cleared. Source-only checks cannot
 replace live PoC validation. Tower backend source/schema changes additionally
 require Tower's own rebuild and tests; the PoC gate tools do not change that API.
+
+## Distinct peer gate
+
+`distinct-peer-gate.ts` operates an already provisioned, explicitly authorized
+disposable FIPS client container. It requires its own daemon-generated persistent
+identity, TUN interface and network namespace. The service-host daemon, its
+configuration and managed ingress remain unchanged. An authenticated outbound
+link from an isolated container to the host's existing UDP listener can establish
+a distinct peer on the same physical computer. Docker Desktop may report the
+host end of that underlying UDP link as loopback; retain both daemons' public
+peer/session records and the client's routes to distinguish this from an
+application connection through the host's own FIPS client.
+
+Use the locally supported, pinned FIPS release and its container prerequisites:
+container root, `NET_ADMIN`, `/dev/net/tun`, container IPv6 enabled, a dedicated
+bridge network and no published ports. Run the daemon directly, bypassing the
+image's application entrypoint and healthcheck. Put its public configuration and
+daemon-created identity under verified ignored, private runtime storage; never
+read the key or run a key-printing command. Keep the control socket on the
+container's native filesystem, such as `/run/fips-control.sock`, because a macOS
+bind mount may not support the Unix socket. Disable client Nostr/LAN rendezvous
+and pin only the service peer's public npub and reachable transport address when
+the existing service listener permits a direct connection. Do not alter the
+service's mesh settings to make the test pass.
+
+The ignored JSON gate configuration contains:
+
+- `container`, `socket`, `tun`: the disposable client and its control/TUN paths.
+- `root`: canonical HTTP FIPS synthetic repository root, ending in
+  `/npub.../synthetic.git`.
+- `serviceNpub`, `address`: the service-host FIPS identity and matching mesh IPv6.
+- `graspPubkey`: the distinct GRASP application's expected NIP-11 public key.
+- `main`, `parent`: expected synthetic Git commits.
+- `evidence`: a fresh ignored directory for this attempt.
+- `clonePrefix`: a fresh path matching `/client/clone-<lowercase-run-name>`.
+
+```sh
+bun poc/grasp/distinct-peer-gate.ts tmp/docs/handoffs/peer-run/gate-config.json
+```
+
+The runner checks container isolation, daemon identity, the authenticated service
+peer and TUN route. HTTP uses explicit mesh address resolution; WebSocket sockets
+are opened inside the client through Docker exec standard streams. The caller's
+own broker signs exact NIP-42 challenges and repository-root GET credentials;
+all returned signatures are verified. Broker capability tokens never enter the
+container. The fresh native Git clone receives only the short-lived exact Git
+signature on standard input and disables credential helpers, proxying and
+redirects. It checks commits, both synthetic files and `git fsck`.
+
+Anonymous/nonmember Git and relay reads must be denied on that same route.
+For the outage control, the runner removes only the disposable client's
+`fd00::/8` route, requires fresh Git/relay/clone failure, and restores the route
+in `finally` before checking recovery. The expected route is the standard FIPS
+route through the configured client TUN with static metric 1024. Do not run this
+against a shared or specially routed client. Lowering a Linux TUN link is a
+poor substitute: it can remove the interface's IPv6 address as well.
+
+Capture reciprocal service-host public status/peer/session records around the
+run. A finite `tcpdump -nn -i any` inside the disposable client can retain packet
+headers for route/no-fallback review; do not use payload capture, `-A`, `-X` or
+pcap files, which could retain authentication headers. Keep operational capture
+and container inspection results ignored. Require independent review before
+claiming the gate passes. Stop only the disposable client afterwards; retain
+its protected identity, synthetic clone and evidence for review. Failures and
+earlier attempts remain recorded. This gate does not authorize real import or
+claim Pete's device acceptance or a native ngit collaboration workflow.
