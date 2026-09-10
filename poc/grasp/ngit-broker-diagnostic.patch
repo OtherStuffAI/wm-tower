@@ -35,30 +35,15 @@ diff --git a/src/lib/signer.rs b/src/lib/signer.rs
 index f1d75bc..2128bcb 100644
 --- a/src/lib/signer.rs
 +++ b/src/lib/signer.rs
-@@ -17,6 +17,11 @@ use crate::output_mode::TransientLine;
- #[derive(Clone)]
- pub enum NgitSigner {
-     Keys(Keys),
+@@ -19,0 +20,5 @@ pub enum NgitSigner {
 +    /// Isolated PoC only: broker subprocess, never local key material.
 +    PocBroker {
 +        public_key: PublicKey,
 +        bridge: std::path::PathBuf,
 +    },
-     Connect(Arc<NostrConnect>),
- }
- 
-@@ -40,6 +45,7 @@ fn validate_remote_signed_event(
- impl NgitSigner {
-     pub async fn get_public_key(&self) -> Result<PublicKey> {
-         match self {
+@@ -42,0 +48 @@ impl NgitSigner {
 +            Self::PocBroker { public_key, .. } => Ok(*public_key),
-             Self::Keys(k) => Ok(k.public_key()),
-             Self::Connect(c) => c.get_public_key_async().await.map_err(|e| anyhow!(e)),
-         }
-@@ -65,6 +71,21 @@ impl NgitSigner {
- 
-     async fn sign_event_inner(&self, unsigned: UnsignedEvent) -> Result<Event> {
-         match self {
+@@ -67,0 +74,15 @@ impl NgitSigner {
 +            Self::PocBroker { public_key, bridge } => {
 +                let expected = unsigned.clone();
 +                let result = poc_broker_call(
@@ -74,13 +59,7 @@ index f1d75bc..2128bcb 100644
 +                    std::env::var("SESSION_ID").ok().as_deref(),
 +                )
 +            }
-             Self::Keys(k) => k.sign_event(unsigned).map_err(|e| anyhow!(e)),
-             Self::Connect(c) => {
-                 let expected_public_key = unsigned.pubkey;
-@@ -115,6 +136,13 @@ impl NgitSigner {
- 
-     pub async fn nip44_encrypt(&self, public_key: &PublicKey, content: &str) -> Result<String> {
-         match self {
+@@ -117,0 +139,7 @@ impl NgitSigner {
 +            Self::PocBroker { bridge, .. } => {
 +                let result = poc_broker_call(bridge, serde_json::json!({"operation":"encrypt-private-list", "peer":public_key.to_hex(), "content":content})).await?;
 +                result["ciphertext"]
@@ -88,29 +67,11 @@ index f1d75bc..2128bcb 100644
 +                    .map(str::to_owned)
 +                    .context("broker encryption response missing ciphertext")
 +            }
-             Self::Keys(keys) => keys
-                 .nip44_encrypt(public_key, content)
-                 .map_err(|error| anyhow!(error)),
-@@ -127,6 +155,7 @@ impl NgitSigner {
- 
-     pub async fn nip44_decrypt(&self, public_key: &PublicKey, payload: &str) -> Result<String> {
-         match self {
+@@ -129,0 +158 @@ impl NgitSigner {
 +            Self::PocBroker { .. } => bail!("PoC broker decryption is not granted"),
-             Self::Keys(keys) => keys
-                 .nip44_decrypt(public_key, payload)
-                 .map_err(|error| anyhow!(error)),
-@@ -151,6 +180,7 @@ fn remote_signing_message(description: &str) -> String {
- impl std::fmt::Debug for NgitSigner {
-     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-         match self {
+@@ -153,0 +183 @@ impl std::fmt::Debug for NgitSigner {
 +            Self::PocBroker { .. } => write!(f, "NgitSigner::PocBroker"),
-             Self::Keys(k) => write!(f, "NgitSigner::Keys({})", k.public_key()),
-             Self::Connect(_) => write!(f, "NgitSigner::Connect"),
-         }
-@@ -272,3 +302,220 @@ mod tests {
-         assert!(error.to_string().contains("invalid event signature"));
-     }
- }
+@@ -274,0 +305,217 @@ mod tests {
 +
 +// Pipes carry signatures only between ngit and the session broker. No shell,
 +// socket listener, credential file, tracing, or publication is involved.
