@@ -1,9 +1,0 @@
-{
-  "origin": "http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007",
-  "discovery": "pass",
-  "anonymousGit": "pass",
-  "anonymousRelay": "pass",
-  "servicePubkey": "0c69a77488766473a18bff1603a20ae2f20871caf8553256884c27baac7e5b9e",
-  "version": "3.0.1-b990d218",
-  "limitation": "No authenticated synthetic content or distinct-peer test; not acceptance of gate 2 or 3"
-}

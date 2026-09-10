@@ -1,235 +1,115 @@
-# Private GRASP PoC operations
+# Private GRASP PoC
 
-This is a partial, local deployment for task `3455c77b-7781-47f8-85a8-024c6f784f9e`.
-Latest: [synthetic Git handoff](../../docs/grasp-synthetic-git-handoff-2026-09-10.md)
-records 22 live broker checks, native push/clone/update/fetch through an explicit
-private-only compatibility mode, and 8 populated same-host privacy checks.
-Distinct-peer, member-role/removal/expiry and later PoC acceptance remain pending.
-The older origin-denied/activation-pending notes below are historical evidence.
-Read [the authorised brief](../../docs/grasp-fips-poc-handoff-2026-09-10.md) and
-[the pickup evidence](../../docs/grasp-fips-poc-progress-2026-09-10.md).
-The private synthetic-content and FIPS gates have **not** passed. Do not import
-Flight Deck or publish repository announcements to public relays.
+This directory contains the synthetic-only PoC adapters and validation tools.
+It does not authorize importing a real repository, publishing publicly, changing
+signing grants, or claiming a distinct-device test. Read the current authorized
+Flight Deck task and ignored handoff before operating an existing instance.
+Run-specific addresses, membership, results, screenshots and backups belong in
+Git-ignored `tmp/docs/handoffs/`, never in tracked documentation.
 
-## Sources and boundaries
+## Existing instance
 
-`versions.json` records three pinned upstream checkouts and the GRASP image/binary.
-The Compose file builds the upstream Dockerfile unchanged. GRASP is on an
-internal-only Docker network. A dedicated nginx ingress joins that network and
-an ordinary bridge, publishing only `127.0.0.1:60546`. This extra container is
-necessary because Docker Desktop did not publish ports on the internal-only
-network. GRASP has no configured external peers, user-index relays or Sync+;
-nginx forwards only to GRASP and disables request/response buffering for Git and
-WebSocket streaming. The native Autopilot adapter and canonical FIPS address are recorded in
-`fips.json`; same-host discovery/anonymous denial passes, distinct-peer
-acceptance remains pending.
+Preserve the existing `local.env`, repository, cache and volume. Do not repeat
+`synthetic-ngit.ts init`, `resume-init`, `clone` or `update` on an initialized
+instance. `versions.json` and the patches record the compatible software pins.
+The synthetic runner and signing candidate constraints are deliberately narrow;
+changing them requires review of the original signing/publication boundaries.
 
-The service generates and stores its own identity inside `/data`. Never read or
-export its key. NIP-11 exposes the public identity. Git is in `/data/git`, LMDB
-in `/data/relay`. No real repository has been imported. Volume:
-`tower-grasp-poc-data`. No other service shares it.
+The private service has its own identity in `/data`; inspect only the public
+NIP-11 identity. Never read or print its key. GRASP runs on an internal Docker
+network configured without external peers or fallback relays; ingress publishes loopback
+only. Keep Sync+, GRASP-06 and external relay discovery disabled.
 
-## Build, start and stop
+## Membership refresh
 
-Run from the Tower repository. `local.env` contains public routing/membership,
-not signing material. It is ignored as machine-specific state.
-
-```sh
-# Only on a new setup; preserve an existing local.env.
-cp -n poc/grasp/local.env.example poc/grasp/local.env
-python3 poc/grasp/refresh-membership.py
-docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml config --quiet
-docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml build grasp-poc
-docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml up -d --no-build grasp-poc grasp-ingress
-bun poc/grasp/anonymous-smoke.ts
-docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml stop grasp-ingress grasp-poc
-```
-
-The initial build stalled in `docker-credential-desktop`. An empty Docker client
-configuration containing `{"auths":{},"cliPluginsExtraDirs":["/Users/mini/.docker/cli-plugins"]}`
-was created at `/Users/mini/code/ngit-poc/docker-anonymous/config.json`. Public
-image pulls/builds then succeeded with this prefix; no credential store was read
-or modified:
-
-```sh
-DOCKER_CONFIG=/Users/mini/code/ngit-poc/docker-anonymous DOCKER_HOST=unix:///Users/mini/.docker/run/docker.sock docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml build grasp-poc
-```
-
-Do not use a stack-wide Tower command or remove the volume. When recreating
-GRASP, recreate ingress afterward so nginx resolves GRASP's current address:
+`refresh-membership.py` reads the explicitly bound workspace using the current
+broker-aware CLI. It rejects a changed identity binding, incomplete pagination,
+invalid members or an absent owner before updating `local.env`. Review the
+captured public membership in ignored handoff storage. Configuration changes do
+not take effect until the two PoC containers are recreated:
 
 ```sh
 docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml up -d --no-build --no-deps --force-recreate grasp-poc
 docker compose --env-file poc/grasp/local.env -f docker-compose.grasp-poc.yml up -d --no-build --no-deps --force-recreate grasp-ingress
-bun poc/grasp/anonymous-smoke.ts
 ```
 
-## Manual membership refresh
+Recreating ingress refreshes its upstream DNS. This procedure closes existing
+sessions; it is not selective hot revocation. Removed members lose future
+access, but downloaded copies remain. Workspace read membership does not confer
+canonical repository maintainership. Recreate only within current authorization.
 
-`python3 poc/grasp/refresh-membership.py` uses the supported Flight Deck CLI with
-explicit Tower/app/workspace routing and this session's broker capability. It
-rejects a changed workspace binding, invalid/empty members or an incomplete
-page before replacing configuration. Review the `membership.json` diff, then
-run the two-service recreation above. This ends existing connections and loads
-the refreshed list. It does not revoke existing local copies or grant anyone
-repository-maintainer authority. Removal behaviour still needs the authorised
-negative test. Public keys from accepted private peer relays can extend upstream
-membership; the PoC must continue to prohibit external announcement destinations
-and peer configuration, and verify effective membership after any change.
+## Access and recovery gate
 
-## Validation and signing prerequisite
+`access-recovery-gate.ts` requires a private ignored JSON configuration with:
+
+- `root`, `relay`, `frontend`: canonical synthetic URLs.
+- `main`, `rootOid`: actual existing synthetic commits, never invented hashes.
+- `live`, `ingress`, `volume`: existing PoC container/volume names.
+- `composeFile`, `envFile`: the authorized PoC Compose files.
+- `evidence`: a new ignored directory; created with mode 0700.
+- `isolatedName`, `isolatedVolume`: unique disposable restore names.
 
 ```sh
-bun poc/grasp/broker-probe.ts
-bun poc/grasp/anonymous-smoke.ts
-cd /Users/mini/code/ngit-poc/ngit-grasp
-env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL TMPDIR=/Users/mini/code/ngit-poc/test-tmp cargo test --locked -p ngit-grasp --test private_mode --test push_authorization
+bun poc/grasp/access-recovery-gate.ts tmp/docs/handoffs/run/config.json > tmp/docs/handoffs/run/run.log 2>&1
 ```
 
-Create the test-tmp directory first if absent. Its path must be canonical on
-macOS. Clearing only the four Git identity variables lets fixtures use their
-own deterministic identity. Never substitute Pete or Rick keys into fixtures.
-These native suites are localhost fixture evidence, not broker or FIPS evidence.
+The runner verifies the live baseline, tests nonmember receive-pack and rejected
+relay authentication, and obtains a fresh broker credential. It stops only the
+PoC pair, requires a clean writer exit, and archives the complete read-only
+volume into a private mode-0600 tar. It recreates the live pair in `finally` and
+compares public identity, all Git refs, and signed synthetic announcement/state
+IDs and hashes. A failure remains recorded; absence of later results is pending.
 
-The broker probe currently fails with `NIP-98 origin is not allowed`. It signs
-only the GRASP-08 repository-root GET profile and prints no token. Generic kind
-27235 signing is deliberately not a fallback. The current custom policy
-validator accepts HTTPS or a valid HTTP `npub.fips` origin, not arbitrary
-localhost HTTP. The exact canonical origin is now allocated in `fips.json`. Both
-The corrected disabled policy drafts and activation order are documented in
-[the policy correction review](#disabled-policy-correction-review).
-Do not broaden the baseline or change Tower authentication to get past this gate.
+It restores into a new volume using the same image and canonical configuration,
+adds one in-memory fixture member, and starts with `--network none` and no ports.
+HTTP and WebSocket probes travel through `docker exec` standard streams. No
+restored address is registered or published. It compares data, runs `git fsck`,
+and compares reachable objects, then tests auth age/signature/challenge/relay,
+canonical state and actual receive-pack ref denial, and member removal by
+configuration replacement plus recreation. Rick retains broker signing; fixture
+signing is never evidence of Rick's publisher operations. The isolated container
+is stopped in `finally`; volumes and archives remain private for review.
 
-## Snapshot/restore acceptance still pending
+`resume: true` reuses a recorded snapshot only after verifying its hash and the
+unchanged live baseline. Supply a fresh isolated name/volume for every retry.
+It does not repeat the live snapshot/recreation. Historical failed attempts stay
+in the result array; reviewers must distinguish harness failures from gates.
 
-Before a consistent snapshot: stop these two PoC services, archive the complete
-named volume using a read-only helper mount into protected ignored runtime
-storage, then restart them. The archive contains the service identity and must
-never be printed, committed or uploaded. Restore into a **different** named
-volume and isolated test instance; never allow two writers on one volume.
-Compare public identity, refs and authenticated issue/PR events, then destroy
-only the isolated test resources. No snapshot or restore has been performed;
-the final procedure must record exact filenames, volume IDs and results after
-synthetic/import gates pass.
-
-## Managed FIPS forwarding app
-
-App `12c563d2-a95f-42ef-b510-6eaa74daf22a` is running with allocated port 41007.
-It forwards to the Docker ingress on 60546, preserving HTTP and upgrades, and
-rejects noncanonical Host headers (including the automatically assigned public
-alias, tested 403). Native source is `forwarder/server.mjs`; two transport tests
-cover binary request/response bodies and upgrade initial bytes:
+The underlying snapshot/restore operations are:
 
 ```sh
+# With the writer cleanly stopped; use exact reviewed names and an existing image.
+docker run --rm --network none --entrypoint tar -v "$source_volume:/source:ro" -v "$private_backup:/backup" "$image" -C /source -cpf /backup/volume.tar .
+chmod 600 "$private_backup/volume.tar"
+shasum -a 256 "$private_backup/volume.tar"
+docker volume create "$restore_volume"
+docker run --rm --network none --entrypoint tar -v "$restore_volume:/restore" -v "$private_backup:/backup:ro" "$image" -C /restore -xpf /backup/volume.tar
+```
+
+Never extract or display the archive to inspect identity. It contains private
+service state. Never attach a restored instance to a live network or publish it.
+Synthetic recovery covers the actual synthetic data only; issue/PR recovery and
+real repository import remain outside this gate.
+
+## Unavailable transport and validation
+
+On macOS, `unavailable-gate.ts` uses a process-local sandbox to deny outbound TCP
+to the canonical relay port while a fresh native ngit cache attempts discovery.
+Add `ngitBin` to the private configuration. This preserves the host FIPS bridge
+and live services. Run it alongside the existing native destination-spy test,
+which checks alternative relay/Git targets are rejected before dialing. A fresh
+browser context should independently record all attempted destinations while
+simulating a failed private relay, then verify normal list-to-code access.
+These are same-host controls, not a distinct FIPS peer or Pete's WMapp test.
+
+```sh
+bun poc/grasp/unavailable-gate.ts tmp/docs/handoffs/run/config.json
+bun test poc/grasp/signed-response.test.ts poc/grasp/signing-policy-candidates.test.ts poc/grasp/destination-spy.test.ts
 node --test poc/grasp/forwarder/server.test.mjs
-bun poc/grasp/anonymous-smoke.ts http://npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:41007
 ```
 
-Manage only this app, from the Autopilot checkout:
-
-```sh
-bun clis/appctl.ts stop 12c563d2-a95f-42ef-b510-6eaa74daf22a --owner npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy --bot-crypto
-bun clis/appctl.ts start 12c563d2-a95f-42ef-b510-6eaa74daf22a --owner npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy --bot-crypto
-```
-
-The self-space registration route returned 403; the explicit authorised owner
-route succeeded. This is not an outstanding registration blocker. There is no
-frontend yet. `fips-same-host-smoke.json` is same-host mesh evidence only.
-See the disabled policy correction review below for the actual assignment scope
-and pending human/admin actions. No policy or capability changes were performed.
-
-## Disabled policy correction review
-
-Both corrected files live here: [HTTP draft](signing-policy-http.draft.json) and
-[Nostr draft](signing-policy-nostr.draft.json). Both are `enabled=false` and require
-Rick profile `fd-npub1s46587g3k2axql224qz-2e5caefddd47ee874e8e5fc9-npub1hd37razr2rfxsw6dns5`
-**AND** workspace `2e5caefd-dd65-45d2-b747-ee874e8e5fc9`. Assignment covers **all
-future sessions matching both**, not one worker. No session selector exists.
-
-Prerequisite: independently source-approved Autopilot commit
-`8143790efd69e18d8782511ede18dc06b36c8791`. Its runtime has **not** been restarted;
-older code can silently drop `exactTags`. Source validation does not establish
-runtime enforcement. HTTP remains only canonical synthetic repository-root GET.
-Nostr requires exactly one full `d=synthetic` for 30617/30618 and exactly one full
-canonical `clone`/`relays` for 30617, or `relay` for 22242. Relay strings end in `/`;
-clone ends in `synthetic.git` without `/`. There is no broker URL normalization.
-
-The source-derived candidate in [signing-policy-candidates.ts](signing-policy-candidates.ts)
-uses ngit `c2cc591dcfae5d46dc178c0ea87e8bc1802f09b3`:
-
-- `src/lib/repo_ref.rs:940-1089`: identifier/name `synthetic`, private=true,
-  maintainers=[Rick signer], no lead, moderators, role history, upstream, blossoms,
-  hashtags, extra tags or prior events. This implicit sole-author case emits no
-  `maintainers`, `M`, `m`, or `o`. Those names are denied, as are `u`, `blossoms`,
-  `t`, and `!`; this correction removes unused permissions from the earlier draft.
-- It always emits `alt`, bound to exactly `git repository: synthetic`, and `web`,
-  bound to exactly the name-only `["web"]` from an empty web list. The actual
-  private marker is exactly `["private","true"]`, now required. Name is also
-  bound to `synthetic`; description and root `r` remain metadata under existing
-  byte/count limits. Private marker alone is not a service access-control proof.
-- `clone` is an unchanged String; relays use `RelayUrl::to_string()`. Supply the
-  slash explicitly in the template/relay configuration and inspect the actual
-  unsigned signer candidate before signing. Do not assume a no-slash input is
-  canonicalized into the allowed form. No alternate destinations or web links.
-- `src/lib/repo_state.rs:54-75,88-99`: initial state contains only main and its
-  inferred HEAD. Allowed tags are `d`, `HEAD`, `refs/heads/main`; HEAD is exactly
-  `ref: refs/heads/main`. No tag refs, other branches, or extra state metadata.
-- `src/lib/event_ordering.rs:175-195`: initial reference=None adds no nonce;
-  later same-timestamp replacements can emit `nonce` for tie-breaking. This is
-  denied and requires a separately reviewed follow-up if encountered.
-
-**Additional stock-private-init requirement remains unresolved:**
-`src/bin/ngit/sub_commands/init.rs:1981-1982` unconditionally calls
-`publish_private_git_relay_list` for private repos. `src/lib/login/user.rs:164-185`
-self-encrypts `[ ["g", canonical-relay] ]` using NIP-44 and signs kind **10318**
-with encrypted content and no public tags (`src/lib/git_events.rs:157`).
-`user.rs:624-696` merges existing entries, publishes to user write/discovery
-relays, and falls back to default relays when none are configured. These drafts
-add neither 10318 nor encryption/publication permissions. Before stock private
-init can be accepted, separately review its existing effective capabilities and
-restrict its discovery/write/default relay configuration to the private service;
-no public fallback is acceptable. Do not bypass this by silently granting new
-kinds or presenting hand-built events as full stock-ngit success.
-
-Validation (source only, no keys, broker requests, or service interaction):
-
-```sh
-bun test poc/grasp/signing-policy-candidates.test.ts
-```
-
-The test imports updated Autopilot normalization, file-store/registry, and the
-broker's exact-tag matcher. Disposable local stores save/reload **disabled**
-drafts and history without losing exact arrays or assignments. Other candidate
-predicates mirror the broker's content/count/byte/name/pair checks; this is not
-an HTTP broker test. Unsigned source expectations pass; missing/wrong/duplicate
-exact tags, duplicate d in both orders, extra destinations/values, slash changes,
-role/publication metadata, and extra state refs fail. These are synthetic event
-shapes, not captured ngit output, Git objects, or authenticated/populated success.
-
-Required activation order, performed by the human/admin:
-
-1. Obtain explicit user approval and restart Autopilot **from outside active
-   sessions**, loading source 8143790 (or its verified descendant).
-2. Verify live runtime exact-tag enforcement using an admin-controlled isolated
-   test path, including duplicate d and extra destination rejection.
-3. Save these **disabled** policies through supported administration. Verify
-   persisted/compiled full arrays, limits, HTTP target, profile binding and trusted
-   workspace conjunction. Manager's admin policy endpoint is broker-denied;
-   manager cannot perform this step.
-4. Admin enables only the reviewed grants, then reissues/newly issues the intended
-   worker with trusted workspace context. Explicitly account for all matching
-   Rick-profile/workspace sessions issued during this window.
-5. Run positive/negative broker checks with the actual issued capability, including
-   wrong repository, missing/duplicate d, extra destinations and noncanonical URL.
-   Verify actual returned `expiresAt`; do not calculate a deadline from a presumed
-   two-hour lifetime or reuse an earlier worker's expiry.
-6. Resume the original PoC gates, retaining the stock private-init discovery-list
-   gate above. Authenticated synthetic, distinct-peer FIPS, ngit Git operations,
-   import, issue/PR, WMapp and recovery gates remain pending.
-
-At completion disable **both** policies and revoke **every affected issued
-snapshot**, including other matching sessions issued during the window. Edits or
-disablement do not change existing snapshots. There is **no automatic policy
-expiry**. Record each actual issuance expiry and revocation; reissue baseline
-capabilities only if approved. No grant, admin, capability, app or runtime mutation
-was performed for this correction; task remains in progress.
+In the pinned ngit-grasp checkout, run its native `private_mode` and
+`push_authorization` integration suites with a canonical temporary directory
+and inherited Git author/committer variables cleared. Source-only checks cannot
+replace live PoC validation. Tower backend source/schema changes additionally
+require Tower's own rebuild and tests; the PoC gate tools do not change that API.

@@ -56,3 +56,18 @@ ecosystem.config.js
 
 # Test coverage
 coverage/
+
+# Private PoC operational evidence (preserved locally; history unchanged)
+/docs/grasp-fips-poc-handoff-2026-09-10.md
+/docs/grasp-fips-poc-intake-blocker-2026-09-10.md
+/docs/grasp-fips-poc-pickup-2026-09-10.md
+/docs/grasp-fips-poc-progress-2026-09-10.md
+/docs/grasp-synthetic-git-handoff-2026-09-10.md
+/docs/grasp-synthetic-signing-gate-2026-09-10.md
+/poc/grasp/broker-gate-result.json
+/poc/grasp/fips-same-host-smoke.json
+/poc/grasp/fips.json
+/poc/grasp/local-smoke.json
+/poc/grasp/membership.json
+/poc/grasp/privacy-gate-result.json
+/poc/grasp/source-refs.json

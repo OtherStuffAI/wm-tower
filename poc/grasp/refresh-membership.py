@@ -14,6 +14,10 @@ OWNER = 'npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy'
 SERVICE = 'npub1995l838tl29llpxwvpdv6hc66cttrt6hrr8xyeq7kmdqevkeyk0qwvfxlc'
 
 def main():
+    evidence = ROOT.parent.parent / 'tmp/docs/handoffs/grasp-membership.json'
+    subprocess.run(['git', 'check-ignore', '--quiet', str(evidence)], cwd=ROOT, check=True)
+    if subprocess.check_output(['git', 'ls-files', '--', str(evidence)], cwd=ROOT).strip():
+        raise RuntimeError('Membership evidence must be untracked')
     command = ['bun', 'clis/wingman.ts', 'flightdeck', 'members', 'list',
                '--tower-url', 'https://sb4.otherstuff.studio', '--app-npub', APP,
                '--workspace', WORKSPACE, '--bot-crypto', '--json']
@@ -43,7 +47,9 @@ def main():
     temporary.write_text(updated)
     os.chmod(temporary, 0o600)
     temporary.replace(env_path)
-    (ROOT / 'membership.json').write_text(json.dumps(result, indent=2) + '\n')
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps(result, indent=2) + '\n')
+    os.chmod(evidence, 0o600)
     print(f'Snapshotted {len(members)} members; service is unchanged until the documented recreation.')
 
 if __name__ == '__main__':
