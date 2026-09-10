@@ -1,0 +1,85 @@
+{
+  "identity": {
+    "tower_service_npub": "npub1vf3h0rmlrr0x6pjc68jcrk5p2zsfzl3f9zwcppcdn8386npdlxgqmam99v",
+    "workspace_service_npub": "npub1995l838tl29llpxwvpdv6hc66cttrt6hrr8xyeq7kmdqevkeyk0qwvfxlc",
+    "workspace_owner_npub": "npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy",
+    "workspace_id": "2e5caefd-dd65-45d2-b747-ee874e8e5fc9",
+    "app_npub": "npub1hd37reqgfcnz3pvzj4grknd2nkzc94p9ercmunrxx22razr2rfxsw6dns5"
+  },
+  "members": [
+    {
+      "actor": {
+        "actor_id": "186dc374-aa4e-4068-9ee7-a768185b582e",
+        "id": "186dc374-aa4e-4068-9ee7-a768185b582e",
+        "npub": "npub1jss47s4fvv6usl7tn6yp5zamv2u60923ncgfea0e6thkza5p7c3q0afmzy",
+        "kind": "human",
+        "display_name": "Pete Winn"
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "a942733d-a8b4-44d2-b18f-6a1ef8c1f4d9",
+        "id": "a942733d-a8b4-44d2-b18f-6a1ef8c1f4d9",
+        "npub": "npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr",
+        "kind": "agent",
+        "display_name": "Rick"
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "715d08d7-553e-4a8e-b443-2eae9aec2ca3",
+        "id": "715d08d7-553e-4a8e-b443-2eae9aec2ca3",
+        "npub": "npub1e9kyj5dnq7eh9kszpqzsdh867cpqsa0eds90p50qkyadkhxlspss4afg2a",
+        "kind": "human",
+        "display_name": null
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "beb236d5-711b-4345-a263-c6b691e49247",
+        "id": "beb236d5-711b-4345-a263-c6b691e49247",
+        "npub": "npub1khev409r2pa0k8a0an005mpvgv5swnyg54eh948ccxjsax97pm3srphq8m",
+        "kind": "human",
+        "display_name": null
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "0d5c20ba-8506-4d0c-8507-cc025709a176",
+        "id": "0d5c20ba-8506-4d0c-8507-cc025709a176",
+        "npub": "npub1n2rh8n7dur8swnedgzx9nrss46jczrugvy9n24dj4ddd459emzlqds3xc7",
+        "kind": "human",
+        "display_name": null
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "96737563-90d6-49bd-b461-7656109af6bf",
+        "id": "96737563-90d6-49bd-b461-7656109af6bf",
+        "npub": "npub1n9ca7rz3rlaumhqukkvxpxh95d85kgar2gxrz526h89h4pav25aqm9m6mz",
+        "kind": "human",
+        "display_name": null
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "4b2302d1-e234-4f52-92e1-0f3572dc2dac",
+        "id": "4b2302d1-e234-4f52-92e1-0f3572dc2dac",
+        "npub": "npub1nlfq86ed8p8j6fw2ftrcv20qma46cggvyd354y7xnaewlz5wrgusugzkea",
+        "kind": "human",
+        "display_name": null
+      }
+    },
+    {
+      "actor": {
+        "actor_id": "57b5f2a7-ad61-4895-a3b3-e6a337807c1d",
+        "id": "57b5f2a7-ad61-4895-a3b3-e6a337807c1d",
+        "npub": "npub1xp68fz33envp484t8gfrsscag4e92x3946nnevvsngkjxtdajrmqff20ga",
+        "kind": "agent",
+        "display_name": null
+      }
+    }
+  ],
+  "next_cursor": null,
+  "captured_at": "2026-09-10T03:58:51.047745+00:00"
+}

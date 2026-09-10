@@ -1,0 +1,34 @@
+{
+  "upstreams": [
+    {
+      "name": "ngit-grasp",
+      "path": "/Users/mini/code/ngit-poc/ngit-grasp",
+      "origin": "https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git",
+      "revision": "b990d2189ba494944f8e6c875d52056421c061c2",
+      "lock_sha256": "c01be2b31462d3bf06fe610ca7ed06e6ca94032bb1ea066b7e17268a562332a0",
+      "patches": []
+    },
+    {
+      "name": "ngit",
+      "path": "/Users/mini/code/ngit-poc/ngit",
+      "origin": "https://github.com/DanConwayDev/ngit-cli.git",
+      "revision": "c2cc591dcfae5d46dc178c0ea87e8bc1802f09b3",
+      "lock_sha256": "769de668a8a3b5b8a3b7956f971bc0c7592999ac4f97800c41bb96b0ad68436d",
+      "patches": []
+    },
+    {
+      "name": "GitWorkshop",
+      "path": "/Users/mini/code/ngit-poc/GitWorkshop",
+      "origin": "https://github.com/DanConwayDev/gitworkshop.git",
+      "revision": "dc36db64f6a2cca29d109829eabaf0a49d4bf4da",
+      "lock_sha256": "387fce8b73cbf52f6f7182795e3dbc3718db2267646da4308be486811785f5ed",
+      "patches": []
+    }
+  ],
+  "compatibility": "not yet proven together",
+  "docker_image": "tower-grasp-poc:3.0.1-b990d218",
+  "image_id": "sha256:0a47c3f873d4f483b418b5121b96c1177dc118ed089318fc709523bd0dc0a144",
+  "grasp_linux_binary_sha256": "ecb829b0c5453ebeb1e4dd1b363cbac1b9ea58d480c4a792ff86b350b420ca35",
+  "grasp_native_debug_sha256": "2a459aaeae0cad3804d138c442885f222eb6bc3d4f068bdaf36678447ba0bb60",
+  "ingress_image": "nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236"
+}

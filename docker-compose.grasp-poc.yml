@@ -1,0 +1,61 @@
+name: tower-grasp-poc
+
+services:
+  grasp-poc:
+    build:
+      context: /Users/mini/code/ngit-poc/ngit-grasp
+      args:
+        NGIT_BUILD_REVISION: b990d2189ba494944f8e6c875d52056421c061c2
+        NGIT_IMAGE_REVISION: b990d2189ba494944f8e6c875d52056421c061c2
+        NGIT_IMAGE_VERSION: 3.0.1-poc
+    image: tower-grasp-poc:3.0.1-b990d218
+    restart: unless-stopped
+    environment:
+      NGIT_DOMAIN: "${GRASP_DOMAIN:?set canonical domain}"
+      NGIT_PRIVATE_PUBLIC_ORIGIN: "${GRASP_PUBLIC_ORIGIN:?set canonical origin}"
+      NGIT_PRIVATE_MODE: "true"
+      NGIT_PRIVATE_MEMBERS: "${GRASP_PRIVATE_MEMBERS:?refresh workspace membership}"
+      NGIT_REPOSITORY_WHITELIST: npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr
+      NGIT_GRASP06_ENABLE: "false"
+      NGIT_SYNC_PLUS_ENABLED: "false"
+      NGIT_USER_INDEX_RELAYS: ""
+      NGIT_SYNC_PLUS_FALLBACK_RELAYS: ""
+      NGIT_DATABASE_BACKEND: lmdb
+      NGIT_BIND_ADDRESS: 0.0.0.0:7334
+      NGIT_RELAY_NAME: Wingman private GRASP PoC
+      NGIT_GIT_DATA_PATH: /data/git
+      NGIT_RELAY_DATA_PATH: /data/relay
+    volumes:
+      - grasp-poc-data:/data
+    networks:
+      - private-backend
+    stop_grace_period: 5m
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --header, "Accept: application/nostr+json", "http://127.0.0.1:7334/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  grasp-ingress:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GRASP_HOST_PORT:?set allocated host port}:7334"
+    volumes:
+      - ./poc/grasp/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - ingress
+      - private-backend
+    depends_on:
+      grasp-poc:
+        condition: service_healthy
+
+volumes:
+  grasp-poc-data:
+    name: tower-grasp-poc-data
+
+networks:
+  ingress:
+  private-backend:
+    internal: true
