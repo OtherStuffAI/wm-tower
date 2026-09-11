@@ -115,10 +115,13 @@ bundled origin `http://127.0.0.1:47831`; other plaintext page origins are exclud
 64 KiB chunks to a native partial file, reports byte progress, checks the advertised
 length, and renames only when complete. Cancellation remains active during
 finalization, removes partial output and rolls back an existing destination if
-replacement was interrupted. Desktop
+replacement was interrupted before the terminal commit. After the final
+cancellation check, the save is committed; later cancellation during backup
+cleanup reports the completed local save rather than claiming rollback. Desktop
 uses an OS save picker; supported phones write a unique local document and offer
 OS export/open. “Saved locally” does not claim that another app completed an
-export. iOS reports its export completion separately; Android presents its chooser.
+export. The panel distinguishes iOS export completion/dismissal and Android chooser
+presentation from a completed local save.
 File contents never pass through Tower or a browser Blob download.
 
 ## Policy lifetime versus listing TTL
