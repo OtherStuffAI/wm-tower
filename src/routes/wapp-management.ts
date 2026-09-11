@@ -11,8 +11,22 @@ import {
   getManagedWappInstallation, listManagedWappInstallations, requestWappReconciliation, revokeManagedWappInstallation,
 } from '../services/wapp-management';
 import { getDb } from '../db';
+import { resolveAutopilotWappScopeAccess } from '../services/wapp-scope-access';
 
 export const wappManagementRouter = new Hono();
+wappManagementRouter.get('/workspaces/:workspaceId/autopilot-wapp-installations/:installationId/scope-access', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  try {
+    return c.json(await resolveAutopilotWappScopeAccess({
+      workspaceId: c.req.param('workspaceId'),
+      installationId: c.req.param('installationId'),
+      signerNpub: auth.signerNpub,
+    }));
+  } catch (e) {
+    return error(c, e);
+  }
+});
 type RequestContext = Awaited<ReturnType<typeof resolveFlightDeckPgRequestContext>> & { workspace: NonNullable<Awaited<ReturnType<typeof resolveFlightDeckPgRequestContext>>['workspace']>; actor: NonNullable<Awaited<ReturnType<typeof resolveFlightDeckPgRequestContext>>['actor']>; membership: NonNullable<Awaited<ReturnType<typeof resolveFlightDeckPgRequestContext>>['membership']> };
 function error(c: Context, e: unknown, identity?: unknown) { if (e instanceof WappManagementError) return c.json({ error: e.message, code: e.code, status: e.status, identity, details: e.details }, e.status as any); console.error('WApp management route failed', e); return c.json({ error: 'Internal WApp management error', code: 'internal_error', status: 500, identity }, 500); }
 async function context(c: Context) {
