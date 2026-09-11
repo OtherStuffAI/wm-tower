@@ -31,7 +31,8 @@ check(await git(['rev-parse',c.head+'^'],source)===c.base,'PR must be directly b
 check(await git(['rev-list','--max-parents=0',c.head],source)===c.rootOid,'Unexpected upstream root');
 const files=await git(['diff','--name-only',c.base,c.head],source);
 check(!files.split('\n').some(f=>/^(tmp\/|\.runtime\/|\.env($|\.)|.*hosting)/i.test(f)),'Operational or hosting file in patch');
-const patch=await git(['diff','--no-ext-diff','--no-textconv','--binary',c.base,c.head],source);
+// Abbreviated object IDs vary with repository size and local core.abbrev.
+const patch=await git(['diff','--no-ext-diff','--no-textconv','--binary','--full-index',c.base,c.head],source);
 // Prepare only reachable objects from the pinned source commits, without remotes.
 const staging=directory+'/import.git';
 if(!existsSync(staging)){
@@ -110,7 +111,7 @@ try {
     await git(['init','--bare'],readback);
     await git(['fetch','--no-tags',c.root,'refs/heads/main:refs/heads/main',`refs/heads/${c.branch}:refs/heads/${c.branch}`],readback,await credential());
     check(await git(['rev-parse','refs/heads/main'],readback)===c.base && await git(['rev-parse','refs/heads/'+c.branch],readback)===c.head,'Remote base/head mismatch');
-    check(await git(['diff','--no-ext-diff','--no-textconv','--binary',c.base,c.head],readback)===patch,'Remote diff mismatch');
+    check(await git(['diff','--no-ext-diff','--no-textconv','--binary','--full-index',c.base,c.head],readback)===patch,'Remote diff mismatch');
     await git(['fsck','--full'],readback);
     const relaySegment=encodeURIComponent('ws:'+c.relay.slice(5).replace(/\/$/,''));
     evidence.url=c.frontend+`/${c.actor}/${relaySegment}/${c.identifier}/prs/${signed[2].id}`;
