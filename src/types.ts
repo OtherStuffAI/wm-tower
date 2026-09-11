@@ -2779,3 +2779,10 @@ export interface ForgejoLoginChallenge {
   client_id: string;
   expires_at: number;
 }
+
+/** FIPS Drive metadata; bytes and local root paths never belong in Tower. */
+export interface DriveShare {
+  id: string; workspace_id: string; owner_actor_id: string; owner_npub: string;
+  host_npub: string; endpoint: string; name: string; host_name: string;
+  audience: 'private' | 'workspace'; enabled: boolean; revision: number; updated_at: string;
+}

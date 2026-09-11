@@ -1,3 +1,4 @@
+import { driveV1Sql } from './drive-v1';
 import { forgejoLoginIdentitySchema } from '../services/forgejo-login-identity';
 import { getDb } from '../db';
 import { readFileSync } from 'node:fs';
@@ -4209,4 +4210,5 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await sql.unsafe(driveV1Sql);
 }

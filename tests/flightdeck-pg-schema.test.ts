@@ -218,6 +218,8 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_doc_recovery_versions',
       'flightdeck_pg_doc_versions',
       'flightdeck_pg_docs',
+      'flightdeck_pg_drive_proofs',
+      'flightdeck_pg_drive_shares',
       'flightdeck_pg_edit_leases',
       'flightdeck_pg_event_subscription_agents',
       'flightdeck_pg_file_folders',

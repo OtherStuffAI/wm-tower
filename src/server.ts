@@ -1,3 +1,4 @@
+import { driveRouter } from './routes/drive';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getTowerBuildInfo } from './build-info';
@@ -73,6 +74,7 @@ export function createApp() {
   app.all('/api/v4/git/*', (c) => c.json({ error: 'retired', message: 'Use native Forgejo Git and API endpoints' }, 410));
   app.route('/api/v4/graph', graphRouter);
   app.route('/api/v4/billing', billingRouter);
+  app.route('/api/v4/flightdeck-pg', driveRouter);
   app.route('/api/v4/flightdeck-pg', flightDeckPgRouter);
   app.route('/api/v4/flightdeck-pg', wappActivityFlightDeckRouter);
   app.route('/api/v4/flightdeck-pg', wappManagementRouter);

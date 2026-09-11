@@ -1,3 +1,4 @@
+import { drivePaths } from './drive-openapi';
 import { config } from './config';
 import { flightDeckPgContractFixturePaths } from './types';
 
@@ -4160,6 +4161,7 @@ export function buildOpenApiDocument(origin: string) {
     },
     security: [{ nip98: [] }],
     paths: {
+      ...drivePaths,
       '/health': {
         get: {
           tags: ['Health'],
