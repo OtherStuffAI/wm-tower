@@ -436,6 +436,7 @@ type FlightDeckPgTaskAssignmentWithActorNpub = FlightDeckPgTaskAssignmentRow & {
 };
 type FlightDeckPgTaskWithAssignments = FlightDeckPgTaskRow & {
   assignments?: FlightDeckPgTaskAssignmentWithActorNpub[];
+  created_by_actor_npub?: string | null;
 };
 export type FlightDeckPgThreadRow = FlightDeckPgThread;
 export type FlightDeckPgMessageRow = FlightDeckPgMessage;
@@ -815,6 +816,8 @@ export function serializeFlightDeckPgTask(task: FlightDeckPgTaskWithAssignments)
     row_version: task.row_version,
     activity_version: Number(task.activity_version),
     created_by_actor_id: task.created_by_actor_id,
+    created_by_actor_npub: task.created_by_actor_npub ?? null,
+    sender_npub: task.created_by_actor_npub ?? null,
     updated_by_actor_id: task.updated_by_actor_id,
     assignments: (task.assignments ?? []).map(serializeFlightDeckPgTaskAssignment),
     created_at: task.created_at,
@@ -1837,6 +1840,12 @@ function buildFlightDeckPgEventRefetchRoute(event: FlightDeckPgOutboxEventRow) {
   if (event.entity_type === 'personal_wapp') {
     return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/personal-wapps`;
   }
+  if (event.entity_type === 'autopilot_connection') {
+    return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/autopilot-connections`;
+  }
+  if (event.entity_type === 'workspace_agent') {
+    return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/workspace-agents`;
+  }
   if (event.entity_type === 'reaction' && event.payload?.target_type && event.payload?.target_id) {
     return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/reactions?target_type=${encodeURIComponent(String(event.payload.target_type))}&target_id=${encodeURIComponent(String(event.payload.target_id))}`;
   }
@@ -1909,6 +1918,8 @@ export function buildFlightDeckPgWorkspaceLinks(workspaceId: string) {
     invites: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/invites`,
     scopes: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/scopes`,
     personal_wapps: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/personal-wapps`,
+    autopilot_connections: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/autopilot-connections`,
+    workspace_agents: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/workspace-agents`,
     events: `/api/v4/flightdeck-pg/workspaces/${encodedWorkspaceId}/events`,
   };
 }
@@ -5779,14 +5790,15 @@ export async function listFlightDeckPgChannelTasks(
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgTaskRow[]> {
   return sql<FlightDeckPgTaskRow[]>`
-    SELECT *, updated_at::text AS cursor_updated_at
-    FROM flightdeck_pg_tasks
-    WHERE workspace_id = ${input.workspaceId}
-      AND channel_id = ${input.channelId}
-      AND deleted_at IS NULL
-      AND (${input.state ?? null}::text IS NULL OR state=${input.state ?? null})
-      AND (${input.beforeUpdatedAt ?? null}::timestamptz IS NULL OR (-extract(epoch FROM updated_at AT TIME ZONE 'UTC'),id)>(-extract(epoch FROM ${input.beforeUpdatedAt ?? null}::timestamptz AT TIME ZONE 'UTC'),${input.afterId ?? null}::uuid))
-    ORDER BY (-extract(epoch FROM updated_at AT TIME ZONE 'UTC')) ASC, id ASC
+    SELECT t.*, t.updated_at::text AS cursor_updated_at, creator.npub AS created_by_actor_npub
+    FROM flightdeck_pg_tasks t
+    LEFT JOIN flightdeck_pg_actors creator ON creator.id=t.created_by_actor_id
+    WHERE t.workspace_id = ${input.workspaceId}
+      AND t.channel_id = ${input.channelId}
+      AND t.deleted_at IS NULL
+      AND (${input.state ?? null}::text IS NULL OR t.state=${input.state ?? null})
+      AND (${input.beforeUpdatedAt ?? null}::timestamptz IS NULL OR (-extract(epoch FROM t.updated_at AT TIME ZONE 'UTC'),t.id)>(-extract(epoch FROM ${input.beforeUpdatedAt ?? null}::timestamptz AT TIME ZONE 'UTC'),${input.afterId ?? null}::uuid))
+    ORDER BY (-extract(epoch FROM t.updated_at AT TIME ZONE 'UTC')) ASC, t.id ASC
     LIMIT ${input.limit}
   `;
 }
@@ -5829,8 +5841,9 @@ export async function listVisibleFlightDeckPgScopeTasks(
 ): Promise<FlightDeckPgTaskRow[]> {
   const groupIds = input.groupIds.length > 0 ? input.groupIds : ['00000000-0000-0000-0000-000000000000'];
   return sql<FlightDeckPgTaskRow[]>`
-    SELECT DISTINCT t.*
+    SELECT DISTINCT t.*, creator.npub AS created_by_actor_npub
     FROM flightdeck_pg_tasks t
+    LEFT JOIN flightdeck_pg_actors creator ON creator.id=t.created_by_actor_id
     JOIN flightdeck_pg_permission_grants pg
       ON pg.workspace_id = t.workspace_id
       AND pg.resource_type = 'channel'
@@ -7336,11 +7349,12 @@ export async function resolveFlightDeckPgTask(
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgTaskRow | null> {
   const [task] = await sql<FlightDeckPgTaskRow[]>`
-    SELECT *
-    FROM flightdeck_pg_tasks
-    WHERE workspace_id = ${workspaceId}
-      AND id = ${taskId}
-      AND deleted_at IS NULL
+    SELECT t.*, creator.npub AS created_by_actor_npub
+    FROM flightdeck_pg_tasks t
+    LEFT JOIN flightdeck_pg_actors creator ON creator.id=t.created_by_actor_id
+    WHERE t.workspace_id = ${workspaceId}
+      AND t.id = ${taskId}
+      AND t.deleted_at IS NULL
     LIMIT 1
   `;
   return task ?? null;

@@ -4186,6 +4186,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(wappActivityPublishingV1Sql());
 
   const recordDeltaSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
+  await sql.unsafe(recordDeltaSchema.split('-- flightdeck_autopilot_connections_v1')[1]!.split('-- end_flightdeck_autopilot_connections_v1')[0]!);
   await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
 
   // Retain legacy Git tables for audit, and remove their operational projection

@@ -17,7 +17,9 @@
       "audio_note",
       "daily_note",
       "personal_wapp",
-      "resource_view_state"
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent"
     ],
     "mode": "snapshot",
     "changes": [
@@ -425,6 +427,62 @@
           "created_at": "2026-09-05T00:00:00+00:00",
           "updated_at": "2026-09-05T00:00:00+00:00"
         }
+      },
+      {
+        "family": "autopilot_connection",
+        "id": "50000000-0000-4000-8000-000000000016",
+        "operation": "upsert",
+        "version": "15",
+        "workspace_id": "10000000-0000-4000-8000-000000000001",
+        "scope_id": null,
+        "channel_id": null,
+        "row": {
+          "id": "50000000-0000-4000-8000-000000000016",
+          "workspace_id": "10000000-0000-4000-8000-000000000001",
+          "installation_id": "installation-example",
+          "display_name": "Example Autopilot",
+          "fips_endpoint": "fips://example.fips:443/",
+          "https_endpoint": "https://example.invalid/",
+          "api_version": "1",
+          "capabilities": ["agents.read"],
+          "metadata": {},
+          "row_version": 1,
+          "created_by_actor_id": "20000000-0000-4000-8000-000000000001",
+          "updated_by_actor_id": "20000000-0000-4000-8000-000000000001",
+          "archived_by_actor_id": null,
+          "created_at": "2026-09-05T00:00:00+00:00",
+          "updated_at": "2026-09-05T00:00:00+00:00",
+          "archived_at": null
+        }
+      },
+      {
+        "family": "workspace_agent",
+        "id": "50000000-0000-4000-8000-000000000017",
+        "operation": "upsert",
+        "version": "15",
+        "workspace_id": "10000000-0000-4000-8000-000000000001",
+        "scope_id": null,
+        "channel_id": null,
+        "row": {
+          "id": "50000000-0000-4000-8000-000000000017",
+          "workspace_id": "10000000-0000-4000-8000-000000000001",
+          "connection_id": "50000000-0000-4000-8000-000000000016",
+          "agent_id": "agent-example",
+          "agent_npub": "npub1agentexample",
+          "display_name": "Example Agent",
+          "avatar_url": null,
+          "capabilities": ["overview.read"],
+          "sort_order": 0,
+          "is_visible": true,
+          "metadata": {},
+          "row_version": 1,
+          "created_by_actor_id": "20000000-0000-4000-8000-000000000001",
+          "updated_by_actor_id": "20000000-0000-4000-8000-000000000001",
+          "archived_by_actor_id": null,
+          "created_at": "2026-09-05T00:00:00+00:00",
+          "updated_at": "2026-09-05T00:00:00+00:00",
+          "archived_at": null
+        }
       }
     ],
     "next_cursor": "60000000-0000-4000-8000-000000000001",
@@ -446,7 +504,9 @@
       "audio_note",
       "daily_note",
       "personal_wapp",
-      "resource_view_state"
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent"
     ],
     "bounds": {
       "max_rows": 200,
@@ -478,7 +538,9 @@
       "audio_note",
       "daily_note",
       "personal_wapp",
-      "resource_view_state"
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent"
     ],
     "mode": "delta",
     "changes": [
@@ -544,7 +606,9 @@
       "audio_note",
       "daily_note",
       "personal_wapp",
-      "resource_view_state"
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent"
     ],
     "mode": "delta",
     "changes": [

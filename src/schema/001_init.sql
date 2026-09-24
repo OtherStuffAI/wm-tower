@@ -3215,6 +3215,75 @@ CREATE TABLE IF NOT EXISTS tower_metadata (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- flightdeck_autopilot_connections_v1
+CREATE TABLE IF NOT EXISTS flightdeck_pg_autopilot_connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+  installation_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  fips_endpoint TEXT NOT NULL,
+  https_endpoint TEXT,
+  api_version TEXT NOT NULL DEFAULT '1',
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_by_actor_id UUID NOT NULL,
+  updated_by_actor_id UUID NOT NULL,
+  archived_by_actor_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ,
+  CHECK (installation_id = lower(trim(installation_id)) AND length(installation_id) > 0),
+  CHECK (length(trim(display_name)) > 0 AND length(trim(fips_endpoint)) > 0 AND length(trim(api_version)) > 0),
+  CHECK (jsonb_typeof(capabilities) = 'array' AND jsonb_typeof(metadata) = 'object' AND row_version >= 1),
+  CONSTRAINT fd_pg_autopilot_connections_created_by_fkey FOREIGN KEY (workspace_id, created_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  CONSTRAINT fd_pg_autopilot_connections_updated_by_fkey FOREIGN KEY (workspace_id, updated_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  CONSTRAINT fd_pg_autopilot_connections_archived_by_fkey FOREIGN KEY (workspace_id, archived_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  UNIQUE (workspace_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fd_pg_autopilot_connections_installation
+  ON flightdeck_pg_autopilot_connections(workspace_id, installation_id) WHERE archived_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS flightdeck_pg_workspace_agents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+  connection_id UUID NOT NULL,
+  agent_id TEXT NOT NULL,
+  agent_npub TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  avatar_url TEXT,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_by_actor_id UUID NOT NULL,
+  updated_by_actor_id UUID NOT NULL,
+  archived_by_actor_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ,
+  CHECK (length(trim(agent_id)) > 0 AND length(trim(agent_npub)) > 0 AND length(trim(display_name)) > 0),
+  CHECK (jsonb_typeof(capabilities) = 'array' AND jsonb_typeof(metadata) = 'object' AND row_version >= 1),
+  CONSTRAINT fd_pg_workspace_agents_connection_fkey FOREIGN KEY (workspace_id, connection_id)
+    REFERENCES flightdeck_pg_autopilot_connections(workspace_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fd_pg_workspace_agents_created_by_fkey FOREIGN KEY (workspace_id, created_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  CONSTRAINT fd_pg_workspace_agents_updated_by_fkey FOREIGN KEY (workspace_id, updated_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  CONSTRAINT fd_pg_workspace_agents_archived_by_fkey FOREIGN KEY (workspace_id, archived_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id) ON DELETE RESTRICT,
+  UNIQUE (workspace_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fd_pg_workspace_agents_identity
+  ON flightdeck_pg_workspace_agents(workspace_id, connection_id, agent_id) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fd_pg_workspace_agents_order
+  ON flightdeck_pg_workspace_agents(workspace_id, sort_order, id) WHERE archived_at IS NULL;
+-- end_flightdeck_autopilot_connections_v1
+
 -- flightdeck_record_delta_v1
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_context(r JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
  SELECT jsonb_build_object('scope_id',r->'scope_id','channel_id',r->'channel_id',
@@ -3274,7 +3343,7 @@ LANGUAGE plpgsql AS $$ DECLARE r JSONB; oldr JSONB; w UUID; BEGIN
  IF (oldr->>'channel_id') IS DISTINCT FROM (r->>'channel_id') OR (oldr->>'owner_actor_id') IS DISTINCT FROM (r->>'owner_actor_id') OR flightdeck_pg_record_identity(TG_ARGV[0],oldr) IS DISTINCT FROM flightdeck_pg_record_identity(TG_ARGV[0],r) THEN
  PERFORM flightdeck_pg_record_emit((oldr->>'workspace_id')::uuid,TG_ARGV[0],oldr,'delete');
  END IF; END IF;
- PERFORM flightdeck_pg_record_emit(w,TG_ARGV[0],r,CASE WHEN TG_OP='DELETE' OR r->>'deleted_at' IS NOT NULL THEN 'delete' ELSE 'upsert' END);
+ PERFORM flightdeck_pg_record_emit(w,TG_ARGV[0],r,CASE WHEN TG_OP='DELETE' OR r->>'deleted_at' IS NOT NULL OR r->>'archived_at' IS NOT NULL THEN 'delete' ELSE 'upsert' END);
  IF TG_ARGV[0] IN ('task','doc','thread') AND (TG_OP='DELETE' OR r->>'deleted_at' IS NOT NULL) THEN
  UPDATE flightdeck_pg_record_clock SET epoch=gen_random_uuid() WHERE workspace_id=w;
  END IF;
@@ -3399,6 +3468,18 @@ DO $$ BEGIN
  INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_resource_view_states ON CONFLICT DO NOTHING;
  INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'resource_view_state', flightdeck_pg_record_identity('resource_view_state',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_resource_view_states r WHERE to_jsonb(r)->>'deleted_at' IS NULL ON CONFLICT DO NOTHING;
  CREATE TRIGGER fd_record_resource_view_state AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_resource_view_states FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('resource_view_state');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_autopilot_connection') THEN
+ LOCK TABLE flightdeck_pg_autopilot_connections IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_autopilot_connections ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'autopilot_connection', flightdeck_pg_record_identity('autopilot_connection',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_autopilot_connections r WHERE archived_at IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_autopilot_connection AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_autopilot_connections FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('autopilot_connection');
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='fd_record_workspace_agent') THEN
+ LOCK TABLE flightdeck_pg_workspace_agents IN SHARE ROW EXCLUSIVE MODE;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) SELECT DISTINCT workspace_id FROM flightdeck_pg_workspace_agents ON CONFLICT DO NOTHING;
+ INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row) SELECT workspace_id, 'workspace_agent', flightdeck_pg_record_identity('workspace_agent',to_jsonb(r)), to_jsonb(r) FROM flightdeck_pg_workspace_agents r WHERE archived_at IS NULL ON CONFLICT DO NOTHING;
+ CREATE TRIGGER fd_record_workspace_agent AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_workspace_agents FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_record_capture('workspace_agent');
  END IF;
 END $$;
 DROP TRIGGER IF EXISTS fd_record_reset ON flightdeck_pg_permission_grants;

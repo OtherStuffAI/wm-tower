@@ -2566,6 +2566,29 @@ export function buildOpenApiDocument(origin: string) {
             size_bytes: { type: 'integer', minimum: 0 },
           },
         },
+        FlightDeckPgAutopilotConnection: {
+          type: 'object', additionalProperties: false,
+          required: ['id','workspace_id','installation_id','display_name','fips_endpoint','api_version','capabilities','metadata','row_version','created_by_actor_id','updated_by_actor_id','created_at','updated_at'],
+          properties: {
+            id: { type: 'string', format: 'uuid' }, workspace_id: { type: 'string', format: 'uuid' },
+            installation_id: { type: 'string', description: 'Stable installation identity normalized to lower-case trimmed text.' },
+            display_name: { type: 'string' }, fips_endpoint: { type: 'string', format: 'uri' }, https_endpoint: { type: ['string','null'], format: 'uri' },
+            api_version: { type: 'string' }, capabilities: { type: 'array', items: { type: 'string' } }, metadata: { type: 'object', additionalProperties: true },
+            row_version: { type: 'integer', minimum: 1 }, created_by_actor_id: { type: 'string', format: 'uuid' }, updated_by_actor_id: { type: 'string', format: 'uuid' }, archived_by_actor_id: { type: ['string','null'], format: 'uuid' },
+            created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' }, archived_at: { type: ['string','null'], format: 'date-time' },
+          },
+        },
+        FlightDeckPgWorkspaceAgent: {
+          type: 'object', additionalProperties: false,
+          required: ['id','workspace_id','connection_id','agent_id','agent_npub','display_name','capabilities','sort_order','is_visible','metadata','row_version','created_by_actor_id','updated_by_actor_id','created_at','updated_at'],
+          properties: {
+            id: { type: 'string', format: 'uuid' }, workspace_id: { type: 'string', format: 'uuid' }, connection_id: { type: 'string', format: 'uuid' },
+            agent_id: { type: 'string' }, agent_npub: { type: 'string' }, display_name: { type: 'string' }, avatar_url: { type: ['string','null'], format: 'uri' },
+            capabilities: { type: 'array', items: { type: 'string' } }, sort_order: { type: 'integer' }, is_visible: { type: 'boolean' }, metadata: { type: 'object', additionalProperties: true },
+            row_version: { type: 'integer', minimum: 1 }, created_by_actor_id: { type: 'string', format: 'uuid' }, updated_by_actor_id: { type: 'string', format: 'uuid' }, archived_by_actor_id: { type: ['string','null'], format: 'uuid' },
+            created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' }, archived_at: { type: ['string','null'], format: 'date-time' },
+          },
+        },
         FlightDeckPgMessageCreateRequest: {
           type: 'object',
           required: ['body', 'message_signature'],
@@ -5372,6 +5395,24 @@ export function buildOpenApiDocument(origin: string) {
             '404': { description: 'Workspace not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
           },
         },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/autopilot-connections': {
+        get: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'List workspace Autopilot installation connections', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'include_archived', in: 'query', schema: { type: 'boolean' } }], responses: { '200': { description: 'Connections visible to workspace readers' }, '403': { description: 'workspace.read required' } } },
+        post: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Create or deterministically resolve an Autopilot connection', description: 'Normalizes installation_id and stores public endpoints/capabilities only. Credentials, bearer tokens, private keys and bunker URIs are rejected.', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['installation_id','display_name','fips_endpoint','capabilities'], properties: { installation_id: { type: 'string' }, display_name: { type: 'string' }, fips_endpoint: { type: 'string', format: 'uri' }, https_endpoint: { type: ['string','null'], format: 'uri' }, api_version: { type: 'string' }, capabilities: { type: 'array', items: { type: 'string' } }, metadata: { type: 'object' } } } } } }, responses: { '200': { description: 'Existing normalized connection' }, '201': { description: 'Connection created' }, '403': { description: 'workspace.manage required' } } },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/autopilot-connections/{connectionId}': {
+        get: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read an Autopilot connection', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'connectionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Connection' }, '404': { description: 'Connection not found' } } },
+        patch: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Update public Autopilot connection metadata', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'connectionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Connection updated' }, '409': { description: 'Missing, archived or stale' } } },
+        delete: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Archive an Autopilot connection', description: 'Fails while active workspace agents reference the connection.', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'connectionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Connection archived' }, '409': { description: 'Active agents still reference connection' } } },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/workspace-agents': {
+        get: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'List selected workspace agents', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'connection_id', in: 'query', schema: { type: 'string', format: 'uuid' } }, { name: 'include_archived', in: 'query', schema: { type: 'boolean' } }], responses: { '200': { description: 'Deterministically ordered workspace agents' } } },
+        post: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Install an agent from an active workspace connection', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['connection_id','agent_id','agent_npub','display_name'], properties: { connection_id: { type: 'string', format: 'uuid' }, agent_id: { type: 'string' }, agent_npub: { type: 'string' }, display_name: { type: 'string' }, avatar_url: { type: ['string','null'], format: 'uri' }, capabilities: { type: 'array', items: { type: 'string' } }, sort_order: { type: 'integer' }, is_visible: { type: 'boolean' }, metadata: { type: 'object' } } } } } }, responses: { '201': { description: 'Workspace agent created' }, '409': { description: 'Agent already installed from connection' } } },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/workspace-agents/{workspaceAgentId}': {
+        get: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read a selected workspace agent', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'workspaceAgentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Workspace agent' }, '404': { description: 'Workspace agent not found' } } },
+        patch: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Update workspace agent display, ordering and visibility', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'workspaceAgentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Workspace agent updated' }, '409': { description: 'Missing, archived or stale' } } },
+        delete: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Archive a workspace agent', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'workspaceAgentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Workspace agent archived' }, '404': { description: 'Active workspace agent not found' } } },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/events': {
         get: {

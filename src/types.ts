@@ -188,6 +188,48 @@ export interface WappDbNamespaceDescriptor {
   };
 }
 
+// ---- Flight Deck Autopilot connections ----
+
+export interface FlightDeckPgAutopilotConnection {
+  id: string;
+  workspace_id: string;
+  installation_id: string;
+  display_name: string;
+  fips_endpoint: string;
+  https_endpoint: string | null;
+  api_version: string;
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  row_version: number;
+  created_by_actor_id: string;
+  updated_by_actor_id: string;
+  archived_by_actor_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+  archived_at: Date | null;
+}
+
+export interface FlightDeckPgWorkspaceAgent {
+  id: string;
+  workspace_id: string;
+  connection_id: string;
+  agent_id: string;
+  agent_npub: string;
+  display_name: string;
+  avatar_url: string | null;
+  capabilities: string[];
+  sort_order: number;
+  is_visible: boolean;
+  metadata: Record<string, unknown>;
+  row_version: number;
+  created_by_actor_id: string;
+  updated_by_actor_id: string;
+  archived_by_actor_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+  archived_at: Date | null;
+}
+
 // ---- WApp-to-Flight-Deck publishing v1 ----
 
 /** Stable Flight Deck role label: `wapp_management`; canonical API permission: `wapp.manage`. */

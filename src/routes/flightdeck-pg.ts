@@ -2,6 +2,7 @@ import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdec
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createHash } from 'crypto';
+import { nip19 } from 'nostr-tools';
 import { getEffectiveRequestUrl, requireNip98AuthResolved, resolveNip98AuthHeader } from '../auth';
 import { getTowerBuildInfo } from '../build-info';
 import { config } from '../config';
@@ -38,6 +39,21 @@ import {
   AGENT_INSTRUCTION_SIGNATURE_METADATA_KEY,
   validateFlightDeckPgMessageInstructionSignature,
 } from '../services/flightdeck-pg-message-signatures';
+import {
+  archiveAutopilotConnection,
+  archiveWorkspaceAgent,
+  createAutopilotConnection,
+  createAutopilotRecordOutboxEvent,
+  createWorkspaceAgent,
+  listAutopilotConnections,
+  listWorkspaceAgents,
+  resolveAutopilotConnection,
+  resolveWorkspaceAgent,
+  serializeAutopilotConnection,
+  serializeWorkspaceAgent,
+  updateAutopilotConnection,
+  updateWorkspaceAgent,
+} from '../services/flightdeck-pg-autopilot-connections';
 import {
   AgentIdentityRotationError,
   rotateFlightDeckPgAgentIdentity,
@@ -1019,6 +1035,33 @@ function optionalObject(value: unknown) {
   if (value === undefined) return undefined;
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   return null;
+}
+
+const forbiddenConnectionKeys = /(^|_)(nsec|private_key|secret|token|credential|password|bearer|bunker_uri)($|_)/i;
+function containsForbiddenConnectionMaterial(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsForbiddenConnectionMaterial);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>).some(([key, nested]) => forbiddenConnectionKeys.test(key) || containsForbiddenConnectionMaterial(nested));
+}
+
+function stringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) return null;
+  return [...new Set(value.map((item) => String(item).trim()))].sort();
+}
+
+function publicEndpoint(value: unknown, schemes: string[]): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (!schemes.includes(url.protocol) || url.username || url.password || url.hash
+      || [...url.searchParams.keys()].some((key) => forbiddenConnectionKeys.test(key))) return null;
+    return url.toString();
+  } catch { return null; }
+}
+
+function validNpub(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  try { return nip19.decode(value.trim()).type === 'npub'; } catch { return false; }
 }
 
 async function resolveFileFolderPlacement(input: {
@@ -2229,6 +2272,8 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
   )));
   const refreshDailyNotes = fullSnapshot || changedEntityTypes.has('daily_note');
   const refreshPersonalWapps = fullSnapshot || changedEntityTypes.has('personal_wapp');
+  const refreshAutopilotRecords = workspaceReadDecision.allowed && (fullSnapshot
+    || changedEntityTypes.has('autopilot_connection') || changedEntityTypes.has('workspace_agent'));
   const manageDecision = await authorizeFlightDeckPgOperation({
     actorNpub: auth.userNpub,
     appNpub: context.workspace.app_npub,
@@ -2236,7 +2281,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
     permission: 'workspace.manage',
     resource: { type: 'workspace' },
   });
-  const [members, groups, dailyNotes, personalWapps] = await Promise.all([
+  const [members, groups, dailyNotes, personalWapps, autopilotConnections, workspaceAgents] = await Promise.all([
     refreshDirectory ? listFlightDeckPgWorkspaceMembers(context.workspace.id) : Promise.resolve([]),
     refreshDirectory && manageDecision.allowed ? listFlightDeckPgGroups(context.workspace.id) : Promise.resolve([]),
     refreshDailyNotes
@@ -2245,6 +2290,8 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
     refreshPersonalWapps
       ? listFlightDeckPgPersonalWapps({ workspaceId: context.workspace.id, actorId: context.actor.id, limit: 10_000 })
       : Promise.resolve([]),
+    refreshAutopilotRecords ? listAutopilotConnections(context.workspace.id) : Promise.resolve([]),
+    refreshAutopilotRecords ? listWorkspaceAgents(context.workspace.id) : Promise.resolve([]),
   ]);
 
   return c.json({
@@ -2261,6 +2308,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
       directory: refreshDirectory,
       daily_notes: refreshDailyNotes,
       personal_wapps: refreshPersonalWapps,
+      autopilot_records: refreshAutopilotRecords,
     },
     scopes: scopes.map(serializeFlightDeckPgScope),
     channels: channels.map(serializeFlightDeckPgChannel),
@@ -2272,6 +2320,8 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
     groups: groups.map(serializeFlightDeckPgGroup),
     daily_notes: dailyNotes.map(serializeFlightDeckPgDailyNote),
     personal_wapps: personalWapps.map(serializeFlightDeckPgPersonalWapp),
+    autopilot_connections: autopilotConnections.map(serializeAutopilotConnection),
+    workspace_agents: workspaceAgents.map(serializeWorkspaceAgent),
     tombstones: events
       .filter((event) => event.operation === 'deleted')
       .map((event) => ({
@@ -9877,6 +9927,106 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/workrooms/:workroomId/links', 
   if (!decision.allowed) return authorizationError(c, decision, identity, 'channel.write');
   const link = await createFlightDeckPgWorkroomLink({ workspaceId: context.workspace.id, workroom, actorId: context.actor.id, link: { linkType, targetType, targetId, externalUrl, label: typeof body.label === 'string' ? body.label : null, status: typeof body.status === 'string' ? body.status : null, metadata: metadata ?? {} } });
   return c.json({ identity, link: serializeFlightDeckPgWorkroomLink(link) }, 201);
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/autopilot-connections', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.read', resource: { type: 'workspace' } });
+  if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.read');
+  const connections = await listAutopilotConnections(context.workspace.id, c.req.query('include_archived') === 'true');
+  return c.json({ identity, autopilot_connections: connections.map(serializeAutopilotConnection), next_cursor: null });
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/autopilot-connections', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  const { context, identity } = result; const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+  const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } });
+  if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
+  const capabilities = stringArray(body.capabilities); const metadata = optionalObject(body.metadata) ?? {};
+  const fipsEndpoint = publicEndpoint(body.fips_endpoint, ['fips:', 'https:']);
+  const httpsEndpoint = body.https_endpoint == null ? null : publicEndpoint(body.https_endpoint, ['https:']);
+  const fields = [] as { path: string; code: string; message: string }[];
+  for (const [path, value] of [['installation_id', body.installation_id], ['display_name', body.display_name], ['api_version', body.api_version ?? '1']] as const) if (typeof value !== 'string' || !value.trim()) fields.push({ path, code: 'required', message: `${path} is required` });
+  if (!fipsEndpoint) fields.push({ path: 'fips_endpoint', code: 'invalid', message: 'fips_endpoint must be a public fips:// or https:// URL without credentials' });
+  if (body.https_endpoint != null && !httpsEndpoint) fields.push({ path: 'https_endpoint', code: 'invalid', message: 'https_endpoint must be an https:// URL without credentials' });
+  if (!capabilities) fields.push({ path: 'capabilities', code: 'invalid', message: 'capabilities must be an array of non-empty strings' });
+  if (optionalObject(body.metadata) === null || containsForbiddenConnectionMaterial(body)) fields.push({ path: 'body', code: 'secret_material_forbidden', message: 'connection records must not contain credentials or reusable secrets' });
+  if (fields.length) return validationError(c, identity, fields);
+  const payload = await getDb().begin(async (tx) => { const sql = tx as any;
+    const created = await createAutopilotConnection({ workspaceId: context.workspace.id, installationId: String(body.installation_id), displayName: String(body.display_name).trim(), fipsEndpoint: fipsEndpoint!, httpsEndpoint, apiVersion: String(body.api_version ?? '1').trim(), capabilities: capabilities!, metadata, actorId: context.actor.id }, sql);
+    const outbox = created.created ? await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'autopilot_connection', entityId: created.row.id, operation: 'created', rowVersion: created.row.row_version, payload: { autopilot_connection: serializeAutopilotConnection(created.row), actor_npub: auth.userNpub } }, sql) : null;
+    return { ...created, outbox };
+  });
+  return c.json({ identity, autopilot_connection: serializeAutopilotConnection(payload.row), normalized_duplicate: !payload.created, outbox: payload.outbox }, payload.created ? 201 : 200);
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/autopilot-connections/:connectionId', async (c) => {
+  const auth=await requireNip98AuthResolved(c); if(auth instanceof Response)return auth; const result=await requireFlightDeckPgContext(c,auth.userNpub); if('response'in result)return result.response; const {context,identity}=result;
+  const decision=await authorizeFlightDeckPgOperation({actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,workspaceId:context.workspace.id,permission:'workspace.read',resource:{type:'workspace'}}); if(!decision.allowed)return authorizationError(c,decision,identity,'workspace.read');
+  const row=await resolveAutopilotConnection(context.workspace.id,c.req.param('connectionId')); if(!row)return jsonError(c,404,'autopilot_connection_not_found','Connection not found',identity); return c.json({identity,autopilot_connection:serializeAutopilotConnection(row)});
+});
+
+flightDeckPgRouter.patch('/workspaces/:workspaceId/autopilot-connections/:connectionId', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  const { context, identity } = result; const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+  const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
+  const patch: any = {};
+  if (body.display_name !== undefined) patch.displayName = String(body.display_name).trim();
+  if (body.fips_endpoint !== undefined) patch.fipsEndpoint = publicEndpoint(body.fips_endpoint, ['fips:', 'https:']);
+  if (body.https_endpoint !== undefined) patch.httpsEndpoint = body.https_endpoint === null ? null : publicEndpoint(body.https_endpoint, ['https:']);
+  if (body.api_version !== undefined) patch.apiVersion = String(body.api_version).trim();
+  if (body.capabilities !== undefined) patch.capabilities = stringArray(body.capabilities);
+  if (body.metadata !== undefined) patch.metadata = optionalObject(body.metadata);
+  if (containsForbiddenConnectionMaterial(body) || Object.values(patch).some((v) => v === null) && body.https_endpoint !== null) return validationError(c, identity, [{ path: 'body', code: 'invalid', message: 'patch contains invalid public metadata, endpoint, or secret material' }]);
+  const rowVersion = optionalRowVersion(body); if (Number.isNaN(rowVersion)) return validationError(c, identity, [{ path: 'row_version', code: 'invalid', message: 'row_version must be positive' }]);
+  const payload = await getDb().begin(async (tx) => { const sql = tx as any; const row = await updateAutopilotConnection({ workspaceId: context.workspace.id, id: c.req.param('connectionId'), actorId: context.actor.id, rowVersion, patch }, sql); if (!row) return null; const outbox = await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'autopilot_connection', entityId: row.id, operation: 'updated', rowVersion: row.row_version, payload: { autopilot_connection: serializeAutopilotConnection(row), actor_npub: auth.userNpub } }, sql); return { row, outbox }; });
+  if (!payload) return jsonError(c, 409, 'autopilot_connection_not_updated', 'Connection is missing, archived, or stale', identity);
+  return c.json({ identity, autopilot_connection: serializeAutopilotConnection(payload.row), outbox: payload.outbox });
+});
+
+flightDeckPgRouter.delete('/workspaces/:workspaceId/autopilot-connections/:connectionId', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth; const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response; const { context, identity } = result;
+  const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
+  if ((await listWorkspaceAgents(context.workspace.id, c.req.param('connectionId'))).length) return jsonError(c, 409, 'connection_has_active_agents', 'Archive installed agents before archiving their connection', identity);
+  const payload = await getDb().begin(async (tx) => { const sql = tx as any; const row = await archiveAutopilotConnection({ workspaceId: context.workspace.id, id: c.req.param('connectionId'), actorId: context.actor.id }, sql); if (!row) return null; const outbox = await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'autopilot_connection', entityId: row.id, operation: 'archived', rowVersion: row.row_version, payload: { tombstone: { id: row.id }, actor_npub: auth.userNpub } }, sql); return { row, outbox }; });
+  if (!payload) return jsonError(c, 404, 'autopilot_connection_not_found', 'Active connection not found', identity); return c.json({ identity, autopilot_connection: serializeAutopilotConnection(payload.row), outbox: payload.outbox });
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/workspace-agents', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth; const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response; const { context, identity } = result;
+  const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.read', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.read');
+  const rows = await listWorkspaceAgents(context.workspace.id, c.req.query('connection_id'), c.req.query('include_archived') === 'true'); return c.json({ identity, workspace_agents: rows.map(serializeWorkspaceAgent), next_cursor: null });
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/workspace-agents', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth; const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response; const { context, identity } = result; const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]); const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
+  const connectionId = String(body.connection_id ?? ''); const connection = isUuid(connectionId) ? await resolveAutopilotConnection(context.workspace.id, connectionId) : null; const capabilities = stringArray(body.capabilities ?? []); const metadata = optionalObject(body.metadata) ?? {}; const sortOrder = body.sort_order === undefined ? 0 : Number(body.sort_order);
+  const fields = [] as { path: string; code: string; message: string }[]; if (!connection || connection.archived_at) fields.push({ path: 'connection_id', code: 'invalid_reference', message: 'connection_id must reference an active workspace connection' }); for (const [path, value] of [['agent_id', body.agent_id], ['agent_npub', body.agent_npub], ['display_name', body.display_name]] as const) if (typeof value !== 'string' || !value.trim()) fields.push({ path, code: 'required', message: `${path} is required` }); if (typeof body.agent_npub === 'string' && body.agent_npub.trim() && !validNpub(body.agent_npub)) fields.push({ path: 'agent_npub', code: 'invalid', message: 'agent_npub must be a valid npub' }); if (!Number.isInteger(sortOrder)) fields.push({ path: 'sort_order', code: 'invalid', message: 'sort_order must be an integer' }); if (!capabilities || optionalObject(body.metadata) === null || containsForbiddenConnectionMaterial(body)) fields.push({ path: 'body', code: 'invalid', message: 'agent metadata must be public and contain no credentials' }); if (fields.length) return validationError(c, identity, fields);
+  try { const payload = await getDb().begin(async (tx) => { const sql = tx as any; const row = await createWorkspaceAgent({ workspaceId: context.workspace.id, connectionId, agentId: String(body.agent_id), agentNpub: String(body.agent_npub).trim(), displayName: String(body.display_name).trim(), avatarUrl: typeof body.avatar_url === 'string' ? body.avatar_url.trim() : null, capabilities: capabilities!, sortOrder, isVisible: body.is_visible !== false, metadata, actorId: context.actor.id }, sql); const outbox = await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'workspace_agent', entityId: row.id, operation: 'created', rowVersion: row.row_version, payload: { workspace_agent: serializeWorkspaceAgent(row), actor_npub: auth.userNpub } }, sql); return { row, outbox }; }); return c.json({ identity, workspace_agent: serializeWorkspaceAgent(payload.row), outbox: payload.outbox }, 201); } catch (error: any) { if (error?.code === '23505') return jsonError(c, 409, 'workspace_agent_exists', 'This agent is already installed from this connection', identity); throw error; }
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/workspace-agents/:workspaceAgentId', async (c) => {
+  const auth=await requireNip98AuthResolved(c); if(auth instanceof Response)return auth; const result=await requireFlightDeckPgContext(c,auth.userNpub); if('response'in result)return result.response; const {context,identity}=result;
+  const decision=await authorizeFlightDeckPgOperation({actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,workspaceId:context.workspace.id,permission:'workspace.read',resource:{type:'workspace'}}); if(!decision.allowed)return authorizationError(c,decision,identity,'workspace.read');
+  const row=await resolveWorkspaceAgent(context.workspace.id,c.req.param('workspaceAgentId')); if(!row)return jsonError(c,404,'workspace_agent_not_found','Workspace agent not found',identity); return c.json({identity,workspace_agent:serializeWorkspaceAgent(row)});
+});
+
+flightDeckPgRouter.patch('/workspaces/:workspaceId/workspace-agents/:workspaceAgentId', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth; const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response; const { context, identity } = result; const body = await readJsonBody(c); if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]); const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
+  const patch: any = {}; if (body.display_name !== undefined) patch.displayName=String(body.display_name).trim(); if (body.avatar_url !== undefined) patch.avatarUrl=body.avatar_url === null ? null : String(body.avatar_url).trim(); if (body.capabilities !== undefined) patch.capabilities=stringArray(body.capabilities); if (body.sort_order !== undefined) patch.sortOrder=Number(body.sort_order); if (body.is_visible !== undefined) patch.isVisible=body.is_visible; if (body.metadata !== undefined) patch.metadata=optionalObject(body.metadata); if (containsForbiddenConnectionMaterial(body) || (patch.capabilities === null) || (patch.metadata === null) || (patch.sortOrder !== undefined && !Number.isInteger(patch.sortOrder)) || (patch.isVisible !== undefined && typeof patch.isVisible !== 'boolean')) return validationError(c, identity, [{ path: 'body', code: 'invalid', message: 'workspace agent patch is invalid' }]); const rowVersion=optionalRowVersion(body);
+  const payload = await getDb().begin(async (tx) => { const sql=tx as any; const row=await updateWorkspaceAgent({ workspaceId: context.workspace.id, id:c.req.param('workspaceAgentId'), actorId:context.actor.id, rowVersion, patch },sql); if(!row)return null; const outbox=await createAutopilotRecordOutboxEvent({workspaceId:context.workspace.id,actorId:context.actor.id,entityType:'workspace_agent',entityId:row.id,operation:'updated',rowVersion:row.row_version,payload:{workspace_agent:serializeWorkspaceAgent(row),actor_npub:auth.userNpub}},sql); return {row,outbox}; }); if(!payload)return jsonError(c,409,'workspace_agent_not_updated','Agent is missing, archived, or stale',identity); return c.json({identity,workspace_agent:serializeWorkspaceAgent(payload.row),outbox:payload.outbox});
+});
+
+flightDeckPgRouter.delete('/workspaces/:workspaceId/workspace-agents/:workspaceAgentId', async (c) => {
+  const auth=await requireNip98AuthResolved(c); if(auth instanceof Response)return auth; const result=await requireFlightDeckPgContext(c,auth.userNpub); if('response'in result)return result.response; const {context,identity}=result; const decision=await authorizeFlightDeckPgOperation({actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,workspaceId:context.workspace.id,permission:'workspace.manage',resource:{type:'workspace'}}); if(!decision.allowed)return authorizationError(c,decision,identity,'workspace.manage');
+  const payload=await getDb().begin(async(tx)=>{const sql=tx as any;const row=await archiveWorkspaceAgent({workspaceId:context.workspace.id,id:c.req.param('workspaceAgentId'),actorId:context.actor.id},sql);if(!row)return null;const outbox=await createAutopilotRecordOutboxEvent({workspaceId:context.workspace.id,actorId:context.actor.id,entityType:'workspace_agent',entityId:row.id,operation:'archived',rowVersion:row.row_version,payload:{tombstone:{id:row.id},actor_npub:auth.userNpub}},sql);return{row,outbox};});if(!payload)return jsonError(c,404,'workspace_agent_not_found','Active workspace agent not found',identity);return c.json({identity,workspace_agent:serializeWorkspaceAgent(payload.row),outbox:payload.outbox});
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/approvals', async (c) => {

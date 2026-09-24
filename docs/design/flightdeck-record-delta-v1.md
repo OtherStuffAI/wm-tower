@@ -6,7 +6,7 @@ Contract-ready: 2026-09-05. Producer implementation and isolated validation are 
 
 `GET /api/v4/flightdeck-pg/workspaces/:workspaceId/record-sync?protocol_version=1[&cursor=OPAQUE][&limit=200]`, existing NIP-98 and app identity headers. Version is mandatory. Successful responses advertise `protocol_version: 1` and `families`. A 404/unsupported version means use legacy sync. Keep a separate cursor per protocol/workspace/viewer. This is a record-family stream, not a replacement for unrelated directory, invocation, WApp publishing, or presence APIs.
 
-Families: `scope`, `channel`, `thread`, `message`, `task`, `task_comment`, `task_assignment`, `doc`, `doc_comment`, `file`, `file_folder`, `audio_note`, `daily_note`, `personal_wapp`, `resource_view_state`.
+Families: `scope`, `channel`, `thread`, `message`, `task`, `task_comment`, `task_assignment`, `doc`, `doc_comment`, `file`, `file_folder`, `audio_note`, `daily_note`, `personal_wapp`, `resource_view_state`, `autopilot_connection`, `workspace_agent`.
 
 ## Response
 
@@ -28,7 +28,7 @@ Limit 1..200 (default 200). Entire JSON response is at most 1,048,576 UTF-8 byte
 
 Every page rechecks current membership and permission grants inside one database transaction. Changes to grants, group membership/edges, workspace membership, identity, scope/channel visibility or ownership invalidate the generation. Return 409 `{error:'reset_required',protocol_version:1,reset:{discard_authoritative:true,preserve_pending:true}}`. Client must immediately hide/discard this protocol's authoritative rows and restart without cursor; never keep revoked data visible while resnapshotting. Membership loss returns 403; purge/hide the workspace cache while preserving pending commands for explicit reconciliation. Grant expansion also resets so previously hidden records are included. An ACL reset never returns record data. Authorization is evaluated at the response transaction's database snapshot; later revocations take effect on the next request. Retention/restore or deployment incompatibility must invalidate generations, not reinterpret cursors.
 
-Scope/channel records use current read grants; channel records require active scope/channel visibility. Tasks and task comments/assignments require task.read. Docs/files/audio use their read permission or channel.read. Messages/threads/folders use channel.read. Personal records are owner-only in v1. View states are viewer-only plus target read access. Shared personal records remain on their existing API until a separately negotiated extension. Directory and other unadvertised families retain their current API paths; do not advertise complete-workspace replacement.
+Scope/channel records use current read grants; channel records require active scope/channel visibility. Tasks and task comments/assignments require task.read. Docs/files/audio use their read permission or channel.read. Messages/threads/folders use channel.read. Personal records are owner-only in v1. View states are viewer-only plus target read access. Autopilot connections and workspace agents require `workspace.read`; they contain public connection/selection metadata only. Shared personal records remain on their existing API until a separately negotiated extension. Directory and other unadvertised families retain their current API paths; do not advertise complete-workspace replacement.
 
 ## Indexed list reads
 
