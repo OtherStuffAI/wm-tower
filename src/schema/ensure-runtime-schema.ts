@@ -4187,7 +4187,21 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
 
   const recordDeltaSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
   await sql.unsafe(recordDeltaSchema.split('-- flightdeck_autopilot_connections_v1')[1]!.split('-- end_flightdeck_autopilot_connections_v1')[0]!);
+  await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_autopilot_connections
+      ADD COLUMN IF NOT EXISTS fips_transport_npub TEXT;
+  `);
   await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
+  await sql.unsafe(`
+    UPDATE flightdeck_pg_record_current current
+    SET row = to_jsonb(connection)
+    FROM flightdeck_pg_autopilot_connections connection
+    WHERE current.workspace_id = connection.workspace_id
+      AND current.family = 'autopilot_connection'
+      AND current.id = connection.id::text
+      AND connection.archived_at IS NULL
+      AND NOT current.row ? 'fips_transport_npub';
+  `);
 
   // Retain legacy Git tables for audit, and remove their operational projection
   // triggers/functions on upgrades. This block must never backfill provider intent.

@@ -3222,6 +3222,7 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_autopilot_connections (
   installation_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
   fips_endpoint TEXT NOT NULL,
+  fips_transport_npub TEXT,
   https_endpoint TEXT,
   api_version TEXT NOT NULL DEFAULT '1',
   capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,

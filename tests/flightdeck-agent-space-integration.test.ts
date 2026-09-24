@@ -20,6 +20,8 @@ describe.skipIf(!port || port === 5432)('Flight Deck Agent Space disposable-Post
   const readerNpub = nip19.npubEncode(getPublicKey(readerSecret));
   const deniedNpub = nip19.npubEncode(getPublicKey(deniedSecret));
   const agentNpub = nip19.npubEncode(createHash('sha256').update('agent-space-agent').digest('hex'));
+  const transportNpub = nip19.npubEncode(createHash('sha256').update('agent-space-transport').digest('hex'));
+  const otherTransportNpub = nip19.npubEncode(createHash('sha256').update('agent-space-other-transport').digest('hex'));
   const appNpub = nip19.npubEncode(createHash('sha256').update('agent-space-app').digest('hex'));
   let sql: ReturnType<typeof postgres>;
   let app: ReturnType<typeof createApp>;
@@ -169,7 +171,30 @@ describe.skipIf(!port || port === 5432)('Flight Deck Agent Space disposable-Post
       connectionBody({ installation_id: 'secret-b', metadata: { bunker_uri: 'bunker://secret' } }),
       connectionBody({ installation_id: 'endpoint-a', fips_endpoint: 'http://localhost:9000' }),
       connectionBody({ installation_id: 'endpoint-b', https_endpoint: 'https://user:pass@example.com' }),
+      connectionBody({ installation_id: 'endpoint-c', fips_endpoint: 'http://example.com:3601' }),
+      connectionBody({ installation_id: 'endpoint-d', fips_endpoint: `http://${transportNpub}.fips:3601?redirect=https://example.com`, fips_transport_npub: transportNpub }),
+      connectionBody({ installation_id: 'endpoint-e', fips_endpoint: `http://${transportNpub}.fips:3601`, fips_transport_npub: otherTransportNpub }),
     ]) expect((await request(path, 'POST', managerSecret, body)).response.status).toBe(400);
+  });
+
+  test('retains exact v2 signed FIPS origins and rejects mismatched updates', async () => {
+    const path = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/autopilot-connections`;
+    const endpoint = `http://${transportNpub}.fips:3601`;
+    const created = await request(path, 'POST', managerSecret, connectionBody({
+      installation_id: 'v2-install', fips_endpoint: endpoint, fips_transport_npub: transportNpub,
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.json.autopilot_connection).toMatchObject({ fips_endpoint: endpoint, fips_transport_npub: transportNpub });
+
+    const connectionId = created.json.autopilot_connection.id as string;
+    const mismatch = await request(`${path}/${connectionId}`, 'PATCH', managerSecret, { fips_transport_npub: otherTransportNpub });
+    expect(mismatch.response.status).toBe(400);
+    expect(mismatch.json.details.fields).toContainEqual(expect.objectContaining({ code: 'identity_mismatch' }));
+
+    const stored = await sql<{ fips_endpoint: string; fips_transport_npub: string }[]>`
+      SELECT fips_endpoint,fips_transport_npub FROM flightdeck_pg_autopilot_connections WHERE id=${connectionId}
+    `;
+    expect(stored[0]).toEqual({ fips_endpoint: endpoint, fips_transport_npub: transportNpub });
   });
 
   test('bundled sync and canonical deltas expose both families and archive tombstones', async () => {
@@ -182,6 +207,7 @@ describe.skipIf(!port || port === 5432)('Flight Deck Agent Space disposable-Post
     const snapshot = await request(syncPath, 'GET', readerSecret);
     expect(snapshot.response.status).toBe(200);
     expect(snapshot.json.autopilot_connections.some((row: any) => row.id === connectionId)).toBe(true);
+    expect(snapshot.json.autopilot_connections.find((row: any) => row.id === connectionId).fips_transport_npub).toBeNull();
     expect(snapshot.json.workspace_agents.some((row: any) => row.id === agent.json.workspace_agent.id)).toBe(true);
 
     let page = await readFlightDeckRecordPage({ workspaceId, actorId: readerId }, sql);

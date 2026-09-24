@@ -37,16 +37,17 @@ export async function resolveAutopilotConnection(workspaceId: string, id: string
 
 export async function createAutopilotConnection(input: {
   workspaceId: string; installationId: string; displayName: string; fipsEndpoint: string;
+  fipsTransportNpub: string | null;
   httpsEndpoint: string | null; apiVersion: string; capabilities: string[];
   metadata: Record<string, unknown>; actorId: string;
 }, sql: DbClient = getDb()) {
   const installationId = normalizeAutopilotInstallationId(input.installationId);
   const [row] = await sql<FlightDeckPgAutopilotConnection[]>`
     INSERT INTO flightdeck_pg_autopilot_connections (
-      workspace_id, installation_id, display_name, fips_endpoint, https_endpoint,
+      workspace_id, installation_id, display_name, fips_endpoint, fips_transport_npub, https_endpoint,
       api_version, capabilities, metadata, created_by_actor_id, updated_by_actor_id
     ) VALUES (
-      ${input.workspaceId}, ${installationId}, ${input.displayName}, ${input.fipsEndpoint}, ${input.httpsEndpoint},
+      ${input.workspaceId}, ${installationId}, ${input.displayName}, ${input.fipsEndpoint}, ${input.fipsTransportNpub}, ${input.httpsEndpoint},
       ${input.apiVersion}, ${sql.json(input.capabilities)}, ${sql.json(input.metadata as any)}, ${input.actorId}, ${input.actorId}
     )
     ON CONFLICT (workspace_id, installation_id) WHERE archived_at IS NULL DO NOTHING
@@ -62,13 +63,14 @@ export async function createAutopilotConnection(input: {
 
 export async function updateAutopilotConnection(input: {
   workspaceId: string; id: string; actorId: string; rowVersion?: number | null;
-  patch: { displayName?: string; fipsEndpoint?: string; httpsEndpoint?: string | null; apiVersion?: string; capabilities?: string[]; metadata?: Record<string, unknown> };
+  patch: { displayName?: string; fipsEndpoint?: string; fipsTransportNpub?: string; httpsEndpoint?: string | null; apiVersion?: string; capabilities?: string[]; metadata?: Record<string, unknown> };
 }, sql: DbClient = getDb()) {
   const p = input.patch;
   const [row] = await sql<FlightDeckPgAutopilotConnection[]>`
     UPDATE flightdeck_pg_autopilot_connections SET
       display_name=COALESCE(${p.displayName ?? null},display_name),
       fips_endpoint=COALESCE(${p.fipsEndpoint ?? null},fips_endpoint),
+      fips_transport_npub=COALESCE(${p.fipsTransportNpub ?? null},fips_transport_npub),
       https_endpoint=CASE WHEN ${p.httpsEndpoint !== undefined} THEN ${p.httpsEndpoint ?? null} ELSE https_endpoint END,
       api_version=COALESCE(${p.apiVersion ?? null},api_version),
       capabilities=CASE WHEN ${p.capabilities !== undefined} THEN ${sql.json(p.capabilities ?? [])}::jsonb ELSE capabilities END,

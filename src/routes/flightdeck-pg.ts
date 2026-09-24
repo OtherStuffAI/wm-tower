@@ -1054,9 +1054,32 @@ function publicEndpoint(value: unknown, schemes: string[]): string | null {
   try {
     const url = new URL(value.trim());
     if (!schemes.includes(url.protocol) || url.username || url.password || url.hash
+      || url.hostname === 'localhost' || url.hostname.endsWith('.localhost')
+      || /^127(?:\.[0-9]{1,3}){3}$/.test(url.hostname) || url.hostname === '[::1]'
       || [...url.searchParams.keys()].some((key) => forbiddenConnectionKeys.test(key))) return null;
     return url.toString();
   } catch { return null; }
+}
+
+function exactFipsHttpOrigin(value: unknown): { endpoint: string; transportNpub: string } | null {
+  if (typeof value !== 'string' || value !== value.trim()) return null;
+  const match = /^http:\/\/(npub1[023456789acdefghjklmnpqrstuvwxyz]{58})\.fips:([0-9]{1,5})$/.exec(value);
+  if (!match || !validNpub(match[1])) return null;
+  const port = Number(match[2]);
+  if (port < 1 || port > 65535 || String(port) !== match[2]) return null;
+  return { endpoint: value, transportNpub: match[1] };
+}
+
+function connectionFipsEndpoint(value: unknown): { endpoint: string; transportNpub: string | null } | null {
+  const exact = exactFipsHttpOrigin(value);
+  if (exact) return exact;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.search || parsed.hash) return null;
+  } catch { return null; }
+  const legacy = publicEndpoint(value, ['fips:', 'https:']);
+  return legacy ? { endpoint: legacy, transportNpub: null } : null;
 }
 
 function validNpub(value: unknown): boolean {
@@ -9947,17 +9970,21 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/autopilot-connections', async 
   const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
   const capabilities = stringArray(body.capabilities); const metadata = optionalObject(body.metadata) ?? {};
-  const fipsEndpoint = publicEndpoint(body.fips_endpoint, ['fips:', 'https:']);
+  const fipsEndpoint = connectionFipsEndpoint(body.fips_endpoint);
+  const fipsTransportNpub = body.fips_transport_npub === undefined ? null : (validNpub(body.fips_transport_npub) ? String(body.fips_transport_npub).trim() : null);
   const httpsEndpoint = body.https_endpoint == null ? null : publicEndpoint(body.https_endpoint, ['https:']);
   const fields = [] as { path: string; code: string; message: string }[];
   for (const [path, value] of [['installation_id', body.installation_id], ['display_name', body.display_name], ['api_version', body.api_version ?? '1']] as const) if (typeof value !== 'string' || !value.trim()) fields.push({ path, code: 'required', message: `${path} is required` });
-  if (!fipsEndpoint) fields.push({ path: 'fips_endpoint', code: 'invalid', message: 'fips_endpoint must be a public fips:// or https:// URL without credentials' });
+  if (!fipsEndpoint) fields.push({ path: 'fips_endpoint', code: 'invalid', message: 'fips_endpoint must be an exact http://<npub>.fips:<port> origin or a legacy public fips:// or https:// URL without credentials' });
+  if (body.fips_transport_npub !== undefined && !fipsTransportNpub) fields.push({ path: 'fips_transport_npub', code: 'invalid', message: 'fips_transport_npub must be a valid npub' });
+  if (fipsEndpoint?.transportNpub && !fipsTransportNpub) fields.push({ path: 'fips_transport_npub', code: 'required', message: 'fips_transport_npub is required for an HTTP FIPS origin' });
+  if (fipsEndpoint?.transportNpub && fipsTransportNpub && fipsEndpoint.transportNpub !== fipsTransportNpub) fields.push({ path: 'fips_endpoint', code: 'identity_mismatch', message: 'fips_endpoint host must match fips_transport_npub' });
   if (body.https_endpoint != null && !httpsEndpoint) fields.push({ path: 'https_endpoint', code: 'invalid', message: 'https_endpoint must be an https:// URL without credentials' });
   if (!capabilities) fields.push({ path: 'capabilities', code: 'invalid', message: 'capabilities must be an array of non-empty strings' });
   if (optionalObject(body.metadata) === null || containsForbiddenConnectionMaterial(body)) fields.push({ path: 'body', code: 'secret_material_forbidden', message: 'connection records must not contain credentials or reusable secrets' });
   if (fields.length) return validationError(c, identity, fields);
   const payload = await getDb().begin(async (tx) => { const sql = tx as any;
-    const created = await createAutopilotConnection({ workspaceId: context.workspace.id, installationId: String(body.installation_id), displayName: String(body.display_name).trim(), fipsEndpoint: fipsEndpoint!, httpsEndpoint, apiVersion: String(body.api_version ?? '1').trim(), capabilities: capabilities!, metadata, actorId: context.actor.id }, sql);
+    const created = await createAutopilotConnection({ workspaceId: context.workspace.id, installationId: String(body.installation_id), displayName: String(body.display_name).trim(), fipsEndpoint: fipsEndpoint!.endpoint, fipsTransportNpub, httpsEndpoint, apiVersion: String(body.api_version ?? '1').trim(), capabilities: capabilities!, metadata, actorId: context.actor.id }, sql);
     const outbox = created.created ? await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'autopilot_connection', entityId: created.row.id, operation: 'created', rowVersion: created.row.row_version, payload: { autopilot_connection: serializeAutopilotConnection(created.row), actor_npub: auth.userNpub } }, sql) : null;
     return { ...created, outbox };
   });
@@ -9978,12 +10005,26 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/autopilot-connections/:connec
   const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }); if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.manage');
   const patch: any = {};
   if (body.display_name !== undefined) patch.displayName = String(body.display_name).trim();
-  if (body.fips_endpoint !== undefined) patch.fipsEndpoint = publicEndpoint(body.fips_endpoint, ['fips:', 'https:']);
+  const existing = await resolveAutopilotConnection(context.workspace.id, c.req.param('connectionId'));
+  const parsedFipsEndpoint = body.fips_endpoint === undefined ? undefined : connectionFipsEndpoint(body.fips_endpoint);
+  if (body.fips_endpoint !== undefined) patch.fipsEndpoint = parsedFipsEndpoint?.endpoint ?? null;
+  if (body.fips_transport_npub !== undefined) patch.fipsTransportNpub = validNpub(body.fips_transport_npub) ? String(body.fips_transport_npub).trim() : null;
   if (body.https_endpoint !== undefined) patch.httpsEndpoint = body.https_endpoint === null ? null : publicEndpoint(body.https_endpoint, ['https:']);
   if (body.api_version !== undefined) patch.apiVersion = String(body.api_version).trim();
   if (body.capabilities !== undefined) patch.capabilities = stringArray(body.capabilities);
   if (body.metadata !== undefined) patch.metadata = optionalObject(body.metadata);
-  if (containsForbiddenConnectionMaterial(body) || Object.values(patch).some((v) => v === null) && body.https_endpoint !== null) return validationError(c, identity, [{ path: 'body', code: 'invalid', message: 'patch contains invalid public metadata, endpoint, or secret material' }]);
+  const resultingEndpoint = parsedFipsEndpoint === undefined ? connectionFipsEndpoint(existing?.fips_endpoint) : parsedFipsEndpoint;
+  const resultingTransportNpub = patch.fipsTransportNpub === undefined ? existing?.fips_transport_npub ?? null : patch.fipsTransportNpub;
+  const invalidPatch = containsForbiddenConnectionMaterial(body)
+    || (body.display_name !== undefined && !patch.displayName)
+    || (body.fips_endpoint !== undefined && !parsedFipsEndpoint)
+    || (body.fips_transport_npub !== undefined && !patch.fipsTransportNpub)
+    || (body.https_endpoint !== undefined && body.https_endpoint !== null && !patch.httpsEndpoint)
+    || (body.api_version !== undefined && !patch.apiVersion)
+    || (body.capabilities !== undefined && !patch.capabilities)
+    || (body.metadata !== undefined && !patch.metadata);
+  if (invalidPatch) return validationError(c, identity, [{ path: 'body', code: 'invalid', message: 'patch contains invalid public metadata, endpoint, identity, or secret material' }]);
+  if (resultingEndpoint?.transportNpub && resultingEndpoint.transportNpub !== resultingTransportNpub) return validationError(c, identity, [{ path: 'fips_endpoint', code: 'identity_mismatch', message: 'fips_endpoint host must match fips_transport_npub' }]);
   const rowVersion = optionalRowVersion(body); if (Number.isNaN(rowVersion)) return validationError(c, identity, [{ path: 'row_version', code: 'invalid', message: 'row_version must be positive' }]);
   const payload = await getDb().begin(async (tx) => { const sql = tx as any; const row = await updateAutopilotConnection({ workspaceId: context.workspace.id, id: c.req.param('connectionId'), actorId: context.actor.id, rowVersion, patch }, sql); if (!row) return null; const outbox = await createAutopilotRecordOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'autopilot_connection', entityId: row.id, operation: 'updated', rowVersion: row.row_version, payload: { autopilot_connection: serializeAutopilotConnection(row), actor_npub: auth.userNpub } }, sql); return { row, outbox }; });
   if (!payload) return jsonError(c, 409, 'autopilot_connection_not_updated', 'Connection is missing, archived, or stale', identity);

@@ -42,6 +42,7 @@ describe('Autopilot connection materialization contract', () => {
     expect(recordFamilies.workspace_agent).toBe('workspace_agents');
     const schema = readFileSync(new URL('../src/schema/001_init.sql', import.meta.url), 'utf8');
     expect(schema).toContain('flightdeck_pg_autopilot_connections');
+    expect(schema).toContain('fips_transport_npub TEXT');
     expect(schema).toContain('flightdeck_pg_workspace_agents');
     expect(schema).toContain("flightdeck_pg_record_capture('autopilot_connection')");
     expect(schema).toContain("flightdeck_pg_record_capture('workspace_agent')");

@@ -60,6 +60,8 @@ describe('OpenAPI docs', () => {
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.workspace_descriptor']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/me'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.me']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/members'].post).toBeDefined();
+    expect(body.components.schemas.FlightDeckPgAutopilotConnection.required).toContain('fips_transport_npub');
+    expect(body.components.schemas.FlightDeckPgAutopilotConnection.properties.fips_transport_npub.type).toEqual(['string', 'null']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.scopes.list']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes'].post['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.scopes.create']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes/{scopeId}'].patch).toBeTruthy();

@@ -140,6 +140,19 @@ async function expectSqlFailure(action: () => Promise<unknown>, code?: string) {
 }
 
 describe('Flight Deck PG schema foundation', () => {
+  test('additively restores the FIPS transport identity column idempotently', async () => {
+    await sql`ALTER TABLE flightdeck_pg_autopilot_connections DROP COLUMN fips_transport_npub`;
+    await ensureRuntimeSchema(sql);
+    await ensureRuntimeSchema(sql);
+
+    const columns = await sql<{ column_name: string; is_nullable: string }[]>`
+      SELECT column_name,is_nullable FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='flightdeck_pg_autopilot_connections'
+        AND column_name='fips_transport_npub'
+    `;
+    expect(columns).toEqual([{ column_name: 'fips_transport_npub', is_nullable: 'YES' }]);
+  });
+
   test('replays the branch-point foreign key bootstrap after runtime schema installation', async () => {
     const migration = readFileSync(
       new URL('../src/schema/001_init.sql', import.meta.url),

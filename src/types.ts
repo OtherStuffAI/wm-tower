@@ -196,6 +196,7 @@ export interface FlightDeckPgAutopilotConnection {
   installation_id: string;
   display_name: string;
   fips_endpoint: string;
+  fips_transport_npub: string | null;
   https_endpoint: string | null;
   api_version: string;
   capabilities: string[];
