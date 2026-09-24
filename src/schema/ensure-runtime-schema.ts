@@ -3250,12 +3250,16 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
       visibility TEXT NOT NULL DEFAULT 'user_visible',
       sequence BIGINT NOT NULL,
       expires_at TIMESTAMPTZ NOT NULL,
+      last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      lease_expires_at TIMESTAMPTZ NOT NULL,
+      blocked_by_turn_id TEXT,
+      queue_position INTEGER CHECK (queue_position IS NULL OR queue_position >= 1),
       terminal_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (workspace_id, activity_id),
       CONSTRAINT flightdeck_pg_agent_activities_state_check
-        CHECK (state IN ('accepted', 'working', 'waiting', 'completed', 'failed', 'cancelled')),
+        CHECK (state IN ('accepted', 'queued', 'working', 'waiting', 'completed', 'failed', 'cancelled')),
       CONSTRAINT flightdeck_pg_agent_activities_visibility_check CHECK (visibility = 'user_visible'),
       CONSTRAINT flightdeck_pg_agent_activities_sequence_check CHECK (sequence >= 0),
       CONSTRAINT flightdeck_pg_agent_activities_scope_fkey
@@ -3282,6 +3286,32 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   `);
 
   await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_agent_activities
+      ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS blocked_by_turn_id TEXT,
+      ADD COLUMN IF NOT EXISTS queue_position INTEGER
+  `);
+  await sql.unsafe(`
+    UPDATE flightdeck_pg_agent_activities
+    SET lease_expires_at = expires_at
+    WHERE lease_expires_at IS NULL
+  `);
+  await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_agent_activities
+      ALTER COLUMN lease_expires_at SET NOT NULL,
+      DROP CONSTRAINT IF EXISTS flightdeck_pg_agent_activities_state_check,
+      DROP CONSTRAINT IF EXISTS flightdeck_pg_agent_activities_queue_position_check
+  `);
+  await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_agent_activities
+      ADD CONSTRAINT flightdeck_pg_agent_activities_state_check
+        CHECK (state IN ('accepted', 'queued', 'working', 'waiting', 'completed', 'failed', 'cancelled')),
+      ADD CONSTRAINT flightdeck_pg_agent_activities_queue_position_check
+        CHECK (queue_position IS NULL OR queue_position >= 1)
+  `);
+
+  await sql.unsafe(`
     CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_hydrate
     ON flightdeck_pg_agent_activities(workspace_id, channel_id, thread_id, updated_at DESC)
   `);
@@ -3291,9 +3321,10 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     ON flightdeck_pg_agent_activities(workspace_id, channel_id, created_at DESC, id DESC)
   `);
 
+  await sql.unsafe('DROP INDEX IF EXISTS idx_fd_pg_agent_activities_expiry');
   await sql.unsafe(`
-    CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_expiry
-    ON flightdeck_pg_agent_activities(workspace_id, expires_at)
+    CREATE INDEX idx_fd_pg_agent_activities_expiry
+    ON flightdeck_pg_agent_activities(workspace_id, lease_expires_at)
   `);
 
   await sql.unsafe(`

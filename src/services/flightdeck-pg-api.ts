@@ -1668,6 +1668,7 @@ export function serializeFlightDeckPgAgentActivity(activity: FlightDeckPgAgentAc
   return {
     ...activity,
     sequence: Number(activity.sequence),
+    lease_health: activity.terminal_at || activity.lease_expires_at.getTime() > Date.now() ? 'live' : 'stale',
     ...(activity.commentary_history
       ? {
           commentary_history: activity.commentary_history.map((entry) => ({
@@ -5705,6 +5706,8 @@ export async function upsertFlightDeckPgAgentActivity(
     body?: string | null;
     sequence: number;
     expiresAt: Date;
+    blockedByTurnId: string | null;
+    queuePosition: number | null;
   },
   sql: DbClient = getDb(),
 ): Promise<{ activity: FlightDeckPgAgentActivityRow; outcome: 'created' | 'updated' | 'idempotent' | 'stale' | 'terminal' | 'identity_mismatch' }> {
@@ -5713,12 +5716,14 @@ export async function upsertFlightDeckPgAgentActivity(
     INSERT INTO flightdeck_pg_agent_activities (
       workspace_id, scope_id, channel_id, thread_id, trigger_message_id,
       turn_id, session_id, activity_id, agent_npub, publisher_actor_id, state,
-      label, summary, body, visibility, sequence, expires_at, terminal_at
+      label, summary, body, visibility, sequence, expires_at, last_heartbeat_at,
+      lease_expires_at, blocked_by_turn_id, queue_position, terminal_at
     ) VALUES (
       ${input.workspaceId}, ${input.scopeId}, ${input.channelId}, ${input.threadId}, ${input.triggerMessageId},
       ${input.turnId}, ${input.sessionId}, ${input.activityId}, ${input.agentNpub}, ${input.publisherActorId}, ${input.state},
       ${input.label ?? null}, ${input.summary ?? null}, ${input.body ?? null}, 'user_visible',
-      ${input.sequence}, ${input.expiresAt}, ${terminalAt}
+      ${input.sequence}, ${input.expiresAt}, NOW(), ${input.expiresAt},
+      ${input.blockedByTurnId}, ${input.queuePosition}, ${terminalAt}
     )
     ON CONFLICT (workspace_id, activity_id) DO UPDATE SET
       state = EXCLUDED.state,
@@ -5728,6 +5733,10 @@ export async function upsertFlightDeckPgAgentActivity(
       body = EXCLUDED.body,
       sequence = EXCLUDED.sequence,
       expires_at = EXCLUDED.expires_at,
+      last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+      lease_expires_at = EXCLUDED.lease_expires_at,
+      blocked_by_turn_id = EXCLUDED.blocked_by_turn_id,
+      queue_position = EXCLUDED.queue_position,
       terminal_at = EXCLUDED.terminal_at,
       updated_at = NOW()
     WHERE flightdeck_pg_agent_activities.sequence < EXCLUDED.sequence

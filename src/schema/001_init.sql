@@ -1940,12 +1940,16 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_agent_activities (
   visibility TEXT NOT NULL DEFAULT 'user_visible',
   sequence BIGINT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
+  last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  lease_expires_at TIMESTAMPTZ NOT NULL,
+  blocked_by_turn_id TEXT,
+  queue_position INTEGER CHECK (queue_position IS NULL OR queue_position >= 1),
   terminal_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (workspace_id, activity_id),
   CONSTRAINT flightdeck_pg_agent_activities_state_check
-    CHECK (state IN ('accepted', 'working', 'waiting', 'completed', 'failed', 'cancelled')),
+    CHECK (state IN ('accepted', 'queued', 'working', 'waiting', 'completed', 'failed', 'cancelled')),
   CONSTRAINT flightdeck_pg_agent_activities_visibility_check CHECK (visibility = 'user_visible'),
   CONSTRAINT flightdeck_pg_agent_activities_sequence_check CHECK (sequence >= 0),
   FOREIGN KEY (workspace_id, scope_id)
@@ -1962,7 +1966,7 @@ CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_hydrate
 CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_history_page
   ON flightdeck_pg_agent_activities(workspace_id, channel_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_fd_pg_agent_activities_expiry
-  ON flightdeck_pg_agent_activities(workspace_id, expires_at);
+  ON flightdeck_pg_agent_activities(workspace_id, lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_agent_activity_commentary (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -404,7 +404,7 @@ const reactionEmojiShortcodes: Record<FlightDeckPgReactionEmoji, string> = {
 const responseActivityTargetTypes = new Set<FlightDeckPgResponseActivityTargetType>(['chat_thread', 'task_comment', 'doc_comment']);
 const responseActivityStatuses = new Set<FlightDeckPgResponseActivityStatus>(['queued', 'thinking', 'drafting', 'publishing', 'failed', 'cleared']);
 const responseActivitySeverities = new Set<FlightDeckPgResponseActivitySeverity>(['info', 'warning', 'error']);
-const agentActivityStates = new Set<FlightDeckPgAgentActivityState>(['accepted', 'working', 'waiting', 'completed', 'failed', 'cancelled']);
+const agentActivityStates = new Set<FlightDeckPgAgentActivityState>(['accepted', 'queued', 'working', 'waiting', 'completed', 'failed', 'cancelled']);
 const invocationRecipientTypes = new Set(['person', 'agent']);
 const invocationTargetTypes = new Set<FlightDeckPgInvocationTargetType>(['document', 'task', 'file']);
 const invocationStatuses = new Set<FlightDeckPgInvocationStatus>(['open', 'closed']);
@@ -8383,6 +8383,8 @@ flightDeckPgRouter.put('/workspaces/:workspaceId/agent-activities/:activityId', 
   const label = normalizeOptionalText(body.label);
   const summary = normalizeOptionalText(body.summary);
   const activityBody = normalizeOptionalText(body.body);
+  const blockedByTurnId = normalizeOptionalText(body.blocked_by_turn_id);
+  const queuePosition = body.queue_position == null ? null : Number(body.queue_position);
   const fields: { path: string; code: string; message: string }[] = [];
   if (!activityId) fields.push({ path: 'activity_id', code: 'required', message: 'activity_id is required' });
   if (!channelId) fields.push({ path: 'channel_id', code: 'required', message: 'channel_id is required' });
@@ -8393,12 +8395,15 @@ flightDeckPgRouter.put('/workspaces/:workspaceId/agent-activities/:activityId', 
   if (!sessionId) fields.push({ path: 'session_id', code: 'required', message: 'session_id is required' });
   if (!agentNpub) fields.push({ path: 'agent_npub', code: 'required', message: 'agent_npub is required' });
   if (agentNpub && agentNpub !== auth.userNpub) fields.push({ path: 'agent_npub', code: 'mismatch', message: 'agent_npub must match the authenticated publisher' });
-  if (!agentActivityStates.has(state)) fields.push({ path: 'state', code: 'invalid', message: 'state must be one of accepted, working, waiting, completed, failed, or cancelled' });
+  if (!agentActivityStates.has(state)) fields.push({ path: 'state', code: 'invalid', message: 'state must be one of accepted, queued, working, waiting, completed, failed, or cancelled' });
   if (visibility !== 'user_visible') fields.push({ path: 'visibility', code: 'invalid', message: 'visibility must be user_visible' });
   if (!Number.isSafeInteger(sequence) || sequence < 0) fields.push({ path: 'sequence', code: 'invalid', message: 'sequence must be a non-negative safe integer' });
   if (label && label.length > 120) fields.push({ path: 'label', code: 'too_long', message: 'label must be at most 120 characters' });
   if (summary && summary.length > 500) fields.push({ path: 'summary', code: 'too_long', message: 'summary must be at most 500 characters' });
   if (activityBody && activityBody.length > 8000) fields.push({ path: 'body', code: 'too_long', message: 'body must be at most 8000 characters' });
+  if (blockedByTurnId && blockedByTurnId.length > 255) fields.push({ path: 'blocked_by_turn_id', code: 'too_long', message: 'blocked_by_turn_id must be at most 255 characters' });
+  if (queuePosition !== null && (!Number.isSafeInteger(queuePosition) || queuePosition < 1)) fields.push({ path: 'queue_position', code: 'invalid', message: 'queue_position must be a positive integer' });
+  if (state !== 'queued' && (blockedByTurnId || queuePosition !== null)) fields.push({ path: 'state', code: 'invalid_queue_metadata', message: 'queue metadata requires queued state' });
   if (fields.length) return validationError(c, identity, fields);
 
   const thread = await resolveFlightDeckPgThread(context.workspace.id, threadId);
@@ -8436,6 +8441,8 @@ flightDeckPgRouter.put('/workspaces/:workspaceId/agent-activities/:activityId', 
       body: activityBody,
       sequence,
       expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
+      blockedByTurnId: state === 'queued' ? blockedByTurnId : null,
+      queuePosition: state === 'queued' ? queuePosition : null,
     }, sql);
     if (upsert.outcome === 'stale' || upsert.outcome === 'terminal' || upsert.outcome === 'identity_mismatch') return { ...upsert, auditId: null, outbox: null };
     if (upsert.outcome === 'idempotent') return { ...upsert, auditId: null, outbox: null };

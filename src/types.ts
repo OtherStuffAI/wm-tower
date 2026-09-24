@@ -635,7 +635,7 @@ export type FlightDeckPgPersonalWappStatus = 'active' | 'archived';
 export type FlightDeckPgResponseActivityTargetType = 'chat_thread' | 'task_comment' | 'doc_comment';
 export type FlightDeckPgResponseActivityStatus = 'queued' | 'thinking' | 'drafting' | 'publishing' | 'failed' | 'cleared';
 export type FlightDeckPgResponseActivitySeverity = 'info' | 'warning' | 'error';
-export type FlightDeckPgAgentActivityState = 'accepted' | 'working' | 'waiting' | 'completed' | 'failed' | 'cancelled';
+export type FlightDeckPgAgentActivityState = 'accepted' | 'queued' | 'working' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 export type FlightDeckPgWorkroomStatus =
   | 'draft'
   | 'active'
@@ -1281,6 +1281,10 @@ export interface FlightDeckPgAgentActivity {
   visibility: 'user_visible';
   sequence: number;
   expires_at: Date;
+  last_heartbeat_at: Date;
+  lease_expires_at: Date;
+  blocked_by_turn_id: string | null;
+  queue_position: number | null;
   terminal_at: Date | null;
   created_at: Date;
   updated_at: Date;

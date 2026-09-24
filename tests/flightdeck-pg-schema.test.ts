@@ -188,6 +188,29 @@ describe('Flight Deck PG schema foundation', () => {
     expect(column).toEqual({ is_nullable: 'YES', data_type: 'text' });
   });
 
+  test('reconciles durable agent activity lease and queue columns', async () => {
+    await sql`ALTER TABLE flightdeck_pg_agent_activities DROP COLUMN lease_expires_at`;
+    await sql`ALTER TABLE flightdeck_pg_agent_activities DROP COLUMN last_heartbeat_at`;
+    await sql`ALTER TABLE flightdeck_pg_agent_activities DROP COLUMN blocked_by_turn_id`;
+    await sql`ALTER TABLE flightdeck_pg_agent_activities DROP COLUMN queue_position`;
+    await ensureRuntimeSchema(sql);
+    await ensureRuntimeSchema(sql);
+
+    const columns = await sql<{ column_name: string; is_nullable: string }[]>`
+      SELECT column_name,is_nullable
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='flightdeck_pg_agent_activities'
+        AND column_name IN ('last_heartbeat_at', 'lease_expires_at', 'blocked_by_turn_id', 'queue_position')
+      ORDER BY column_name
+    `;
+    expect(columns).toEqual([
+      { column_name: 'blocked_by_turn_id', is_nullable: 'YES' },
+      { column_name: 'last_heartbeat_at', is_nullable: 'NO' },
+      { column_name: 'lease_expires_at', is_nullable: 'NO' },
+      { column_name: 'queue_position', is_nullable: 'YES' },
+    ]);
+  });
+
   test('keeps archived_at available on every searchable archive-aware record table', async () => {
     const columns = await sql<{ table_name: string }[]>`
       SELECT table_name

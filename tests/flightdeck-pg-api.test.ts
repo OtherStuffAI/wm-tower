@@ -4220,6 +4220,7 @@ describe('Flight Deck PG API routes', () => {
     expect(created.json.agent_activity.created_at).toBeTruthy();
     expect(created.json.outbox).toEqual(expect.objectContaining({ id: expect.any(String), row_version: expect.any(Number) }));
     const lifecycleCreatedAt = created.json.agent_activity.created_at;
+    expect(created.json.agent_activity).toMatchObject({ lease_health: 'live', lease_expires_at: expect.any(String), last_heartbeat_at: expect.any(String) });
 
     const updated = await requestJson(activityPath, 'PUT', agentSecret, { ...base, state: 'working', sequence: timestampScaleSequence + 1, label: 'Checking', summary: 'Reading Tower routes', body: 'Inspecting the typed route and SSE seams.' });
     expect(updated.res.status).toBe(200);
@@ -4421,7 +4422,19 @@ describe('Flight Deck PG API routes', () => {
     const invalidDelivery = await requestJson(`${hydratePath}&activity_id=${activityId}&after_commentary_cursor=0&after_sequence=0`, 'GET', ownerSecret);
     expect(invalidDelivery.res.status).toBe(400);
 
-
+    const queuedActivityId = 'session-activity-queued';
+    const queued = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/agent-activities/${queuedActivityId}`, 'PUT', agentSecret, {
+      ...base,
+      turn_id: 'turn-activity-queued',
+      state: 'queued',
+      sequence: timestampScaleSequence,
+      blocked_by_turn_id: base.turn_id,
+      queue_position: 2,
+    });
+    expect(queued.res.status).toBe(201);
+    expect(queued.json.agent_activity).toMatchObject({
+      state: 'queued', blocked_by_turn_id: base.turn_id, queue_position: 2, lease_health: 'live',
+    });
 
   });
 
