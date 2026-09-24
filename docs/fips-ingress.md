@@ -9,9 +9,8 @@ Docker Desktop deployment, a native macOS TCP forwarder connects the exact host
 mesh interface to a **dedicated loopback-published Docker port**:
 
 ```text
-WMapp/native client signs http://<tower-transport-npub>.fips:43100/exactpath?query
-  -> consuming Autopilot FIPS peer
-  -> distinct Tower FIPS peer/address:43100
+WMapp/native client signs http://<native-daemon-npub>.fips:43100/exactpath?query
+  -> existing native FIPS daemon and its local mesh address:43100
   -> fixed 127.0.0.1:43101 on macOS (Docker publish)
   -> dedicated Tower 0.0.0.0:43101 inside Docker
   -> fixed mesh Host/canonical URL adapter -> existing Hono app
@@ -31,9 +30,9 @@ Copy it to ignored `.env.fips`. Keep this file public-settings-only, unquoted
 `TOWER_FIPS_*=value` lines. Do not copy Tower or FIPS daemon keys into it.
 
 - `TOWER_FIPS_ENABLED=true` explicitly enables the ingress and gateway.
-- `TOWER_FIPS_NODE_NPUB` is a checksummed lowercase node npub, not Tower/user identity.
-- `TOWER_FIPS_CONSUMER_NPUB` is the consuming Autopilot daemon's public npub.
-  Startup rejects equality with `TOWER_FIPS_NODE_NPUB`.
+- `TOWER_FIPS_NODE_NPUB` is the existing native daemon's checksummed lowercase
+  npub, not Tower/user identity. Autopilot and the local Tower ingress deliberately
+  use this same transport identity in the supported single-daemon topology.
 - `TOWER_FIPS_MESH_ADDRESS` is the exact native fd00::/8 IPv6, without brackets.
 - `TOWER_FIPS_PORT=43100` is the **external mesh port**, used in the signed URL.
 - `TOWER_FIPS_INGRESS_MODE=docker` selects internal `0.0.0.0:43101` in Tower;
@@ -49,48 +48,31 @@ is necessary for Docker port forwarding and is not a host wildcard publish.
 Other containers on Tower networks can reach this ingress; they still face the
 fixed Host and existing route authentication. Do not publish 43101 on LAN/public
 interfaces or change the gateway destination to 3100. Ordinary and dedicated
-ports cannot be equal in Docker mode. The host gateway queries the dedicated
+ports cannot be equal in Docker mode. The host gateway queries the existing
 daemon through `TOWER_FIPS_DAEMON_CONTROL_SOCKET` (default
-`/var/run/fips-tower.sock`) before binding. It refuses to start unless the daemon
+`/var/run/fips/control.sock`) before binding. It refuses to start unless the daemon
 has a running active TUN, persistent identity, and npub/address exactly matching
 `.env.fips`. It never reads private key material.
 
-## Provision the distinct Tower peer
+## Resolve the existing native daemon
 
-Tower and Autopilot may share a Mac, but they must not share a FIPS daemon. The
-dedicated peer uses `config/fips-tower.yaml`, UDP 2122, its own control socket
-and identity files. The existing Autopilot peer stays on UDP 2121 and
-`/var/run/fips/control.sock`. Generate Tower's identity offline without starting
-or reconfiguring either daemon:
+Tower and Autopilot share the established native FIPS daemon. Read its public
+identity and address without changing it:
 
 ```bash
-install -d -m 700 .runtime/fips-tower
-fipsctl keygen --dir .runtime/fips-tower
-TOWER_TRANSPORT_NPUB=$(sed -n '1p' .runtime/fips-tower/fips.pub)
-TOWER_MESH_ADDRESS=$(fipsctl address "$TOWER_TRANSPORT_NPUB")
-AUTOPILOT_TRANSPORT_NPUB=$(fipsctl -s /var/run/fips/control.sock show status | jq -er .npub)
-test "$TOWER_TRANSPORT_NPUB" != "$AUTOPILOT_TRANSPORT_NPUB"
+FIPS_STATUS=$(fipsctl --socket /var/run/fips/control.sock show status)
+TOWER_TRANSPORT_NPUB=$(jq -er .npub <<<"$FIPS_STATUS")
+TOWER_MESH_ADDRESS=$(jq -er .ipv6_addr <<<"$FIPS_STATUS")
+test "$(jq -er .persistent <<<"$FIPS_STATUS")" = true
+test "$(jq -er .state <<<"$FIPS_STATUS")" = running
+test "$(jq -er .tun_state <<<"$FIPS_STATUS")" = active
 printf 'http://%s.fips:43100\n' "$TOWER_TRANSPORT_NPUB"
 ```
 
-Keep `.runtime/fips-tower/fips.key` private and backed up. Fill `.env.fips`
-with those three public values. At the manager-approved activation window:
-
-```bash
-sudo install -d -m 700 /usr/local/etc/fips-tower
-sudo install -m 600 .runtime/fips-tower/fips.key /usr/local/etc/fips-tower/fips.key
-sudo install -m 644 .runtime/fips-tower/fips.pub /usr/local/etc/fips-tower/fips.pub
-sudo install -m 600 config/fips-tower.yaml /usr/local/etc/fips-tower/fips.yaml
-bun scripts/fips-tower-peer-launchd.ts > .runtime/fips-tower/peer.plist
-plutil -lint .runtime/fips-tower/peer.plist
-sudo install -m 600 .runtime/fips-tower/peer.plist /Library/LaunchDaemons/studio.otherstuff.tower-fips-peer.plist
-sudo launchctl bootstrap system /Library/LaunchDaemons/studio.otherstuff.tower-fips-peer.plist
-fipsctl -s /var/run/fips-tower.sock show status | jq '{npub,ipv6_addr,persistent,state,tun_state}'
-```
-
-Do not activate the Tower gateway until the final output exactly matches
-`.env.fips`. The Tower service npub is deliberately different: the `.fips`
-hostname identifies transport, while `/health.service_npub` identifies Tower.
+Fill `.env.fips` with those public values. Do not create a second identity,
+daemon, control socket, or root launch service. The Tower service npub remains
+different: the `.fips` hostname identifies transport, while
+`/health.service_npub` identifies Tower.
 
 ## Manager activation (not performed by the source worker)
 
@@ -100,7 +82,7 @@ they do not restart Autopilot, Flight Deck, Postgres, MinIO or other services.
 
 ```bash
 cp -n .env.fips.example .env.fips
-# Review .env.fips against both daemon status outputs; they must be distinct.
+# Review .env.fips against /var/run/fips/control.sock; npub/address must match.
 docker compose --env-file .env.prod --env-file .env.fips \
   -f docker-compose.prod.yml -f docker-compose.fips.yml config --quiet
 docker compose --env-file .env.prod --env-file .env.fips \

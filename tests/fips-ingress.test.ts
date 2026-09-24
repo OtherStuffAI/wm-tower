@@ -10,7 +10,6 @@ const testKey = generateSecretKey();
 const nodeNpub = nip19.npubEncode(getPublicKey(testKey));
 const env = {
   TOWER_FIPS_ENABLED: 'true', TOWER_FIPS_NODE_NPUB: nodeNpub,
-  TOWER_FIPS_CONSUMER_NPUB: nip19.npubEncode(getPublicKey(generateSecretKey())),
   TOWER_FIPS_MESH_ADDRESS: 'fd12:3456::1234', TOWER_FIPS_PORT: '43100',
 };
 const config = readFipsIngressConfig(env)!;
@@ -32,10 +31,8 @@ describe('explicit FIPS endpoint', () => {
   test('disabled by default; validates complete public settings', () => {
     expect(readFipsIngressConfig({})).toBeNull();
     expect(config.origin).toBe(`http://${nodeNpub}.fips:43100`);
-    expect(config.consumerNpub).toBe(env.TOWER_FIPS_CONSUMER_NPUB);
     for (const override of [
       { TOWER_FIPS_ENABLED: 'yes' }, { TOWER_FIPS_NODE_NPUB: `${nodeNpub.slice(0, -1)}x` },
-      { TOWER_FIPS_CONSUMER_NPUB: nodeNpub }, { TOWER_FIPS_CONSUMER_NPUB: 'not-an-npub' },
       { TOWER_FIPS_NODE_NPUB: nodeNpub.toUpperCase() }, { TOWER_FIPS_NODE_NPUB: `${nodeNpub}.fips` },
       ...['::', '::1', '127.0.0.1', 'fe80::1', '2001:db8::1', 'fd12::1%en0', '[fd12::1]', ''].map(TOWER_FIPS_MESH_ADDRESS => ({ TOWER_FIPS_MESH_ADDRESS })),
       ...['', '0', '65536', '-1', '43100x', '4.5', '043100'].map(TOWER_FIPS_PORT => ({ TOWER_FIPS_PORT })),
