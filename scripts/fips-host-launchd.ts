@@ -10,7 +10,8 @@ export function renderFipsHostPlist(env: Record<string, string | undefined>, bun
   const publicEnv = {
     TOWER_FIPS_ENABLED: 'true', TOWER_FIPS_INGRESS_MODE: 'docker',
     TOWER_FIPS_NODE_NPUB: config.nodeNpub, TOWER_FIPS_MESH_ADDRESS: config.meshAddress,
-    TOWER_FIPS_PORT: String(config.port),
+    TOWER_FIPS_CONSUMER_NPUB: config.consumerNpub, TOWER_FIPS_PORT: String(config.port),
+    TOWER_FIPS_DAEMON_CONTROL_SOCKET: env.TOWER_FIPS_DAEMON_CONTROL_SOCKET || '/var/run/fips-tower.sock',
   };
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

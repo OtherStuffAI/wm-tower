@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools';
 /** Public, operator-supplied transport settings. No node discovery or key access. */
 export interface FipsIngressConfig {
   nodeNpub: string;
+  consumerNpub: string;
   meshAddress: string;
   port: number;
   origin: string;
@@ -14,15 +15,23 @@ export interface FipsIngressConfig {
 // Fixed private Docker seam: the host gateway cannot select an arbitrary target.
 export const FIPS_DOCKER_PORT = 43101;
 
+function canonicalNpub(value: string, name: string) {
+  try {
+    const decoded = nip19.decode(value);
+    if (decoded.type !== 'npub' || nip19.npubEncode(decoded.data) !== value) throw new Error();
+    return value;
+  } catch {
+    throw new Error(`${name} must be a canonical checksummed node npub`);
+  }
+}
+
 export function readFipsIngressConfig(env: Record<string, string | undefined>): FipsIngressConfig | null {
   if (!env.TOWER_FIPS_ENABLED || env.TOWER_FIPS_ENABLED === 'false') return null;
   if (env.TOWER_FIPS_ENABLED !== 'true') throw new Error('TOWER_FIPS_ENABLED must be true or false');
-  const nodeNpub = env.TOWER_FIPS_NODE_NPUB || '';
-  try {
-    const decoded = nip19.decode(nodeNpub);
-    if (decoded.type !== 'npub' || nip19.npubEncode(decoded.data) !== nodeNpub) throw new Error();
-  } catch {
-    throw new Error('TOWER_FIPS_NODE_NPUB must be a canonical checksummed node npub');
+  const nodeNpub = canonicalNpub(env.TOWER_FIPS_NODE_NPUB || '', 'TOWER_FIPS_NODE_NPUB');
+  const consumerNpub = canonicalNpub(env.TOWER_FIPS_CONSUMER_NPUB || '', 'TOWER_FIPS_CONSUMER_NPUB');
+  if (nodeNpub === consumerNpub) {
+    throw new Error('Tower FIPS server peer must differ from the consuming client peer');
   }
   const meshAddress = env.TOWER_FIPS_MESH_ADDRESS || '';
   if (isIP(meshAddress) !== 6 || !/^fd[0-9a-f]{2}:/i.test(meshAddress) || meshAddress.includes('%')) {
@@ -38,7 +47,7 @@ export function readFipsIngressConfig(env: Record<string, string | undefined>): 
   if (mode === 'docker' && Number(env.PORT || '3100') === FIPS_DOCKER_PORT) {
     throw new Error('Dedicated ingress must not share the ordinary Tower port');
   }
-  return { nodeNpub, meshAddress, port, origin: new URL(`http://${nodeNpub}.fips:${port}`).origin,
+  return { nodeNpub, consumerNpub, meshAddress, port, origin: new URL(`http://${nodeNpub}.fips:${port}`).origin,
     bindAddress: mode === 'docker' ? '0.0.0.0' : meshAddress,
     bindPort: mode === 'docker' ? FIPS_DOCKER_PORT : port };
 }

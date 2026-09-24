@@ -28,9 +28,27 @@ export function createFipsHostGateway() {
   return { server, stop() { server.close(); for (const socket of sockets) socket.destroy(); } };
 }
 
-export async function startFipsHostGateway(env: Record<string, string | undefined> = process.env) {
+type FipsDaemonStatus = { npub?: unknown; ipv6_addr?: unknown; persistent?: unknown; state?: unknown; tun_state?: unknown };
+
+async function inspectConfiguredDaemon(env: Record<string, string | undefined>): Promise<FipsDaemonStatus> {
+  const socket = env.TOWER_FIPS_DAEMON_CONTROL_SOCKET || '/var/run/fips-tower.sock';
+  const child = Bun.spawn(['/usr/local/bin/fipsctl', '--socket', socket, 'show', 'status'], { stdout: 'pipe', stderr: 'pipe' });
+  const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  if (exitCode !== 0) throw new Error('Dedicated Tower FIPS daemon is unavailable');
+  return JSON.parse(stdout);
+}
+
+export async function startFipsHostGateway(
+  env: Record<string, string | undefined> = process.env,
+  inspectDaemon: (env: Record<string, string | undefined>) => Promise<FipsDaemonStatus> = inspectConfiguredDaemon,
+) {
   const config = readFipsIngressConfig(env);
   if (!config) throw new Error('Host gateway requires explicit FIPS enablement');
+  const daemon = await inspectDaemon(env);
+  if (daemon.npub !== config.nodeNpub || daemon.ipv6_addr !== config.meshAddress
+    || daemon.persistent !== true || daemon.state !== 'running' || daemon.tun_state !== 'active') {
+    throw new Error('Dedicated Tower FIPS daemon identity/address/readiness does not match signed public configuration');
+  }
   const gateway = createFipsHostGateway();
   await new Promise<void>((resolve, reject) => {
     gateway.server.once('error', reject);

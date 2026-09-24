@@ -7,11 +7,14 @@ import { createFipsHostGateway, startFipsHostGateway } from '../src/fips-host-ga
 import { createFipsIngressFetch, FIPS_DOCKER_PORT, readFipsIngressConfig } from '../src/fips-ingress';
 import { verifyNip98Auth } from '../src/auth';
 import { renderFipsHostPlist } from '../scripts/fips-host-launchd';
+import { renderTowerFipsPeerPlist } from '../scripts/fips-tower-peer-launchd';
 
 const key = generateSecretKey(); // disposable test identity, no operational keys
+const consumerKey = generateSecretKey();
 const env = {
   TOWER_FIPS_ENABLED: 'true', TOWER_FIPS_INGRESS_MODE: 'docker',
   TOWER_FIPS_NODE_NPUB: nip19.npubEncode(getPublicKey(key)),
+  TOWER_FIPS_CONSUMER_NPUB: nip19.npubEncode(getPublicKey(consumerKey)),
   TOWER_FIPS_MESH_ADDRESS: 'fd12:3456::1234', TOWER_FIPS_PORT: '43100',
 };
 const config = readFipsIngressConfig(env)!;
@@ -27,11 +30,18 @@ function auth(url: string, body?: string) {
 test('host launcher requires explicit native mesh binding and renders only public settings', async () => {
   await expect(startFipsHostGateway({})).rejects.toThrow();
   await expect(startFipsHostGateway({ ...env, TOWER_FIPS_MESH_ADDRESS: '0.0.0.0' })).rejects.toThrow();
+  await expect(startFipsHostGateway(env, async () => ({ npub: env.TOWER_FIPS_CONSUMER_NPUB,
+    ipv6_addr: env.TOWER_FIPS_MESH_ADDRESS, persistent: true, state: 'running', tun_state: 'active' }))).rejects.toThrow('does not match');
   const plist = renderFipsHostPlist({ ...env, SUPERBASED_SERVICE_NSEC: 'must-not-copy' }, '/bin/bun', '/repo/a&b');
   expect(plist).toContain('/repo/a&amp;b/src/fips-host-gateway.ts');
   expect(plist).toContain('<string>/var/empty</string>');
   expect(plist).not.toContain('must-not-copy');
   expect(plist).not.toContain('127.0.0.1:3100');
+  expect(plist).toContain(env.TOWER_FIPS_CONSUMER_NPUB);
+  expect(plist).toContain('/var/run/fips-tower.sock');
+  const peerPlist = renderTowerFipsPeerPlist('/opt/fips&bin', '/etc/tower&peer/fips.yaml');
+  expect(peerPlist).toContain('/opt/fips&amp;bin');
+  expect(peerPlist).toContain('/etc/tower&amp;peer/fips.yaml');
 });
 
 test('real TCP gateway -> dedicated ingress preserves exact signed bytes, streams and fail-closed behavior', async () => {

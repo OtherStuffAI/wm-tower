@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools';
 import { createFipsHostGateway } from '../../src/fips-host-gateway';
-const host = 'npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74.fips:43100';
+const host = `${process.env.TOWER_FIPS_NODE_NPUB}.fips:${process.env.TOWER_FIPS_PORT}`;
 const path = '/exact%2Fpath?z=2&a=1';
 const body = 'actual macOS TCP -> Docker loopback publish -> canonical NIP98 ingress';
 const key = generateSecretKey();
