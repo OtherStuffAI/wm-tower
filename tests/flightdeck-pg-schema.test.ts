@@ -210,6 +210,7 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_approvals',
       'flightdeck_pg_audio_notes',
       'flightdeck_pg_audit_events',
+      'flightdeck_pg_autopilot_connections',
       'flightdeck_pg_channels',
       'flightdeck_pg_daily_note_versions',
       'flightdeck_pg_daily_notes',
@@ -268,6 +269,7 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_workroom_links',
       'flightdeck_pg_workroom_participants',
       'flightdeck_pg_workrooms',
+      'flightdeck_pg_workspace_agents',
       'flightdeck_pg_workspace_memberships',
       'flightdeck_pg_workspaces',
     ]);
