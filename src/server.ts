@@ -11,6 +11,7 @@ import { billingRouter, workspaceBillingRouter } from './routes/billing';
 import { flightDeckPgRouter } from './routes/flightdeck-pg';
 import { groupsRouter } from './routes/groups';
 import { graphRouter } from './routes/graph';
+import { learningRouter } from './routes/learning';
 import { gitOidcRouter } from './routes/git-oidc';
 import { recordsRouter } from './routes/records';
 import { storageRouter } from './routes/storage';
@@ -25,7 +26,7 @@ export function createApp() {
 
   app.use('*', cors({
     origin: '*',
-    allowHeaders: ['Content-Type', 'Authorization', 'x-wingman-workspace-owner', 'x-flightdeck-pg-app-npub', 'x-wingman-git-service-token'],
+    allowHeaders: ['Content-Type', 'Authorization', 'x-wingman-workspace-owner', 'x-flightdeck-pg-app-npub', 'x-wingman-git-service-token', 'x-learning-grant-id'],
     exposeHeaders: ['x-wingman-stale-version'],
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   }));
@@ -73,6 +74,7 @@ export function createApp() {
   // Legacy Git authority endpoints are retired. Forgejo owns all authorization.
   app.all('/api/v4/git/*', (c) => c.json({ error: 'retired', message: 'Use native Forgejo Git and API endpoints' }, 410));
   app.route('/api/v4/graph', graphRouter);
+  app.route('/api/v4/learning', learningRouter);
   app.route('/api/v4/billing', billingRouter);
   app.route('/api/v4/flightdeck-pg', driveRouter);
   app.route('/api/v4/flightdeck-pg', flightDeckPgRouter);

@@ -1,4 +1,6 @@
 import { driveV1Sql } from './drive-v1';
+import { learningV1Sql } from './learning-v1';
+import { seedCurriculum } from '../learning/storage';
 import { forgejoLoginIdentitySchema } from '../services/forgejo-login-identity';
 import { getDb } from '../db';
 import { readFileSync } from 'node:fs';
@@ -4257,4 +4259,6 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     )
   `);
   await sql.unsafe(driveV1Sql);
+  await sql.unsafe(learningV1Sql);
+  await seedCurriculum(sql);
 }
