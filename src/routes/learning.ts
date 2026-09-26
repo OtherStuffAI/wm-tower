@@ -4,7 +4,7 @@ import { getDb } from '../db';
 import { CORPUS, VERSION, REVIEWED_AT, walk, score } from '../learning/curriculum';
 import { readCurriculum } from '../learning/storage';
 import { deriveMastery } from '../learning/state';
-import { selectLearner } from '../learning/authorization';
+import { mayReviewEvidence, selectLearner } from '../learning/authorization';
 
 export const learningRouter = new Hono();
 type Sql = any;
@@ -19,6 +19,7 @@ const validNpub = (value: unknown) => typeof value === 'string' && /^npub1[02345
 async function withActor<T>(actor: string, fn: (sql: Sql) => Promise<T>): Promise<T> {
   return getDb().begin(async tx => {
     const sql = tx as Sql;
+    await sql`SET LOCAL ROLE tower_learning_rls_v1`;
     await sql`SELECT set_config('row_security', 'on', true)`;
     await sql`SELECT set_config('app.learning_actor_npub', ${actor}, true)`;
     await sql`SELECT set_config('app.learning_learner_npub', '', true)`;
@@ -207,7 +208,7 @@ learningRouter.post('/evidence/:id/reviews', route(async (c, actor) => {
     await sql`SELECT set_config('app.learning_learner_npub', ${learner}, true)`;
     const evidence = await sql`SELECT id, submitted_by_npub FROM learning_evidence WHERE id = ${c.req.param('id')} AND learner_npub = ${learner}`;
     if (!evidence.length) fail(404, 'evidence_not_found', 'Evidence not found');
-    if (evidence[0].submitted_by_npub === actor) fail(403, 'self_review_denied', 'Submission actor cannot review its own evidence');
+    if (!mayReviewEvidence(actor, evidence[0].submitted_by_npub)) fail(403, 'self_review_denied', 'Submission actor cannot review its own evidence');
     const reviews = await sql`INSERT INTO learning_reviews (learner_npub, evidence_id, reviewer_npub, approved, rationale)
       VALUES (${learner}, ${c.req.param('id')}, ${actor}, ${input.approved}, ${rationale})
       ON CONFLICT (evidence_id, reviewer_npub) DO NOTHING RETURNING *`;

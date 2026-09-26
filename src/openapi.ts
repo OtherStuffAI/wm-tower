@@ -1,4 +1,5 @@
 import { drivePaths } from './drive-openapi';
+import { learningPaths, learningSchemas } from './learning/openapi';
 import { config } from './config';
 import { flightDeckPgContractFixturePaths } from './types';
 
@@ -2422,6 +2423,7 @@ export function buildOpenApiDocument(origin: string) {
       { name: 'Health', description: 'Service discovery and basic health' },
       { name: 'Groups', description: 'Workspace group management' },
       { name: 'Graph', description: 'Optional npub-scoped graph memory API backed by Postgres RLS' },
+      { name: 'Space Learning', description: 'Reviewed curriculum and learner-scoped plans, lessons, assessment, evidence, mastery and recall.' },
       { name: 'Records', description: 'Append-only record sync and fetch' },
       { name: 'Storage', description: 'Opaque encrypted object upload and download' },
       { name: 'Billing', description: 'Workspace-scoped Superbased usage credits and app connection namespaces' },
@@ -2444,6 +2446,7 @@ export function buildOpenApiDocument(origin: string) {
 
       },
       schemas: {
+        ...learningSchemas,
         WappPublishingDestination: {
           type: 'object', additionalProperties: false, required: ['scope_id', 'channel_id'],
           properties: {
@@ -4188,6 +4191,7 @@ export function buildOpenApiDocument(origin: string) {
     security: [{ nip98: [] }],
     paths: {
       ...drivePaths,
+      ...learningPaths,
       '/health': {
         get: {
           tags: ['Health'],

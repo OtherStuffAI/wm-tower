@@ -132,6 +132,22 @@ describe('OpenAPI docs', () => {
     }
     expect(body['x-flightdeck-pg-contract-fixtures']).toEqual(flightDeckPgContractFixturePaths);
     expect(body.paths['/api/v4/graph/search']).toBeDefined();
+    const learningRoutes = [
+      '/curriculum', '/curriculum/traverse', '/profile', '/delegations', '/delegations/{id}/revoke',
+      '/plans', '/plans/current', '/lessons', '/lessons/{id}', '/assessments',
+      '/assessments/{id}/submissions', '/evidence', '/evidence/{id}/reviews',
+      '/mastery', '/recall/due', '/recall', '/recall/{id}/submissions',
+    ];
+    for (const suffix of learningRoutes) {
+      const path = body.paths[`/api/v4/learning${suffix}`];
+      expect(path).toBeDefined();
+      for (const operation of Object.values(path) as any[]) {
+        expect(operation.security).toEqual([{ nip98: [] }]);
+        expect(operation.responses['401']).toBeDefined();
+      }
+    }
+    expect(body.paths['/api/v4/learning/evidence/{id}/reviews'].post.parameters.find((parameter: any) => parameter.name === 'x-learning-grant-id').required).toBe(true);
+    expect(body.components.schemas.LearningMastery.properties.state.enum).toEqual(['developing', 'demonstrated', 'remembered']);
     expect(body.paths['/api/v4/graph/repository-checkpoints'].get.parameters.map((param: any) => param.name)).toEqual(
       ['source', 'workspace_owner_npub', 'visibility', 'owner_npub', 'actor_npub', 'agent_npub', 'source_app_npub', 'group_id', 'corpus_id', 'repository_id', 'limit'],
     );

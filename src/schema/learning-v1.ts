@@ -1,4 +1,16 @@
 export const learningV1Sql = `
+-- Request transactions switch to this role before touching private learner rows.
+-- The connection role remains unchanged for every other Tower data path.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tower_learning_rls_v1') THEN
+    CREATE ROLE tower_learning_rls_v1 NOLOGIN NOINHERIT NOBYPASSRLS;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tower_learning_rls_v1' AND (rolsuper OR rolbypassrls OR rolcanlogin)) THEN
+    RAISE EXCEPTION 'tower_learning_rls_v1 must be a non-login role without RLS bypass';
+  END IF;
+END $$;
+GRANT tower_learning_rls_v1 TO CURRENT_USER;
+GRANT USAGE ON SCHEMA public TO tower_learning_rls_v1;
 CREATE TABLE IF NOT EXISTS learning_curriculum_versions (
   corpus TEXT NOT NULL,
   version TEXT NOT NULL,
@@ -109,6 +121,9 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (evidence_id, reviewer_npub)
 );
+GRANT SELECT ON learning_curriculum_versions, learning_curriculum_concepts, learning_curriculum_prerequisites TO tower_learning_rls_v1;
+GRANT SELECT, INSERT ON learning_profiles, learning_plans, learning_lessons, learning_evidence, learning_reviews TO tower_learning_rls_v1;
+GRANT SELECT, INSERT, UPDATE ON learning_delegations, learning_attempts TO tower_learning_rls_v1;
 CREATE OR REPLACE FUNCTION learning_evidence_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'learning evidence is append-only'; END $$;
 DROP TRIGGER IF EXISTS learning_evidence_no_mutation ON learning_evidence;

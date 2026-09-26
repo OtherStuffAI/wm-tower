@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { selectLearner } from '../src/learning/authorization';
+import { mayReviewEvidence, selectLearner } from '../src/learning/authorization';
 import { deriveMastery } from '../src/learning/state';
 
 test('two independent learners and a narrow bot delegation stay separate', () => {
@@ -10,6 +10,11 @@ test('two independent learners and a narrow bot delegation stay separate', () =>
   expect(selectLearner('npub1other', false, [grant], false)).toBeNull();
   expect(selectLearner('npub1bot', false, [{ ...grant, can_write: false }], true)).toBeNull();
   expect(selectLearner('npub1bot', false, [{ ...grant, revoked_at: '2026-09-26' }], false)).toBeNull();
+});
+
+test('reviewer is separate from the submission actor', () => {
+  expect(mayReviewEvidence('npub1reviewer', 'npub1submitter')).toBe(true);
+  expect(mayReviewEvidence('npub1submitter', 'npub1submitter')).toBe(false);
 });
 
 test('remembered requires delayed independent recall and failed recall returns to review', () => {

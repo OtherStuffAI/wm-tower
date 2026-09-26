@@ -6,3 +6,7 @@ export function selectLearner(actor: string, hasOwnProfile: boolean, grants: Del
   if (learners.length > 1) return 'ambiguous';
   return learners[0] ?? null;
 }
+
+export function mayReviewEvidence(reviewerNpub: string, submittedByNpub: string): boolean {
+  return reviewerNpub !== submittedByNpub;
+}

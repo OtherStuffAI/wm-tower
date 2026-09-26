@@ -1,3 +1,19 @@
+// ---- Space learning API ----
+
+export type LearningMasteryState = 'developing' | 'demonstrated' | 'remembered';
+export interface LearningConcept { id: string; title: string; explanation: string; objective: string; source: string; prerequisites: string[] }
+export interface LearningEdge { from: string; to: string; type: 'prerequisite' }
+export interface LearningMilestone { id: string; title: string; prerequisites: string[]; objective: string }
+export interface LearningTraversal { corpus: string; version: string; goal: string; order: LearningMilestone[]; cycles: string[][]; missing: string[]; valid: boolean }
+export interface LearningCurriculum { corpus: string; version: string; reviewedAt: string; reviewStatus: 'reviewed'; concepts: LearningConcept[]; edges: LearningEdge[] }
+export interface LearningDelegation { id: string; grantee_npub: string; role: 'guardian' | 'agent' | 'reviewer'; can_read: boolean; can_write: boolean; created_at: string }
+export interface LearningPlan { id: string; learner_npub: string; goal: string; corpus: string; curriculum_version: string; milestones: LearningMilestone[]; created_at: string }
+export interface LearningLesson { id: string; learner_npub: string; concept: string; corpus: string; curriculum_version: string; frame: string | null; content: string; created_at: string }
+export interface LearningAttempt { id: string; concept: string; kind: 'assessment' | 'recall'; corpus: string; curriculum_version: string; prompt: string; issued_at: string }
+export interface LearningEvidence { id: string; learner_npub: string; attempt_id: string; concept: string; kind: 'assessment' | 'recall'; corpus: string; curriculum_version: string; answer: string; submitted_by_npub: string; independent: boolean; passed: boolean; score: string; rationale: Record<string, unknown>; created_at: string }
+export interface LearningReview { id: string; learner_npub: string; evidence_id: string; reviewer_npub: string; approved: boolean; rationale: string; created_at: string }
+export interface LearningMastery { concept: string; state: LearningMasteryState; dueAt: string | null; due: boolean; evidenceCount: number }
+
 // ---- Groups ----
 
 export interface V4Group {
