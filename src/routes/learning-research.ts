@@ -67,10 +67,11 @@ researchRouter.post('/candidates', route(async (c, actor) => {
   if (!Object.values(addition).every(value => Array.isArray(value) && value.every(row => row && typeof row === 'object' && !Array.isArray(row)))) fail(400, 'invalid_body', 'Addition arrays must contain objects');
   if (JSON.stringify(addition).length > 200_000) fail(400, 'invalid_body', 'Candidate too large');
   const hash = graphHash(addition), snapshot = await readResearchGraph(getDb(), input.baseVersion);
-  // Validate the merged graph for diagnostics, but let unsupported research be staged.
+  // Reject invalid additions before they acquire a durable candidate ID.
   let issues: string[];
   try { issues = graphIssues(mergeGraph(snapshot.graph, addition)); }
   catch (error) { issues = [(error as Error).message]; }
+  if (issues.length) fail(409, 'invalid_graph', 'Candidate has provenance or graph errors', issues);
   const duplicate = await getDb()`SELECT id FROM learning_research_candidates WHERE corpus = ${RESEARCH_CORPUS} AND base_version = ${input.baseVersion} AND content_hash = ${hash} AND id <> ${input.id}`;
   if (duplicate.length) fail(409, 'candidate_duplicate', `Identical candidate already staged as ${duplicate[0].id}`);
   const rows = await getDb()`INSERT INTO learning_research_candidates (id, corpus, base_version, content_hash, addition, staged_by_npub)
