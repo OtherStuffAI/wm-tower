@@ -41,6 +41,10 @@ test.skipIf(process.env.LEARNING_RLS_TEST !== '1')('learning request role enforc
     await actor(b, b, tx => tx`INSERT INTO learning_plans (learner_npub, goal, corpus, curriculum_version, milestones) VALUES (${b}, 'moon-phases', 'learning.space.v1', 'test', '[]')`);
     expect((await actor(a, a, tx => tx`SELECT learner_npub FROM learning_plans`)).map(row => row.learner_npub)).toEqual([a]);
     expect((await actor(b, b, tx => tx`SELECT learner_npub FROM learning_plans`)).map(row => row.learner_npub)).toEqual([b]);
+    await actor(a, a, tx => tx`INSERT INTO learning_views (id, learner_npub, concept, kind, viewed_by_npub) VALUES (${crypto.randomUUID()}, ${a}, 'moon-phases', 'revision', ${a})`);
+    expect((await actor(a, a, tx => tx`SELECT concept FROM learning_views`)).map(row => row.concept)).toEqual(['moon-phases']);
+    expect(await actor(b, b, tx => tx`SELECT concept FROM learning_views`)).toHaveLength(0);
+    await expect(actor(b, b, tx => tx`INSERT INTO learning_views (id, learner_npub, concept, kind, viewed_by_npub) VALUES (${crypto.randomUUID()}, ${a}, 'moon-phases', 'revision', ${b})`)).rejects.toThrow();
     expect(await actor(a, '', tx => tx`SELECT learner_npub FROM learning_plans`)).toHaveLength(0);
     await actor(a, a, async tx => {
       const nested = await tx.savepoint((inner: any) => inner`SELECT current_user, count(*)::int AS visible FROM learning_plans`);

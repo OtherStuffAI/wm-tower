@@ -2849,3 +2849,4 @@ export interface DriveShare {
   host_npub: string; endpoint: string; name: string; host_name: string;
   audience: 'private' | 'workspace'; enabled: boolean; revision: number; updated_at: string;
 }
+export type { ResearchConcept, ResearchRelation, ResearchSource, ResearchSupport, ResearchGraph } from './learning/research-graph';

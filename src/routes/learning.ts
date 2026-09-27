@@ -5,8 +5,12 @@ import { CORPUS, VERSION, REVIEWED_AT, walk, score } from '../learning/curriculu
 import { readCurriculum } from '../learning/storage';
 import { deriveMastery } from '../learning/state';
 import { mayReviewEvidence, selectLearner } from '../learning/authorization';
+import { researchRouter } from './learning-research';
+import { readResearchGraph } from '../learning/research-storage';
+import { RESEARCH_CORPUS } from '../learning/research-graph';
 
 export const learningRouter = new Hono();
+learningRouter.route('/research', researchRouter);
 type Sql = any;
 
 class LearningError extends Error {
@@ -150,6 +154,51 @@ async function evidenceRows(sql: Sql, learner: string) {
 }
 
 learningRouter.get('/mastery', route(async (c, actor) => withLearner(actor, false, async (sql, learner) => ({ mastery: deriveMastery(await evidenceRows(sql, learner)) }), grantId(c))));
+learningRouter.post('/views', route(async (c, actor) => {
+  const input = await body(c, ['id', 'concept', 'kind', 'lessonId']);
+  const id = requiredText(input.id, 'id'), conceptId = requiredText(input.concept, 'concept');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) || !['lesson','revision'].includes(String(input.kind))) fail(400, 'invalid_body', 'UUID id and lesson or revision kind required');
+  const graph = await readResearchGraph(getDb());
+  if (!graph.graph.concepts.some(x => x.id === conceptId) && !(await readCurriculum(getDb())).some(x => x.id === conceptId)) fail(404, 'concept_not_found', 'Concept not found');
+  return withLearner(actor, true, async (sql, learner) => {
+    const lessonId = input.lessonId ?? null;
+    if (lessonId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(lessonId)) fail(400, 'invalid_body', 'Valid lessonId UUID required');
+    if (input.kind === 'lesson' && !lessonId) fail(400, 'invalid_body', 'lessonId required for a lesson view');
+    if (lessonId) {
+      const lesson = await sql`SELECT id FROM learning_lessons WHERE id = ${lessonId} AND learner_npub = ${learner} AND concept = ${conceptId}`;
+      if (!lesson.length) fail(404, 'lesson_not_found', 'Lesson not found for learner and concept');
+    }
+    const rows = await sql`INSERT INTO learning_views (id, learner_npub, concept, kind, lesson_id, viewed_by_npub)
+      VALUES (${id}, ${learner}, ${conceptId}, ${input.kind}, ${lessonId}, ${actor}) ON CONFLICT (id) DO NOTHING RETURNING id, concept, kind, created_at`;
+    if (rows.length) return { view: rows[0], idempotent: false };
+    const prior = await sql`SELECT id, concept, kind, created_at FROM learning_views WHERE id = ${id} AND learner_npub = ${learner} AND concept = ${conceptId} AND kind = ${input.kind} AND lesson_id IS NOT DISTINCT FROM ${lessonId}::uuid AND viewed_by_npub = ${actor}`;
+    if (!prior.length) fail(409, 'view_conflict', 'View ID used for another event');
+    return { view: prior[0], idempotent: true };
+  }, grantId(c));
+}, 201));
+learningRouter.get('/overlay', route(async (c, actor) => withLearner(actor, false, async (sql, learner) => {
+  const graph = await readResearchGraph(getDb(), c.req.query('version') || undefined);
+  const views = await sql`SELECT concept, kind, count(*)::int AS count, min(created_at) AS first_at, max(created_at) AS last_at
+    FROM learning_views WHERE learner_npub = ${learner} GROUP BY concept, kind`;
+  const evidence = await evidenceRows(sql, learner);
+  const mastery = new Map(deriveMastery(evidence).map(x => [x.concept, x]));
+  const concepts = graph.graph.concepts.map(node => {
+    const v = views.filter((row: any) => row.concept === node.id);
+    const lessonViews = Number(v.find((row: any) => row.kind === 'lesson')?.count ?? 0);
+    const revisionViews = Number(v.find((row: any) => row.kind === 'revision')?.count ?? 0);
+    const ev = evidence.filter((row: any) => row.concept === node.id);
+    const assessments = ev.filter((row: any) => row.kind === 'assessment');
+    const recalls = ev.filter((row: any) => row.kind === 'recall');
+    const m = mastery.get(node.id);
+    const state = m?.state === 'remembered' ? 'remembered' : m?.state === 'demonstrated' ? 'demonstrated' : assessments.length || recalls.length ? 'tested_provisional' : lessonViews + revisionViews > 1 ? 'seen_repeatedly' : lessonViews + revisionViews === 1 ? 'seen_once' : 'unseen';
+    return { concept: node.id, state, lessonViews, revisionViews, assessmentCount: assessments.length, recallCount: recalls.length,
+      firstViewedAt: v.length ? [...v].map((row: any) => row.first_at).sort((a: any,b: any) => +new Date(a) - +new Date(b))[0] : null,
+      lastViewedAt: v.length ? [...v].map((row: any) => row.last_at).sort((a: any,b: any) => +new Date(a) - +new Date(b)).at(-1) : null,
+      lastAssessmentAt: assessments.at(-1)?.created_at ?? null, lastRecallAt: recalls.at(-1)?.created_at ?? null,
+      dueAt: m?.dueAt ?? null, due: m?.due ?? false };
+  });
+  return { corpus: RESEARCH_CORPUS, version: graph.version, concepts };
+}, grantId(c))));
 learningRouter.get('/evidence', route(async (c, actor) => withLearner(actor, false, async (sql, learner) => ({ evidence: await sql`SELECT * FROM learning_evidence WHERE learner_npub = ${learner} ORDER BY created_at, id` }), grantId(c))));
 learningRouter.get('/recall/due', route(async (c, actor) => withLearner(actor, false, async (sql, learner) => ({ due: deriveMastery(await evidenceRows(sql, learner)).filter(x => x.due) }), grantId(c))));
 

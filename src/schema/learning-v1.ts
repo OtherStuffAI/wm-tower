@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS learning_lessons (
   content TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS learning_views (
+  id UUID PRIMARY KEY,
+  learner_npub TEXT NOT NULL REFERENCES learning_profiles(learner_npub),
+  concept TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('lesson','revision')),
+  lesson_id UUID REFERENCES learning_lessons(id),
+  viewed_by_npub TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS learning_views_learner_concept ON learning_views(learner_npub, concept, created_at DESC);
 CREATE TABLE IF NOT EXISTS learning_attempts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   learner_npub TEXT NOT NULL REFERENCES learning_profiles(learner_npub),
@@ -122,7 +132,7 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
   UNIQUE (evidence_id, reviewer_npub)
 );
 GRANT SELECT ON learning_curriculum_versions, learning_curriculum_concepts, learning_curriculum_prerequisites TO tower_learning_rls_v1;
-GRANT SELECT, INSERT ON learning_profiles, learning_plans, learning_lessons, learning_evidence, learning_reviews TO tower_learning_rls_v1;
+GRANT SELECT, INSERT ON learning_profiles, learning_plans, learning_lessons, learning_views, learning_evidence, learning_reviews TO tower_learning_rls_v1;
 GRANT SELECT, INSERT, UPDATE ON learning_delegations, learning_attempts TO tower_learning_rls_v1;
 CREATE OR REPLACE FUNCTION learning_evidence_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'learning evidence is append-only'; END $$;
@@ -133,7 +143,7 @@ DROP TRIGGER IF EXISTS learning_reviews_no_mutation ON learning_reviews;
 CREATE TRIGGER learning_reviews_no_mutation BEFORE UPDATE OR DELETE ON learning_reviews
 FOR EACH ROW EXECUTE FUNCTION learning_evidence_append_only();
 DO $$ DECLARE t TEXT; BEGIN
-  FOREACH t IN ARRAY ARRAY['learning_profiles','learning_delegations','learning_plans','learning_lessons','learning_attempts','learning_evidence','learning_reviews'] LOOP
+  FOREACH t IN ARRAY ARRAY['learning_profiles','learning_delegations','learning_plans','learning_lessons','learning_views','learning_attempts','learning_evidence','learning_reviews'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
   END LOOP;
@@ -149,7 +159,7 @@ CREATE POLICY learning_delegations_scope ON learning_delegations USING (
   OR grantee_npub = current_setting('app.learning_actor_npub', true)
 ) WITH CHECK (learner_npub = current_setting('app.learning_actor_npub', true));
 DO $$ DECLARE t TEXT; BEGIN
-  FOREACH t IN ARRAY ARRAY['learning_plans','learning_lessons','learning_attempts','learning_evidence','learning_reviews'] LOOP
+  FOREACH t IN ARRAY ARRAY['learning_plans','learning_lessons','learning_views','learning_attempts','learning_evidence','learning_reviews'] LOOP
     EXECUTE format('DROP POLICY IF EXISTS learning_learner_scope ON %I', t);
     EXECUTE format('CREATE POLICY learning_learner_scope ON %I USING (learner_npub = current_setting(''app.learning_learner_npub'', true)) WITH CHECK (learner_npub = current_setting(''app.learning_learner_npub'', true))', t);
   END LOOP;
