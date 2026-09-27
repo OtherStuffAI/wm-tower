@@ -1,8 +1,12 @@
 import { Hono } from 'hono';
 import { requireNip98AuthResolved } from '../auth';
 import { getDb } from '../db';
-import { RESEARCH_CORPUS, boundedWalk, graphHash, graphIssues, mergeGraph, type ResearchGraph } from '../learning/research-graph';
+import { RESEARCH_CORPUS, SEED_VERSION, boundedWalk, graphHash, graphIssues, mergeGraph, type ResearchGraph } from '../learning/research-graph';
 import { readResearchGraph } from '../learning/research-storage';
+import { ASSESSMENT_CORPUS, ASSESSMENT_VERSION, availableCard } from '../learning/assessment-cards';
+import { readCurriculum } from '../learning/storage';
+import { CORPUS as LEGACY_ASSESSMENT_CORPUS, VERSION as LEGACY_ASSESSMENT_VERSION } from '../learning/curriculum';
+import { assessmentVersionReady } from '../learning/assessment-storage';
 
 export const researchRouter = new Hono();
 class ResearchError extends Error { constructor(public status: 400 | 403 | 404 | 409, public code: string, message: string, public issues?: string[]) { super(message); } }
@@ -29,8 +33,18 @@ const graphResult = (snapshot: Awaited<ReturnType<typeof readResearchGraph>>, ex
 
 researchRouter.get('/subjects', route(async c => {
   const snapshot = await published(c);
+  const [seed, assessmentReady] = await Promise.all([readResearchGraph(getDb(), SEED_VERSION), assessmentVersionReady(getDb())]);
+  const legacy = new Set((await readCurriculum(getDb())).map(node => node.id));
   const clusters = [...new Set(snapshot.graph.concepts.map(x => x.cluster))].sort().map(id => ({ id, conceptCount: snapshot.graph.concepts.filter(x => x.cluster === id).length }));
-  return graphResult(snapshot, { clusters, concepts: snapshot.graph.concepts });
+  const concepts = snapshot.graph.concepts.map(node => {
+    const card = assessmentReady ? availableCard(node.id, snapshot.graph, seed.contentHash) : undefined;
+    const assessable = Boolean(card || legacy.has(node.id) && snapshot.graph.supports.some(s => s.targetType === 'concept' && s.targetId === node.id));
+    return { ...node, assessable, lessonAvailable: assessable,
+      assessmentCorpus: card ? ASSESSMENT_CORPUS : assessable ? LEGACY_ASSESSMENT_CORPUS : null,
+      assessmentVersion: card ? ASSESSMENT_VERSION : assessable ? LEGACY_ASSESSMENT_VERSION : null,
+      assessmentGraphVersion: card ? card.graphVersion : null };
+  });
+  return graphResult(snapshot, { clusters, concepts });
 }));
 researchRouter.get('/concepts/:id/neighbourhood', route(async c => {
   const snapshot = await published(c), id = c.req.param('id');

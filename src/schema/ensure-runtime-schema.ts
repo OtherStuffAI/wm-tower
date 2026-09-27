@@ -3,6 +3,7 @@ import { learningV1Sql } from './learning-v1';
 import { learningResearchV1Sql } from './learning-research-v1';
 import { seedResearchGraph } from '../learning/research-storage';
 import { seedCurriculum } from '../learning/storage';
+import { seedAssessmentCards } from '../learning/assessment-storage';
 import { forgejoLoginIdentitySchema } from '../services/forgejo-login-identity';
 import { getDb } from '../db';
 import { readFileSync } from 'node:fs';
@@ -4265,4 +4266,5 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await seedCurriculum(sql);
   await sql.unsafe(learningResearchV1Sql);
   await seedResearchGraph(sql);
+  await seedAssessmentCards(sql);
 }

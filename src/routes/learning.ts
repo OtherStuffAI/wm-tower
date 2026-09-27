@@ -7,7 +7,9 @@ import { deriveMastery } from '../learning/state';
 import { mayReviewEvidence, selectLearner } from '../learning/authorization';
 import { researchRouter } from './learning-research';
 import { readResearchGraph } from '../learning/research-storage';
-import { RESEARCH_CORPUS } from '../learning/research-graph';
+import { RESEARCH_CORPUS, SEED_VERSION } from '../learning/research-graph';
+import { ASSESSMENT_CORPUS, ASSESSMENT_VERSION, availableCard } from '../learning/assessment-cards';
+import { assessmentVersionReady } from '../learning/assessment-storage';
 
 export const learningRouter = new Hono();
 learningRouter.route('/research', researchRouter);
@@ -18,6 +20,23 @@ class LearningError extends Error {
 }
 const fail = (status: LearningError['status'], code: string, message: string): never => { throw new LearningError(status, code, message); };
 const concept = async (id: string) => (await readCurriculum(getDb())).find(c => c.id === id) ?? fail(404, 'concept_not_found', 'Reviewed concept not found');
+async function currentCard(id: string) {
+  const legacy = (await readCurriculum(getDb())).find(c => c.id === id);
+  if (legacy) return { node: legacy, corpus: CORPUS, version: VERSION };
+  const [seed, latest, ready] = await Promise.all([readResearchGraph(getDb(), SEED_VERSION), readResearchGraph(getDb()), assessmentVersionReady(getDb())]);
+  const node = ready ? availableCard(id, latest.graph, seed.contentHash) : undefined;
+  if (!node) fail(404, 'assessment_unavailable', 'Reviewed assessment card unavailable for this concept');
+  return { node, corpus: ASSESSMENT_CORPUS, version: ASSESSMENT_VERSION };
+}
+async function attemptedCard(attempt: any) {
+  if (attempt.corpus === CORPUS && attempt.curriculum_version === VERSION) return { node: await concept(attempt.concept), corpus: CORPUS, version: VERSION };
+  if (attempt.corpus === ASSESSMENT_CORPUS && attempt.curriculum_version === ASSESSMENT_VERSION) {
+    const [seed, ready] = await Promise.all([readResearchGraph(getDb(), SEED_VERSION), assessmentVersionReady(getDb())]);
+    const node = ready ? availableCard(attempt.concept, seed.graph, seed.contentHash) : undefined;
+    if (node) return { node, corpus: ASSESSMENT_CORPUS, version: ASSESSMENT_VERSION };
+  }
+  return fail(404, 'assessment_unavailable', 'Reviewed assessment card unavailable for this attempt');
+}
 const validNpub = (value: unknown) => typeof value === 'string' && /^npub1[023456789acdefghjklmnpqrstuvwxyz]{58}$/.test(value);
 
 async function withActor<T>(actor: string, fn: (sql: Sql) => Promise<T>): Promise<T> {
@@ -130,12 +149,13 @@ learningRouter.get('/plans/current', route(async (c, actor) => withLearner(actor
 
 learningRouter.post('/lessons', route(async (c, actor) => {
   const input = await body(c, ['concept', 'frame']);
-  const node = await concept(requiredText(input.concept, 'concept'));
+  const { node, corpus, version } = await currentCard(requiredText(input.concept, 'concept'));
   const frame = input.frame === undefined ? null : requiredText(input.frame, 'frame').slice(0, 200);
-  const content = `${node.title}. ${node.explanation} Try explaining this in your own words. ${frame ? `Example frame: ${frame}. ` : ''}Source: ${node.source}`;
+  const sources = 'sourceUrls' in node ? node.sourceUrls.join(', ') : node.source;
+  const content = `${node.title}. ${node.explanation} Try explaining this in your own words. ${frame ? `Example frame: ${frame}. ` : ''}${'sourceUrls' in node ? 'Sources' : 'Source'}: ${sources}`;
   return withLearner(actor, true, async (sql, learner) => {
     const rows = await sql`INSERT INTO learning_lessons (learner_npub, concept, corpus, curriculum_version, frame, content)
-      VALUES (${learner}, ${node.id}, ${CORPUS}, ${VERSION}, ${frame}, ${content}) RETURNING *`;
+      VALUES (${learner}, ${node.id}, ${corpus}, ${version}, ${frame}, ${content}) RETURNING *`;
     return { lesson: rows[0] };
   }, grantId(c));
 }, 201));
@@ -147,7 +167,8 @@ learningRouter.get('/lessons/:id', route(async (c, actor) => withLearner(actor, 
 }, grantId(c))));
 
 async function evidenceRows(sql: Sql, learner: string) {
-  return sql`SELECT e.concept, e.kind, e.passed, e.independent, COALESCE(r.approved, false) AS reviewed, e.created_at
+  return sql`SELECT e.concept, e.kind, CASE WHEN e.corpus = ${ASSESSMENT_CORPUS} AND r.approved IS NOT NULL THEN r.approved ELSE e.passed END AS passed,
+    e.independent, COALESCE(r.approved, false) AS reviewed, e.created_at
     FROM learning_evidence e LEFT JOIN LATERAL (
       SELECT approved FROM learning_reviews WHERE evidence_id = e.id ORDER BY created_at DESC, id DESC LIMIT 1
     ) r ON true WHERE e.learner_npub = ${learner} ORDER BY e.created_at, e.id`;
@@ -204,7 +225,7 @@ learningRouter.get('/recall/due', route(async (c, actor) => withLearner(actor, f
 
 async function issue(c: any, actor: string, kind: 'assessment' | 'recall') {
   const input = await body(c, ['concept']);
-  const node = await concept(requiredText(input.concept, 'concept'));
+  const { node, corpus, version } = await currentCard(requiredText(input.concept, 'concept'));
   return withLearner(actor, true, async (sql, learner) => {
     const open = await sql`SELECT id FROM learning_attempts WHERE learner_npub = ${learner} AND concept = ${node.id} AND kind = ${kind} AND submitted_at IS NULL LIMIT 1`;
     if (open.length) fail(409, 'attempt_open', 'Submit or complete the existing attempt first');
@@ -215,7 +236,7 @@ async function issue(c: any, actor: string, kind: 'assessment' | 'recall') {
     const count = await sql`SELECT count(*)::int AS n FROM learning_attempts WHERE learner_npub = ${learner} AND concept = ${node.id} AND kind = ${kind}`;
     const prompt = kind === 'recall' ? node.recallPrompt : Number(count[0]?.n ?? 0) % 2 === 0 ? node.prompt : node.altPrompt || node.prompt;
     const rows = await sql`INSERT INTO learning_attempts (learner_npub, concept, kind, corpus, curriculum_version, prompt)
-      VALUES (${learner}, ${node.id}, ${kind}, ${CORPUS}, ${VERSION}, ${prompt})
+      VALUES (${learner}, ${node.id}, ${kind}, ${corpus}, ${version}, ${prompt})
       RETURNING id, concept, kind, corpus, curriculum_version, prompt, issued_at`;
     return { attempt: rows[0] };
   }, grantId(c));
@@ -230,10 +251,13 @@ async function submit(c: any, actor: string, kind: 'assessment' | 'recall') {
       WHERE id = ${c.req.param('id')} AND learner_npub = ${learner} AND kind = ${kind} AND submitted_at IS NULL
       RETURNING *`;
     if (!rows.length) fail(404, 'attempt_not_found', 'Open attempt not found');
-    const attempt = rows[0]!; const node = await concept(attempt.concept);
+    const attempt = rows[0]!; const { node, corpus, version } = await attemptedCard(attempt);
     const result = score(answer, node.rubric);
+    const rationale = { matched: result.matched, contradictions: result.contradictions, rubricVersion: version, provisional: true,
+      ...('graphVersion' in node ? { graphVersion: node.graphVersion, graphHash: node.graphHash,
+        rubric: node.rubric, objective: node.objective, sourceUrls: node.sourceUrls } : {}) };
     const evidence = await sql`INSERT INTO learning_evidence (learner_npub, attempt_id, concept, kind, corpus, curriculum_version, answer, submitted_by_npub, independent, passed, score, rationale)
-      VALUES (${learner}, ${attempt.id}, ${node.id}, ${kind}, ${CORPUS}, ${VERSION}, ${answer}, ${actor}, true, ${result.passed}, ${result.score}, ${sql.json({ matched: result.matched, contradictions: result.contradictions, rubricVersion: VERSION, provisional: true })})
+      VALUES (${learner}, ${attempt.id}, ${node.id}, ${kind}, ${corpus}, ${version}, ${answer}, ${actor}, true, ${result.passed}, ${result.score}, ${sql.json(rationale)})
       RETURNING id, concept, kind, independent, passed, score, rationale, created_at`;
     const mastery = deriveMastery(await evidenceRows(sql, learner)).find(x => x.concept === node.id);
     return { evidence: evidence[0], mastery };
