@@ -54,6 +54,15 @@ daemon through `TOWER_FIPS_DAEMON_CONTROL_SOCKET` (default
 has a running active TUN, persistent identity, and npub/address exactly matching
 `.env.fips`. It never reads private key material.
 
+The normal `./rebuild_deploy_docker.sh` includes this overlay and its environment
+whenever local `.env.fips` declares `TOWER_FIPS_ENABLED=true`. Override their paths
+with `FIPS_ENV_FILE` and `FIPS_COMPOSE_FILE` if needed. Invalid or missing requested
+settings stop deployment before building or replacing containers. Set
+`TOWER_FIPS_ENABLED=false` explicitly to disable the overlay. Direct Compose
+commands must still include both environment files and both Compose files as
+shown below; recreating Tower with only `docker-compose.prod.yml` removes the
+dedicated ingress even while the native gateway remains running.
+
 ## Resolve the existing native daemon
 
 Tower and Autopilot share the established native FIPS daemon. Read its public

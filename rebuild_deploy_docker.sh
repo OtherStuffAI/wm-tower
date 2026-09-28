@@ -10,6 +10,7 @@
 #
 # Uses .env.prod as the env file for docker compose and docker-compose.prod.yml
 # as the stack definition. Override either with ENV_FILE / COMPOSE_FILE.
+# Preserves FIPS when .env.fips declares TOWER_FIPS_ENABLED=true.
 #
 # Usage:
 #   ./rebuild_deploy_docker.sh              # rebuild + up -d
@@ -67,6 +68,9 @@ else
 fi
 
 COMPOSE=("${DC[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+source "$SCRIPT_DIR/docker/compose-fips-options.sh"
+append_tower_fips_options
+"${COMPOSE[@]}" config --quiet
 
 if [[ "$REFRESH_BUN_BASE" -eq 1 ]]; then
   TOWER_BUN_IMAGE="$(./docker/ensure-bun-base.sh --refresh)"
