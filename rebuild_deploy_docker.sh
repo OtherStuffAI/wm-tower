@@ -117,7 +117,7 @@ TOWER_HOST_PORT="${TOWER_HOST_PORT:-3100}"
 
 echo "==> Probing http://127.0.0.1:${TOWER_HOST_PORT}/health"
 curl --noproxy '*' --fail --silent --show-error --max-time 5 \
-  --retry 10 --retry-delay 1 --retry-connrefused \
+  --retry 10 --retry-delay 1 --retry-all-errors \
   "http://127.0.0.1:${TOWER_HOST_PORT}/health"
 echo
 
@@ -128,7 +128,7 @@ FIPS_MESH_ADDRESS="$(awk -F= '$1 == "TOWER_FIPS_MESH_ADDRESS" { print $2 }' "$FI
 FIPS_PORT="$(awk -F= '$1 == "TOWER_FIPS_PORT" { print $2 }' "$FIPS_SETTINGS_FILE" | tr -d '\r')"
 echo "==> Verifying Tower through its native FIPS gateway"
 curl --noproxy '*' --fail --silent --show-error --max-time 5 \
-  --retry 10 --retry-delay 1 --retry-connrefused \
+  --retry 10 --retry-delay 1 --retry-all-errors \
   -H "Host: ${FIPS_NODE_NPUB}.fips:${FIPS_PORT}" \
   "http://[${FIPS_MESH_ADDRESS}]:${FIPS_PORT}/health"
 echo
