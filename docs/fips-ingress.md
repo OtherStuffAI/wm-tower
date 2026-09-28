@@ -54,14 +54,15 @@ daemon through `TOWER_FIPS_DAEMON_CONTROL_SOCKET` (default
 has a running active TUN, persistent identity, and npub/address exactly matching
 `.env.fips`. It never reads private key material.
 
-The normal `./rebuild_deploy_docker.sh` includes this overlay and its environment
-whenever local `.env.fips` declares `TOWER_FIPS_ENABLED=true`. Override their paths
-with `FIPS_ENV_FILE` and `FIPS_COMPOSE_FILE` if needed. Invalid or missing requested
-settings stop deployment before building or replacing containers. Set
-`TOWER_FIPS_ENABLED=false` explicitly to disable the overlay. Direct Compose
-commands must still include both environment files and both Compose files as
-shown below; recreating Tower with only `docker-compose.prod.yml` removes the
-dedicated ingress even while the native gateway remains running.
+`./rebuild_deploy_docker.sh` is the single production rebuild/deploy entry point.
+It always includes the FIPS overlay and requires `.env.fips` to declare
+`TOWER_FIPS_ENABLED=true`. Override paths with `FIPS_ENV_FILE` and
+`FIPS_COMPOSE_FILE` if needed. Missing, disabled or invalid settings stop deployment
+before building or replacing containers. Deployment succeeds only after a health
+request through the native FIPS gateway succeeds. The native FIPS daemon and host
+gateway must be installed and running before deployment. Do not recreate Tower
+using a separate Compose command: omitting the overlay removes the dedicated
+ingress even while the native gateway remains running.
 
 ## Resolve the existing native daemon
 
@@ -94,23 +95,22 @@ cp -n .env.fips.example .env.fips
 # Review .env.fips against /var/run/fips/control.sock; npub/address must match.
 docker compose --env-file .env.prod --env-file .env.fips \
   -f docker-compose.prod.yml -f docker-compose.fips.yml config --quiet
-docker compose --env-file .env.prod --env-file .env.fips \
-  -f docker-compose.prod.yml -f docker-compose.fips.yml up -d --no-deps --build tower
-curl --fail http://127.0.0.1:3100/health
-
-# Check the dedicated ingress before activating the host service:
-set -a; . ./.env.fips; . ./.env.prod; set +a
-FIPS_HOST="${TOWER_FIPS_NODE_NPUB}.fips:${TOWER_FIPS_PORT}"
-curl --fail -H "Host: $FIPS_HOST" http://127.0.0.1:43101/health
-curl -i -H 'Host: wrong.example' http://127.0.0.1:43101/health
-# Required: 200 health above; 421 fips_host_mismatch for wrong Host.
-
+# Install the host gateway once before the first deployment. Skip this bootstrap
+# when the service is already installed and running.
 mkdir -p .runtime/fips-host "$HOME/Library/LaunchAgents"
 bun scripts/fips-host-launchd.ts .env.fips > .runtime/fips-host/gateway.plist
 plutil -lint .runtime/fips-host/gateway.plist
 cp .runtime/fips-host/gateway.plist "$HOME/Library/LaunchAgents/studio.otherstuff.tower-fips-host.plist"
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/studio.otherstuff.tower-fips-host.plist"
 launchctl print "gui/$(id -u)/studio.otherstuff.tower-fips-host"
+
+./rebuild_deploy_docker.sh
+
+set -a; . ./.env.fips; . ./.env.prod; set +a
+FIPS_HOST="${TOWER_FIPS_NODE_NPUB}.fips:${TOWER_FIPS_PORT}"
+curl --fail -H "Host: $FIPS_HOST" http://127.0.0.1:43101/health
+curl -i -H 'Host: wrong.example' http://127.0.0.1:43101/health
+# Required: 200 health above; 421 fips_host_mismatch for wrong Host.
 
 curl --noproxy '*' --fail -H "Host: $FIPS_HOST" \
   "http://[${TOWER_FIPS_MESH_ADDRESS}]:${TOWER_FIPS_PORT}/health" \

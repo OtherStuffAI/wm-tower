@@ -118,7 +118,7 @@ When any of those change:
   suite as completion of local Tower validation.
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+./rebuild_deploy_docker.sh
 curl http://127.0.0.1:3100/health
 ```
 
@@ -131,7 +131,7 @@ For local authenticated integration tests, use the shared identity in `../tmp/ns
 Tower runs locally via Docker Compose with `.env.prod`:
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+./rebuild_deploy_docker.sh
 ```
 
 Health check: `curl http://127.0.0.1:3100/health`

@@ -204,7 +204,7 @@ After operator approval to disrupt the shared Tower runtime, rebuild and run the
 normal live smoke sequence:
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+./rebuild_deploy_docker.sh
 curl http://127.0.0.1:3100/health
 ```
 

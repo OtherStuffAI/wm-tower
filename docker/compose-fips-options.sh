@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
 
-# Append the explicitly enabled local FIPS settings to the caller's COMPOSE array.
+# FIPS is required for every production rebuild/deploy.
 append_tower_fips_options() {
   local fips_env_file="${FIPS_ENV_FILE:-.env.fips}"
   local fips_compose_file="${FIPS_COMPOSE_FILE:-docker-compose.fips.yml}"
   local enabled
 
   if [[ ! -f "$fips_env_file" ]]; then
-    if [[ -n "${FIPS_ENV_FILE:-}" ]]; then
-      echo "ERROR: requested FIPS env file '$fips_env_file' not found" >&2
-      return 1
-    fi
-    return 0
+    echo "ERROR: required FIPS env file '$fips_env_file' not found" >&2
+    return 1
   fi
 
   enabled="$(awk -F= '$1 == "TOWER_FIPS_ENABLED" { print $2 }' "$fips_env_file" | tr -d '\r')"
   case "$enabled" in
-    false) return 0 ;;
     true) ;;
     *)
-      echo "ERROR: '$fips_env_file' must declare TOWER_FIPS_ENABLED=true or false" >&2
+      echo "ERROR: '$fips_env_file' must declare TOWER_FIPS_ENABLED=true; production deployment requires FIPS" >&2
       return 1
       ;;
   esac

@@ -10,7 +10,7 @@
 #
 # Uses .env.prod as the env file for docker compose and docker-compose.prod.yml
 # as the stack definition. Override either with ENV_FILE / COMPOSE_FILE.
-# Preserves FIPS when .env.fips declares TOWER_FIPS_ENABLED=true.
+# Always includes the required .env.fips and docker-compose.fips.yml settings.
 #
 # Usage:
 #   ./rebuild_deploy_docker.sh              # rebuild + up -d
@@ -57,6 +57,11 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
   exit 1
 fi
 
+if ! command -v curl >/dev/null 2>&1; then
+  echo "ERROR: curl is required to verify Tower HTTP and FIPS health" >&2
+  exit 1
+fi
+
 # Pick `docker compose` (plugin) or legacy `docker-compose`.
 if docker compose version >/dev/null 2>&1; then
   DC=(docker compose)
@@ -71,6 +76,8 @@ COMPOSE=("${DC[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 source "$SCRIPT_DIR/docker/compose-fips-options.sh"
 append_tower_fips_options
 "${COMPOSE[@]}" config --quiet
+# Validate the public native gateway settings before changing containers.
+bun scripts/fips-host-launchd.ts "${FIPS_ENV_FILE:-.env.fips}" > /dev/null
 
 if [[ "$REFRESH_BUN_BASE" -eq 1 ]]; then
   TOWER_BUN_IMAGE="$(./docker/ensure-bun-base.sh --refresh)"
@@ -104,25 +111,26 @@ fi
 echo "==> Current stack status"
 "${COMPOSE[@]}" ps
 
-# Best-effort health probe against the Tower HTTP port.
+# Both ordinary HTTP and native FIPS health must pass.
 TOWER_HOST_PORT="$(grep -E '^TOWER_HOST_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)"
 TOWER_HOST_PORT="${TOWER_HOST_PORT:-3100}"
 
-echo "==> Waiting a few seconds before health probe"
-sleep 3
+echo "==> Probing http://127.0.0.1:${TOWER_HOST_PORT}/health"
+curl --noproxy '*' --fail --silent --show-error --max-time 5 \
+  --retry 10 --retry-delay 1 --retry-connrefused \
+  "http://127.0.0.1:${TOWER_HOST_PORT}/health"
+echo
 
-if command -v curl >/dev/null 2>&1; then
-  echo "==> Probing http://127.0.0.1:${TOWER_HOST_PORT}/health"
-  if curl -fsS --max-time 5 "http://127.0.0.1:${TOWER_HOST_PORT}/health"; then
-    echo
-    echo "==> Tower health OK"
-  else
-    echo
-    echo "WARN: Tower health probe did not succeed yet. Check logs:"
-    echo "   ${COMPOSE[*]} logs -f tower"
-  fi
-else
-  echo "WARN: curl not available, skipping health probe."
-fi
+# FIPS success is required; ordinary HTTP health alone cannot accept a deploy.
+FIPS_SETTINGS_FILE="${FIPS_ENV_FILE:-.env.fips}"
+FIPS_NODE_NPUB="$(awk -F= '$1 == "TOWER_FIPS_NODE_NPUB" { print $2 }' "$FIPS_SETTINGS_FILE" | tr -d '\r')"
+FIPS_MESH_ADDRESS="$(awk -F= '$1 == "TOWER_FIPS_MESH_ADDRESS" { print $2 }' "$FIPS_SETTINGS_FILE" | tr -d '\r')"
+FIPS_PORT="$(awk -F= '$1 == "TOWER_FIPS_PORT" { print $2 }' "$FIPS_SETTINGS_FILE" | tr -d '\r')"
+echo "==> Verifying Tower through its native FIPS gateway"
+curl --noproxy '*' --fail --silent --show-error --max-time 5 \
+  --retry 10 --retry-delay 1 --retry-connrefused \
+  -H "Host: ${FIPS_NODE_NPUB}.fips:${FIPS_PORT}" \
+  "http://[${FIPS_MESH_ADDRESS}]:${FIPS_PORT}/health"
+echo
 
 echo "==> Done"

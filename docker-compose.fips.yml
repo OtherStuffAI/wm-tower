@@ -1,4 +1,4 @@
-# Opt-in overlay for Docker Desktop with a native host FIPS node.
+# Required production overlay for Docker Desktop with a native host FIPS node.
 # Use together with docker-compose.prod.yml, never on its own.
 services:
   tower:

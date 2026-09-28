@@ -112,9 +112,14 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml config --quiet
 
 ## Start prod stack
 
+Use the same script for initial deployment and every rebuild. Configure the
+existing native FIPS daemon and gateway as described in [FIPS ingress](fips-ingress.md).
+The script requires enabled `.env.fips` settings, always includes the FIPS Docker
+overlay, and checks health through the native gateway before reporting success.
+
 ```bash
 cd /path/to/wingman-tower
-docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+./rebuild_deploy_docker.sh
 ```
 
 This starts:
