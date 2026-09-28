@@ -176,7 +176,7 @@ async function evidenceRows(sql: Sql, learner: string) {
 
 learningRouter.get('/mastery', route(async (c, actor) => withLearner(actor, false, async (sql, learner) => ({ mastery: deriveMastery(await evidenceRows(sql, learner)) }), grantId(c))));
 learningRouter.post('/views', route(async (c, actor) => {
-  const input = await body(c, ['id', 'concept', 'kind', 'lessonId']);
+  const input = await body(c, ['id', 'concept', 'kind', 'lessonId', 'researchVersion', 'researchHash']);
   const id = requiredText(input.id, 'id'), conceptId = requiredText(input.concept, 'concept');
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) || !['lesson','revision'].includes(String(input.kind))) fail(400, 'invalid_body', 'UUID id and lesson or revision kind required');
   const graph = await readResearchGraph(getDb());
@@ -184,7 +184,16 @@ learningRouter.post('/views', route(async (c, actor) => {
   return withLearner(actor, true, async (sql, learner) => {
     const lessonId = input.lessonId ?? null;
     if (lessonId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(lessonId)) fail(400, 'invalid_body', 'Valid lessonId UUID required');
-    if (input.kind === 'lesson' && !lessonId) fail(400, 'invalid_body', 'lessonId required for a lesson view');
+    if (input.kind === 'lesson' && !lessonId) {
+      // A reviewed research guide is a lesson surface even when this concept
+      // has no generated assessment-card lesson. Pin the view to its source set.
+      if (typeof input.researchVersion !== 'string' || typeof input.researchHash !== 'string')
+        fail(400, 'invalid_body', 'Published research version and hash required for a guide view');
+      if (input.researchVersion !== graph.version || input.researchHash !== graph.contentHash)
+        fail(409, 'graph_version_mismatch', 'Published research guide changed; reload before saving a view');
+      if (!graph.graph.supports.some(x => x.targetType === 'concept' && x.targetId === conceptId))
+        fail(409, 'guide_unsupported', 'Concept has no reviewed source support for a guide view');
+    }
     if (lessonId) {
       const lesson = await sql`SELECT id FROM learning_lessons WHERE id = ${lessonId} AND learner_npub = ${learner} AND concept = ${conceptId}`;
       if (!lesson.length) fail(404, 'lesson_not_found', 'Lesson not found for learner and concept');

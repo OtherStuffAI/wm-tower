@@ -65,7 +65,7 @@ export const learningSchemas = {
   ResearchReviewResponse: obj({ candidate: ref('ResearchCandidate'), mergedContentHash: str }),
   ResearchPublishRequest: obj({ version: str }),
   ResearchPublishResponse: obj({ corpus: str, version: str, contentHash: str, idempotent: bool }, ['corpus','version','idempotent']),
-  LearningViewRequest: obj({ id: uuid, concept: str, kind: { type: 'string', enum: ['lesson','revision'] }, lessonId: uuid }, ['id','concept','kind']),
+  LearningViewRequest: obj({ id: uuid, concept: str, kind: { type: 'string', enum: ['lesson','revision'] }, lessonId: uuid, researchVersion: str, researchHash: str }, ['id','concept','kind']),
   LearningViewResponse: obj({ view: obj({ id: uuid, concept: str, kind: str, created_at: dateTime }), idempotent: bool }),
   LearningOverlayItem: obj({ concept: str, state: { type: 'string', enum: ['unseen','seen_once','seen_repeatedly','tested_provisional','demonstrated','remembered'] }, lessonViews: { type: 'integer' }, revisionViews: { type: 'integer' }, assessmentCount: { type: 'integer' }, recallCount: { type: 'integer' }, firstViewedAt: { type: ['string','null'], format: 'date-time' }, lastViewedAt: { type: ['string','null'], format: 'date-time' }, lastAssessmentAt: { type: ['string','null'], format: 'date-time' }, lastRecallAt: { type: ['string','null'], format: 'date-time' }, dueAt: { type: ['string','null'], format: 'date-time' }, due: bool }),
   LearningOverlay: obj({ corpus: str, version: str, concepts: array(ref('LearningOverlayItem')) }),

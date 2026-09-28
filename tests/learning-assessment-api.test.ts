@@ -58,6 +58,13 @@ test.skipIf(process.env.LEARNING_ASSESSMENT_API_TEST !== '1')('signed non-Moon l
     expect(lesson.data.lesson.corpus).toBe('learning.space.assessment.v1');
     expect(lesson.data.lesson.content).toContain('science.nasa.gov/jupiter/');
     expect((await request(otherKey, `/lessons/${lesson.data.lesson.id}`)).status).toBe(404);
+    const guideId = crypto.randomUUID();
+    const guideView = { id: guideId, concept: 'comet-nucleus', kind: 'lesson', researchVersion: subjects.data.version, researchHash: subjects.data.contentHash };
+    expect((await request(learnerKey, '/views', { ...guideView, researchHash: 'stale' })).status).toBe(409);
+    expect((await request(learnerKey, '/views', guideView)).status).toBe(201);
+    expect((await request(learnerKey, '/views', guideView)).data.idempotent).toBe(true);
+    expect((await request(learnerKey, '/overlay')).data.concepts.find((c: any) => c.concept === 'comet-nucleus').lessonViews).toBe(1);
+    expect((await request(otherKey, '/overlay')).data.concepts.find((c: any) => c.concept === 'comet-nucleus').lessonViews).toBe(0);
     const view = await request(learnerKey, '/views', { id: crypto.randomUUID(), concept: 'jupiter', kind: 'lesson', lessonId: lesson.data.lesson.id });
     expect(view.status).toBe(201);
     const attempt = await request(learnerKey, '/assessments', { concept: 'jupiter' });
