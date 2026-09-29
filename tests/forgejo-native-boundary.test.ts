@@ -4,6 +4,22 @@ import { createApp } from '../src/server';
 import { buildOpenApiDocument } from '../src/openapi';
 
 describe('native Forgejo boundary', () => {
+  test('gateway readiness requires a healthy private Forgejo provider', async () => {
+    const calls: string[] = [];
+    const app = createForgejoGateway({ forgejoUrl: 'http://provider:3000', fetchImpl: (async (url: URL, init: RequestInit) => {
+      calls.push(`${init.method} ${url}`);
+      return new Response(null, { status: calls.length === 1 ? 200 : 503 });
+    }) as typeof fetch });
+    expect((await app.request('/ready')).status).toBe(200);
+    expect((await app.request('/ready')).status).toBe(503);
+    expect(calls).toEqual(['GET http://provider:3000/api/healthz', 'GET http://provider:3000/api/healthz']);
+
+    const unavailable = createForgejoGateway({ forgejoUrl: 'http://provider:3000', fetchImpl: (async () => {
+      throw new Error('provider unavailable');
+    }) as typeof fetch });
+    expect((await unavailable.request('/ready')).status).toBe(503);
+  });
+
   test('retires every public and private Tower Git authority path', async () => {
     const app = createApp();
     for (const path of ['repositories', 'credential-exchanges', 'internal/forgejo/organizations/pending', 'internal/forgejo/actor-bindings', 'internal/capabilities/introspect']) {

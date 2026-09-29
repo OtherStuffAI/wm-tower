@@ -11,6 +11,17 @@ export function createForgejoGateway(options: GatewayOptions) {
   if (publicOrigin && (!['http:', 'https:'].includes(publicOrigin.protocol) || publicOrigin.username || publicOrigin.password || publicOrigin.pathname !== '/' || publicOrigin.search || publicOrigin.hash)) throw new Error('Forgejo public origin must be an HTTP origin without credentials');
   const app = new Hono();
   app.get('/health', (c) => c.json({ status: 'ok', component: 'forgejo-native-proxy' }));
+  app.get('/ready', async (c) => {
+    try {
+      const healthUrl = new URL('/api/healthz', upstream);
+      const response = await (options.fetchImpl ?? fetch)(healthUrl, {
+        method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(3000),
+      });
+      return c.json({ status: response.ok ? 'ok' : 'unavailable' }, response.ok ? 200 : 503);
+    } catch {
+      return c.json({ status: 'unavailable' }, 503);
+    }
+  });
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url);
     const target = new URL(upstream);
