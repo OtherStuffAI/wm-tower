@@ -86,7 +86,7 @@ different: the `.fips` hostname identifies transport, while
 
 ## Manager activation (not performed by the source worker)
 
-Run from `/Users/mini/code/wm/tower` after reviewing the source commit and
+Run from `$HOME/code/wm/tower` after reviewing the source commit and
 concurrent WApp state. These commands affect Tower and its host gateway only;
 they do not restart Autopilot, Flight Deck, Postgres, MinIO or other services.
 
@@ -223,7 +223,7 @@ smoke command fails:
 ```bash
 docker run --detach --rm --name tower-fips-isolated-review --entrypoint bun \
   --publish 127.0.0.1:43101:43101 \
-  --mount type=bind,source=/Users/mini/code/wm/tower,target=/source,readonly \
+  --mount type=bind,source=$HOME/code/wm/tower,target=/source,readonly \
   --workdir /source --env-file .env.example --env-file .env.fips.example \
   wingman-tower-tower tests/fixtures/fips-docker-ingress.ts
 bun tests/fixtures/fips-docker-seam.ts

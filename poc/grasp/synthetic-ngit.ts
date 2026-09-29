@@ -1,8 +1,8 @@
 // Explicit synthetic PoC commands only. Contains no keys, public destinations or arbitrary command mode.
 import {mkdirSync,existsSync} from 'node:fs';
 import {clone,relay} from './signing-policy-candidates';
-const root='/Users/mini/code/wm/tower/.runtime/grasp-synthetic';
-const upstream='/Users/mini/code/ngit-poc/ngit/target/debug';
+const root=`${process.env.HOME}/code/wm/tower/.runtime/grasp-synthetic`;
+const upstream=`${process.env.HOME}/code/ngit-poc/ngit/target/debug`;
 const source=root+'/source';
 const nostr='nostr://npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/'+encodeURIComponent(relay)+'/synthetic';
 const inherited={...process.env};

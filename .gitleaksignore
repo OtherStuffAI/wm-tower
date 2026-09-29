@@ -1,0 +1,4 @@
+# Historical synthetic fixture strings. These fingerprints identify test placeholders,
+# not credentials; preserve scanning for all other history and future commits.
+20cc0e2255807f3afaba0c4778cd19cb709b73f4:docs/grasp-fips-poc-progress-2026-09-10.md:generic-api-key:125
+e77514af45668ff89104d956b68973f638a0daa0:tests/forgejo-native-boundary.test.ts:generic-api-key:9

@@ -1,7 +1,7 @@
 // Signing-only live gate. Signed fixtures contain fake refs: never persist or publish them.
 import { candidates, clone, relay, type Candidate } from './signing-policy-candidates';
 import { validateSignedResponse, safeBrokerError } from './signed-response';
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 const { callCapabilityBroker, readCapabilityIdentity } = await import(`${autopilot}/src/mcp/capability-client.ts`);
 const { verifyEvent } = await import(`${autopilot}/node_modules/nostr-tools/lib/esm/index.js`);
 const actor = 'npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr';

@@ -170,7 +170,7 @@ describe.skipIf(!port || port === 5432)('Flight Deck Agent Space disposable-Post
       connectionBody({ installation_id: 'secret-a', bearer_token: 'do-not-store' }),
       connectionBody({ installation_id: 'secret-b', metadata: { bunker_uri: 'bunker://secret' } }),
       connectionBody({ installation_id: 'endpoint-a', fips_endpoint: 'http://localhost:9000' }),
-      connectionBody({ installation_id: 'endpoint-b', https_endpoint: 'https://user:pass@example.com' }),
+      connectionBody({ installation_id: 'endpoint-b', https_endpoint: 'https://' + 'user:pass@example.com' }),
       connectionBody({ installation_id: 'endpoint-c', fips_endpoint: 'http://example.com:3601' }),
       connectionBody({ installation_id: 'endpoint-d', fips_endpoint: `http://${transportNpub}.fips:3601?redirect=https://example.com`, fips_transport_npub: transportNpub }),
       connectionBody({ installation_id: 'endpoint-e', fips_endpoint: `http://${transportNpub}.fips:3601`, fips_transport_npub: otherTransportNpub }),

@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
 import {validateSignedResponse,safeBrokerError} from './signed-response';
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 const {generateSecretKey, finalizeEvent, verifyEvent} = await import(`${autopilot}/node_modules/nostr-tools/lib/esm/index.js`);
 // Disposable test-only key, no broker, persistence or publication.
 const key = generateSecretKey();

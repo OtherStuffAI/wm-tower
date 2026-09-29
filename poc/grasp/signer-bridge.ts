@@ -2,7 +2,7 @@
 // This bridge signs only; it contains no relay/Git publication client.
 import { clone, relay } from './signing-policy-candidates';
 import { validateSignedResponse, safeBrokerError } from './signed-response';
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 const { callCapabilityBroker, readCapabilityIdentity } = await import(`${autopilot}/src/mcp/capability-client.ts`);
 const { verifyEvent } = await import(`${autopilot}/node_modules/nostr-tools/lib/esm/index.js`);
 try {

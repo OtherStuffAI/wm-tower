@@ -128,7 +128,7 @@ index 0000000..4cbff74
 +pub fn signer() -> Arc<NgitSigner> {
 +    Arc::new(NgitSigner::PocBroker {
 +        public_key: public_key(),
-+        bridge: "/Users/mini/code/wm/tower/poc/grasp/signer-bridge.ts".into(),
++        bridge: "poc/grasp/signer-bridge.ts".into(),
 +    })
 +}
 +pub fn user() -> UserRef {

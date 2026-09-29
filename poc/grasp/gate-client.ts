@@ -1,7 +1,7 @@
 // Private PoC probes. Signed tokens and disposable secret keys stay in memory.
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 export const nostr = await import(`${autopilot}/node_modules/nostr-tools/lib/esm/index.js`);
 export const broker = await import(`${autopilot}/src/mcp/capability-client.ts`);
 export function check(ok: unknown, message: string): asserts ok { if (!ok) throw new Error(message); }

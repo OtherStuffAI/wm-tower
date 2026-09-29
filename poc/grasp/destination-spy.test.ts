@@ -6,7 +6,7 @@ test('native mode rejects malicious hints and Git destinations without dialing t
     const env={...process.env};
     for(const key of Object.keys(env)) if(/^(GIT_|NGIT_|WINGMAN_CAPABILITY|SESSION_ID)/.test(key)) delete env[key];
     Object.assign(env,{NGIT_POC_PRIVATE_SERVICE:'1',NGIT_TOR_PROXY:'off',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'});
-    const proc=Bun.spawn(['/Users/mini/code/ngit-poc/ngit/target/debug/examples/poc_destination_probe',
+    const proc=Bun.spawn([`${process.env.HOME}/code/ngit-poc/ngit/target/debug/examples/poc_destination_probe`,
       `ws://127.0.0.1:${trap.port}/`, `http://127.0.0.1:${trap.port}/synthetic.git`],{env,stdin:'ignore',stdout:'pipe',stderr:'pipe'});
     const timer=setTimeout(()=>proc.kill(),10000);
     const code=await proc.exited;clearTimeout(timer);

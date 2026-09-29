@@ -22,7 +22,7 @@ def main():
                '--tower-url', 'https://sb4.otherstuff.studio', '--app-npub', APP,
                '--workspace', WORKSPACE, '--bot-crypto', '--json']
     result = json.loads(subprocess.check_output(command,
-        cwd=os.environ.get('AUTOPILOT_REPO', '/Users/mini/code/wm/autopilot'), timeout=30))
+        cwd=os.environ.get('AUTOPILOT_REPO', str(Path.home() / 'code/wm/autopilot')), timeout=30))
     identity = result['identity']
     expected = {'workspace_id': WORKSPACE, 'app_npub': APP,
                 'workspace_owner_npub': OWNER, 'workspace_service_npub': SERVICE}

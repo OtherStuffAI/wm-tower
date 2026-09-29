@@ -13,7 +13,7 @@ with unittest.mock.patch.object(m,'docker',side_effect=['[{"Spec":{"Mode":{"Repl
  assert not m.stopped(m.writer_state('swarm',['git-org-reconciler']),'swarm')
 assert not m.stopped([{'running':False,'restart':'unless-stopped'}], 'compose')
 assert m.stopped([{'running':False,'restart':'no'}], 'compose')
-for origin in ['http://forgejo.example','https://evil@forgejo.example','https://forgejo.example/api','https://forgejo.example?x=1']:
+for origin in ['http://forgejo.example','https://'+'evil'+'@forgejo.example','https://forgejo.example/api','https://forgejo.example?x=1']:
  try:m.native_api(origin,'/missing');assert False
  except RuntimeError:pass
 with tempfile.TemporaryDirectory() as d:

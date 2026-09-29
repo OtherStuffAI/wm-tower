@@ -2,7 +2,7 @@
   "upstreams": [
     {
       "name": "ngit-grasp",
-      "path": "/Users/mini/code/ngit-poc/ngit-grasp",
+      "path": "~/code/ngit-poc/ngit-grasp",
       "origin": "https://gitnostr.com/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit-grasp.git",
       "revision": "b990d2189ba494944f8e6c875d52056421c061c2",
       "lock_sha256": "c01be2b31462d3bf06fe610ca7ed06e6ca94032bb1ea066b7e17268a562332a0",
@@ -10,7 +10,7 @@
     },
     {
       "name": "ngit",
-      "path": "/Users/mini/code/ngit-poc/ngit",
+      "path": "~/code/ngit-poc/ngit",
       "origin": "https://github.com/DanConwayDev/ngit-cli.git",
       "revision": "c2cc591dcfae5d46dc178c0ea87e8bc1802f09b3",
       "lock_sha256": "769de668a8a3b5b8a3b7956f971bc0c7592999ac4f97800c41bb96b0ad68436d",
@@ -35,7 +35,7 @@
     },
     {
       "name": "GitWorkshop",
-      "path": "/Users/mini/code/ngit-poc/GitWorkshop",
+      "path": "~/code/ngit-poc/GitWorkshop",
       "origin": "https://github.com/DanConwayDev/gitworkshop.git",
       "revision": "dc36db64f6a2cca29d109829eabaf0a49d4bf4da",
       "lock_sha256": "387fce8b73cbf52f6f7182795e3dbc3718db2267646da4308be486811785f5ed",

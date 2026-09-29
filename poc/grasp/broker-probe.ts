@@ -1,5 +1,5 @@
 // Run with Bun. Uses only this session's capability; never prints credentials.
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 const { callCapabilityBroker } = await import(`${autopilot}/src/mcp/capability-client.ts`);
 const routing = await Bun.file(new URL('./fips.json', import.meta.url)).json();
 const repository = new URL(process.argv[2] ?? new URL('/npub1llwrq3rtah3rg3r2dyfyht55ek7aa0ey7z47ujju407pzfp38shqa7zcvr/synthetic.git', routing.url).href);

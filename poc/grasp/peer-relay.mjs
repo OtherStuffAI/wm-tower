@@ -3,7 +3,7 @@
 import {spawn} from 'node:child_process';
 import {Duplex} from 'node:stream';
 import {createInterface} from 'node:readline';
-const {default: WS}=await import((process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot')+'/node_modules/ws/index.js');
+const {default: WS}=await import((process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`)+'/node_modules/ws/index.js');
 const [container,relay,address]=process.argv.slice(2);
 let child;
 const ws=new WS(relay,{handshakeTimeout:8000,followRedirects:false,createConnection:()=>{

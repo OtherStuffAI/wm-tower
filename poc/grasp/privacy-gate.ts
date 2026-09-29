@@ -2,7 +2,7 @@
 import {clone,relay} from './signing-policy-candidates';
 import {validateSignedResponse,safeBrokerError} from './signed-response';
 async function main() {
-const autopilot=process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
+const autopilot=process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
 const {callCapabilityBroker,readCapabilityIdentity}=await import(`${autopilot}/src/mcp/capability-client.ts`);
 const {generateSecretKey,finalizeEvent,verifyEvent}=await import(`${autopilot}/node_modules/nostr-tools/lib/esm/index.js`);
 const identity=await readCapabilityIdentity();

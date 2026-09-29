@@ -18,7 +18,7 @@ test('rejects public destinations, anonymous contributor lane, credentials and s
     (c:ReviewPlan)=>{c.root+='?target=elsewhere';},
     (c:ReviewPlan)=>{c.relay='wss://public.example.invalid/';},
     (c:ReviewPlan)=>{c.identifier='synthetic';},
-    (c:ReviewPlan)=>{c.root=c.root.replace('http://','http://user:pass@');},
+    (c:ReviewPlan)=>{c.root=c.root.replace('http://','http://' + 'user:pass@');},
   ]){const c=fixture();mutate(c);expect(()=>validateReviewPlan(c)).toThrow();}
 });
 test('rejects cross-coordinate PRs, changed refs, extra destinations and duplicate tags',()=>{

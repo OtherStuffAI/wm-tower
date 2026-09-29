@@ -2,7 +2,7 @@
 import {spawn} from 'node:child_process';
 import {Duplex} from 'node:stream';
 import {createInterface} from 'node:readline';
-const {default: WS}=await import((process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot')+'/node_modules/ws/index.js');
+const {default: WS}=await import((process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`)+'/node_modules/ws/index.js');
 let child;
 const ws=new WS(process.argv[3],{createConnection:()=>{
   child=spawn('docker',['exec','-i',process.argv[2],'bash','-c','exec 4<&0; exec 3<>/dev/tcp/127.0.0.1/7334; cat <&3 & incoming=$!; cat <&4 >&3 & outgoing=$!; wait -n; kill "$incoming" "$outgoing" 2>/dev/null'],{stdio:['pipe','pipe','ignore']});

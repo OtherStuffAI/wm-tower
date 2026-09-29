@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { candidates, ngitCommit, type Candidate } from './signing-policy-candidates';
 
 // Only imports source functions. Never connects to a broker, signs, or loads a live store.
-const autopilot = process.env.AUTOPILOT_REPO ?? '/Users/mini/code/wm/autopilot';
-const ngit = process.env.NGIT_REPO ?? '/Users/mini/code/ngit-poc/ngit';
+const autopilot = process.env.AUTOPILOT_REPO ?? `${process.env.HOME}/code/wm/autopilot`;
+const ngit = process.env.NGIT_REPO ?? `${process.env.HOME}/code/ngit-poc/ngit`;
 const { validateSigningPolicyDraft, SigningPolicyRegistry, FileSigningPolicyStore } =
   await import(`${autopilot}/src/signing/signing-policy-registry.ts`);
 const { matchesExactNostrTags } = await import(`${autopilot}/src/signing/nostr-kind-policy.ts`);

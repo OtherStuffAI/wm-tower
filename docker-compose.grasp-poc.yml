@@ -3,7 +3,7 @@ name: tower-grasp-poc
 services:
   grasp-poc:
     build:
-      context: /Users/mini/code/ngit-poc/ngit-grasp
+      context: ${NGIT_GRASP_REPO:?set ngit-grasp checkout path}
       args:
         NGIT_BUILD_REVISION: b990d2189ba494944f8e6c875d52056421c061c2
         NGIT_IMAGE_REVISION: b990d2189ba494944f8e6c875d52056421c061c2
