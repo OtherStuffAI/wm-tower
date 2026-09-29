@@ -4321,6 +4321,25 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/flightdeck-pg/hosted/workspaces': {
+        post: {
+          tags: ['Flight Deck PG'],
+          security: [{ nip98: [] }],
+          summary: 'Create a Hosted Flight Deck PG workspace with user and site signatures',
+          description: 'Exact signature, retry, failure and policy contract: docs/hosted-flightdeck-pg-signup.md. Both NIP-98 events sign the exact POST URL and UTF-8 body SHA-256. The site event must also tag the verified user event ID. The site signer must be allowlisted. The owner is the direct user signer.',
+          parameters: [{ name: 'x-flightdeck-site-attestation', in: 'header', required: true, schema: { type: 'string' }, description: 'Base64 UTF-8 JSON NIP-98 site event with user_event_id tag' }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['workspace_name', 'idempotency_key', 'terms_version'], additionalProperties: false, properties: { workspace_name: { type: 'string', minLength: 1, maxLength: 80 }, idempotency_key: { type: 'string', format: 'uuid' }, terms_version: { type: 'string', enum: ['hosted-free-v1'] } } } } } },
+          responses: {
+            '201': { description: 'Created. Returns workspace_id, credential-free descriptor, policy and replayed=false.' },
+            '200': { description: 'Idempotent retry with fresh signatures. Returns the same workspace and replayed=true.' },
+            '400': { description: 'Invalid body, name, key or terms version; JSON code field.' },
+            '401': { description: 'Missing or invalid user NIP-98; JSON code field.' },
+            '403': { description: 'Site proof or eligibility failure; JSON code field.' },
+            '409': { description: 'Signature replay, duplicate name or idempotency conflict; JSON code field.' },
+            '429': { description: 'Signup hourly limit; JSON code field.' },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor': {
         get: {
           tags: ['Flight Deck PG'],

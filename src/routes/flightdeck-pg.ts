@@ -8,6 +8,7 @@ import { getTowerBuildInfo } from '../build-info';
 import { config } from '../config';
 import { getDb } from '../db';
 import { getTowerProfile } from '../services/tower-profile';
+import { createHostedSignup, HostedSignupError } from '../services/flightdeck-pg-hosted-signup';
 import { evaluateWappManagement, WappManagementError } from '../services/wapp-management';
 import {
   getStorageDownloadUrl,
@@ -1470,6 +1471,21 @@ flightDeckPgRouter.get('/workspaces', async (c) => {
     workspaces: workspaces.map((workspace) => serializeFlightDeckPgWorkspaceSummary(workspace, { towerBaseUrl })),
     next_cursor: null,
   });
+});
+
+flightDeckPgRouter.post('/hosted/workspaces', async (c) => {
+  const bodyBytes = new Uint8Array(await c.req.raw.arrayBuffer());
+  if (bodyBytes.length > 4096) return c.json({ error: 'invalid_body', code: 'invalid_body' }, 400);
+  let rawBody: string;
+  try { rawBody = new TextDecoder('utf-8', { fatal: true }).decode(bodyBytes); }
+  catch { return c.json({ error: 'invalid_json', code: 'invalid_json' }, 400); }
+  try {
+    const result = await createHostedSignup(c.req.raw, rawBody);
+    return c.json(result, result.replayed ? 200 : 201);
+  } catch (error) {
+    if (error instanceof HostedSignupError) return c.json({ error: error.code, code: error.code }, error.status as 400);
+    throw error;
+  }
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/descriptor', async (c) => {

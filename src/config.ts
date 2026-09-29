@@ -71,6 +71,9 @@ export const config = {
   },
   flightDeck: {
     appNpub: requiredNpubEnv('FLIGHT_DECK_PG_APP_NPUB'),
+    hostedSignupSiteNpubs: csvValues(process.env.FLIGHT_DECK_HOSTED_SIGNUP_SITE_NPUBS),
+    hostedSignupMaxWorkspaces: positiveIntEnv('FLIGHT_DECK_HOSTED_SIGNUP_MAX_WORKSPACES', 3),
+    hostedSignupHourlyLimit: positiveIntEnv('FLIGHT_DECK_HOSTED_SIGNUP_HOURLY_LIMIT', 2),
   },
   wappActivity: {
     installationRequestsPerMinute: positiveIntEnv('WAPP_ACTIVITY_INSTALLATION_REQUESTS_PER_MINUTE', 60),

@@ -568,6 +568,20 @@ export interface FlightDeckPgContractFixture {
 export type FlightDeckPgActorKind = 'human' | 'agent' | 'app' | 'service';
 export type FlightDeckPgWorkspaceRole = 'owner' | 'admin' | 'member' | 'guest' | 'agent' | 'app';
 
+export interface FlightDeckPgHostedSignupRequest {
+  workspace_name: string;
+  idempotency_key: string;
+  terms_version: 'hosted-free-v1';
+}
+
+export interface FlightDeckPgHostedPolicy {
+  plan: 'hosted_free';
+  allowance_bytes: 1000000000;
+  terms_version: 'hosted-free-v1';
+  billing_state: 'free_allowance';
+  payment_required: false;
+}
+
 export type FlightDeckPgAgentIdentityRotationStatus = 'completed' | 'idempotent_replay';
 export type FlightDeckPgAgentIdentityRotationRequest = {
   rotation_id: string;

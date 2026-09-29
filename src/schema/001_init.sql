@@ -463,6 +463,21 @@ CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_workspaces_owner
 CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_workspaces_v4
   ON flightdeck_pg_workspaces(v4_workspace_id);
 
+CREATE TABLE IF NOT EXISTS flightdeck_pg_hosted_signups (
+  idempotency_key UUID NOT NULL,
+  owner_npub TEXT NOT NULL,
+  workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+  workspace_name_key TEXT NOT NULL,
+  body_sha256 TEXT NOT NULL,
+  user_event_id TEXT NOT NULL UNIQUE,
+  site_event_id TEXT NOT NULL UNIQUE,
+  site_npub TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (owner_npub, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_hosted_signups_owner_created
+  ON flightdeck_pg_hosted_signups(owner_npub, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS flightdeck_pg_workspace_memberships (
   workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE,
