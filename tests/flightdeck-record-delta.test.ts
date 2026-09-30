@@ -252,6 +252,45 @@ test('idle polling reuses its cursor, progress retention is capped and expired r
   await expect(page(progress.next_cursor)).rejects.toMatchObject({status:409});
 });
 
+test('overlapping repeatable-read cursor deletes reproduce the former serialization failure',async()=>{
+  const [saved]=await db`SELECT * FROM flightdeck_pg_record_cursors WHERE workspace_id=${workspaceId} LIMIT 1`;
+  const [victim]=await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state)
+    VALUES(${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)}) RETURNING token`;
+  let release!:()=>void;
+  const firstCommitted=new Promise<void>(resolve=>{release=resolve;});
+  let ready!:()=>void;
+  const secondReady=new Promise<void>(resolve=>{ready=resolve;});
+  const second=db.begin('isolation level repeatable read',async sql=>{
+    await sql`SELECT token FROM flightdeck_pg_record_cursors WHERE token=${victim!.token}`;
+    ready();
+    await firstCommitted;
+    await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token=${victim!.token}`;
+  });
+  await secondReady;
+  await db.begin('isolation level repeatable read',async sql=>{
+    await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token=${victim!.token}`;
+  });
+  release();
+  await expect(second).rejects.toMatchObject({code:'40001'});
+});
+
+test('concurrent progress pages retain replayable cursors while cleanup stays bounded',async()=>{
+  const [saved]=await db`SELECT * FROM flightdeck_pg_record_cursors WHERE workspace_id=${workspaceId} LIMIT 1`;
+  await db`DELETE FROM flightdeck_pg_record_cursors WHERE workspace_id=${workspaceId}`;
+  await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state,created_at)
+    SELECT ${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)},now()-interval '1 day'
+    FROM generate_series(1,520)`;
+  const pages=await Promise.all(Array.from({length:16},()=>page()));
+  const tokens=pages.map(p=>p.next_cursor);
+  expect(new Set(tokens).size).toBe(tokens.length);
+  const rows=await db`SELECT token FROM flightdeck_pg_record_cursors WHERE workspace_id=${workspaceId} AND actor_id=${actorId}`;
+  expect(rows.length).toBeLessThanOrEqual(512);
+  for(const token of tokens) expect(rows.some(row=>row.token===token)).toBe(true);
+  const replay=await page(tokens[0]);
+  expect(replay.mode).toBe(pages[0]!.snapshot_complete ? 'delta' : 'snapshot');
+  if (!pages[0]!.snapshot_complete) expect(replay.snapshot_id).toBe(pages[0]!.snapshot_id);
+});
+
 test('driver payload stays bounded for 200 large visible and hidden records',async()=>{
   await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,metadata,created_by_actor_id,updated_by_actor_id)
     SELECT ${workspaceId},${scopeId},${channelId},repeat('x',900000),'{"driver_test":true}'::jsonb,${actorId},${actorId} FROM generate_series(1,200)`;

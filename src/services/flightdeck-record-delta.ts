@@ -186,20 +186,35 @@ export async function readFlightDeckRecordPage(input: {
     }
     await sql`INSERT INTO flightdeck_pg_record_cursors(token,workspace_id,actor_id,epoch,state)
       VALUES(${nextToken},${input.workspaceId},${input.actorId},${clock!.epoch},${sql.json(next)})`;
-    // Bounded retention: at most 512 recent progress cursors per viewer, with a seven-day replay TTL.
-    await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token IN (
-      SELECT token FROM flightdeck_pg_record_cursors WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
-      ORDER BY created_at DESC,token OFFSET 512 LIMIT 64
-    )`;
-    await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token IN (
-      SELECT token FROM flightdeck_pg_record_cursors WHERE created_at<now()-interval '7 days' ORDER BY created_at,token LIMIT 64
-    )`;
     return response;
   }) as unknown as Promise<FlightDeckRecordPage>;
+  let response: FlightDeckRecordPage;
   for (let attempt=0; ; attempt++) {
-    try { return await run(); }
+    try { response = await run(); break; }
     catch (error) {
       if (attempt >= 2 || !['40001','40P01'].includes(String((error as {code?:string}).code))) throw error;
     }
   }
+  if (response.next_cursor !== input.cursor) {
+    // The page and its cursor have committed. Maintenance needs a fresh read-committed
+    // snapshot: concurrent DELETEs in the page's repeatable-read snapshot cause 40001.
+    // Serialize only this viewer's short cleanup, not the record scan or other viewers.
+    try {
+      await db.begin(async transaction => {
+        const sql = transaction as unknown as Db;
+        await sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspaceId}),hashtext(${input.actorId}))`;
+        await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token IN (
+          SELECT token FROM flightdeck_pg_record_cursors WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
+          ORDER BY created_at DESC,token OFFSET 512 LIMIT 64
+        )`;
+        await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token IN (
+          SELECT token FROM flightdeck_pg_record_cursors WHERE created_at<now()-interval '7 days' ORDER BY created_at,token LIMIT 64
+        )`;
+      });
+    } catch (error) {
+      // A later progress page can reclaim these rows. Never fail a committed cursor.
+      console.warn('record-sync cursor cleanup failed', error);
+    }
+  }
+  return response;
 }
