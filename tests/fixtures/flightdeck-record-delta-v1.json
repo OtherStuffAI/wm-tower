@@ -19,7 +19,9 @@
       "personal_wapp",
       "resource_view_state",
       "autopilot_connection",
-      "workspace_agent"
+      "workspace_agent",
+      "feed_subscription",
+      "feed_item_state"
     ],
     "mode": "snapshot",
     "changes": [
@@ -445,7 +447,9 @@
           "fips_transport_npub": "npub109684nue495hq240u3dqzyf2kltk23u3mqkk9l44ga6szed4jcysramf74",
           "https_endpoint": "https://example.invalid/",
           "api_version": "1",
-          "capabilities": ["agents.read"],
+          "capabilities": [
+            "agents.read"
+          ],
           "metadata": {},
           "row_version": 1,
           "created_by_actor_id": "20000000-0000-4000-8000-000000000001",
@@ -472,7 +476,9 @@
           "agent_npub": "npub1agentexample",
           "display_name": "Example Agent",
           "avatar_url": null,
-          "capabilities": ["overview.read"],
+          "capabilities": [
+            "overview.read"
+          ],
           "sort_order": 0,
           "is_visible": true,
           "metadata": {},
@@ -483,6 +489,57 @@
           "created_at": "2026-09-05T00:00:00+00:00",
           "updated_at": "2026-09-05T00:00:00+00:00",
           "archived_at": null
+        }
+      },
+      {
+        "family": "feed_subscription",
+        "id": "00000000-0000-4000-8000-000000000091",
+        "operation": "upsert",
+        "version": "15",
+        "workspace_id": "10000000-0000-4000-8000-000000000001",
+        "scope_id": null,
+        "channel_id": null,
+        "row": {
+          "schema_version": 1,
+          "id": "00000000-0000-4000-8000-000000000091",
+          "workspace_id": "10000000-0000-4000-8000-000000000001",
+          "reader_actor_id": "20000000-0000-4000-8000-000000000001",
+          "source": {
+            "kind": "public",
+            "url": "https://example.invalid/feed",
+            "format": "rss"
+          },
+          "source_key": [
+            "public",
+            "https://example.invalid/feed"
+          ],
+          "title": null,
+          "status": "active",
+          "row_version": 1,
+          "created_at": "2026-10-01T00:00:00Z",
+          "updated_at": "2026-10-01T00:00:00Z"
+        }
+      },
+      {
+        "family": "feed_item_state",
+        "id": "00000000-0000-4000-8000-000000000092",
+        "operation": "upsert",
+        "version": "15",
+        "workspace_id": "10000000-0000-4000-8000-000000000001",
+        "scope_id": null,
+        "channel_id": null,
+        "row": {
+          "schema_version": 1,
+          "id": "00000000-0000-4000-8000-000000000092",
+          "workspace_id": "10000000-0000-4000-8000-000000000001",
+          "reader_actor_id": "20000000-0000-4000-8000-000000000001",
+          "subscription_id": "00000000-0000-4000-8000-000000000091",
+          "item_id": "edition:1",
+          "read": false,
+          "dismissed": false,
+          "saved": false,
+          "row_version": 1,
+          "updated_at": "2026-10-01T00:00:00Z"
         }
       }
     ],
@@ -507,7 +564,9 @@
       "personal_wapp",
       "resource_view_state",
       "autopilot_connection",
-      "workspace_agent"
+      "workspace_agent",
+      "feed_subscription",
+      "feed_item_state"
     ],
     "bounds": {
       "max_rows": 200,

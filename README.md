@@ -56,8 +56,9 @@ Production deployment notes and the Docker Compose stack live in:
 
 Tower also exposes an admin web at `/admin` for `ADMIN_NPUB` users. It can inspect workspaces, create Postgres-backed Flight Deck workspaces, inspect tables, manage the public Tower profile, and generate workspace connection tokens for Yoke/Agent Connect. The older table-focused view remains available at `/table-viewer`.
 
-## Proposed WApp feed contract
+## WApp feed reader state
 
-[WApp feed contract — proposed/unimplemented](docs/contract/wapp-feed-v1-proposed.md) documents the shared
-reader/source boundaries and future acceptance gates; it does not describe shipped
-feed endpoints.
+[Implemented T1 source API](docs/contract/wapp-feed-t1-api.md) describes personal subscriptions,
+flags, CAS/idempotency and PG recovery. The [proposed suite contract](docs/contract/wapp-feed-v1-proposed.md)
+remains the baseline for other packages. Source implementation is not live activation;
+legacy publishing remains intact.

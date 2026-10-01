@@ -1,3 +1,4 @@
+import { registerFeedReaderRoutes } from './feed-reader';
 import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -344,6 +345,7 @@ import type {
 } from '../types';
 
 export const flightDeckPgRouter = new Hono();
+registerFeedReaderRoutes(flightDeckPgRouter);
 
 const scopeKinds = new Set<FlightDeckPgScopeKind>([
   'business_unit',

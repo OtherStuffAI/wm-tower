@@ -1,3 +1,4 @@
+import { feedReaderPaths, feedReaderSchemas, FEED_READER_SOURCE_BUILD } from './feed-reader-openapi';
 import { drivePaths } from './drive-openapi';
 import { learningPaths, learningSchemas } from './learning/openapi';
 import { config } from './config';
@@ -2434,6 +2435,7 @@ export function buildOpenApiDocument(origin: string) {
       { name: 'Forgejo Authentication', description: 'Nostr allowlisted OIDC sign-in only. Forgejo owns accounts, OAuth credentials, permissions, Git and API operations.' },
     ],
     'x-flightdeck-pg-contract-fixtures': flightDeckPgContractFixturePaths,
+    'x-wapp-feed-reader-source-build': FEED_READER_SOURCE_BUILD,
     components: {
       securitySchemes: {
         nip98: {
@@ -2446,6 +2448,7 @@ export function buildOpenApiDocument(origin: string) {
 
       },
       schemas: {
+        ...feedReaderSchemas,
         ...learningSchemas,
         WappPublishingDestination: {
           type: 'object', additionalProperties: false, required: ['scope_id', 'channel_id'],
@@ -4190,6 +4193,7 @@ export function buildOpenApiDocument(origin: string) {
     },
     security: [{ nip98: [] }],
     paths: {
+      ...feedReaderPaths,
       ...drivePaths,
       ...learningPaths,
       '/health': {

@@ -2864,3 +2864,21 @@ export interface DriveShare {
   audience: 'private' | 'workspace'; enabled: boolean; revision: number; updated_at: string;
 }
 export type { ResearchConcept, ResearchRelation, ResearchSource, ResearchSupport, ResearchGraph } from './learning/research-graph';
+
+/** Feed preferences never grant content access. Tower stores no item content. */
+export type FlightDeckPgFeedSource =
+  | { kind: 'wapp'; autopilot_connection_id: string; installation_id: string; feed_id: string; endpoint: string; format: 'jsonfeed-1.1' }
+  | { kind: 'public'; url: string; format: 'jsonfeed-1.1' | 'rss' };
+export interface FlightDeckPgFeedSubscription {
+  schema_version: 1; id: string; workspace_id: string; reader_actor_id: string;
+  source: FlightDeckPgFeedSource; title: string | null; status: 'active' | 'unsubscribed';
+  row_version: number; created_at: Date; updated_at: Date;
+}
+export interface FlightDeckPgFeedItemState {
+  schema_version: 1; id: string; workspace_id: string; reader_actor_id: string;
+  subscription_id: string; item_id: string; read: boolean; dismissed: boolean; saved: boolean;
+  row_version: number; updated_at: Date;
+}
+export interface FlightDeckPgFeedMutation {
+  mutation_id: string; expected_row_version: number;
+}

@@ -4286,4 +4286,5 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(learningResearchV1Sql);
   await seedResearchGraph(sql);
   await seedAssessmentCards(sql);
+  await sql.unsafe(readFileSync(new URL('./feed-reader-v1.sql', import.meta.url), 'utf8'));
 }

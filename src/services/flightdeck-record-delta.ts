@@ -66,6 +66,7 @@ export async function readFlightDeckRecordPage(input: {
     }
     async function visible(e: Entry): Promise<boolean> {
       const r = e.row;
+      if (e.family === 'feed_subscription' || e.family === 'feed_item_state') return r.reader_actor_id === input.actorId;
       if (e.family === 'daily_note' || e.family === 'personal_wapp') return r.owner_actor_id === input.actorId;
       if (e.family === 'autopilot_connection' || e.family === 'workspace_agent') {
         const key = 'workspace.read';
@@ -149,7 +150,7 @@ export async function readFlightDeckRecordPage(input: {
         }
         // Only typed top-level references from the authorized payload, never metadata or hidden rows.
         const actorIds = [...new Set(['created_by_actor_id', 'updated_by_actor_id', 'deleted_by_actor_id', 'archived_by_actor_id',
-          'owner_actor_id', 'actor_id', 'viewer_actor_id'].map(key => change.row?.[key])
+          'owner_actor_id', 'actor_id', 'viewer_actor_id', 'reader_actor_id'].map(key => change.row?.[key])
           .filter((id): id is string => typeof id === 'string' && uuid.test(id) && !actors.has(id)))];
         const baseBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
         const remaining = RECORD_MAX_BYTES - baseBytes;

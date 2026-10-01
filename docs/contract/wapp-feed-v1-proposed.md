@@ -5,6 +5,14 @@ revision `1`, 2026-10-01. This is the canonical shared contract, held in Tower
 because Tower owns shared reader-state authority. WApps retain content authority.
 No endpoint or schema below is a claim about current deployed capabilities.
 
+T1 now has an [implemented Tower source profile](wapp-feed-t1-api.md). That
+profile fixes actual routes, reader-only sync, portable PG connection binding,
+CAS field patches, explicit unread and indefinite retained flags. Revision 1 here
+is preserved as the shared proposal baseline; WApp/browser/FIPS proof and activation
+remain outside T1. The profile also records the coordinated W1 same-reader graph-header
+extension and its recent-history limitation; it grants no new authority. Do not read the historical open Tower decisions below as
+overriding the implemented profile.
+
 ## Authority and review basis
 
 Agreed product boundaries appear under “Fixed agreements”. Wire shapes and

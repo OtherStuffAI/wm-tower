@@ -6946,6 +6946,10 @@ export async function listVisibleFlightDeckPgEvents(
       AND (${input.throughRowVersion ?? null}::integer IS NULL OR e.row_version <= ${input.throughRowVersion ?? null})
       AND (
         (
+          e.entity_type IN ('feed_subscription', 'feed_item_state')
+          AND e.payload->>'reader_actor_id' = ${input.actorId}
+        )
+        OR (
           e.entity_type = 'resource_view_state'
           AND e.payload->>'viewer_actor_id' = ${input.actorId}
         )
@@ -7061,6 +7065,7 @@ export async function listVisibleFlightDeckPgEvents(
         )
         OR (
           e.channel_id IS NULL
+          AND e.entity_type NOT IN ('feed_subscription','feed_item_state')
           AND ${includeWorkspaceEvents}
         )
       )
@@ -7165,6 +7170,8 @@ export async function listVisibleFlightDeckPgEventsForAudience(
       includeWorkspaceEvents: member.includeWorkspaceEvents,
     }, sql);
     for (const event of events) {
+      // Managed agent audiences never delegate personal feed preferences/flags.
+      if (event.entity_type === 'feed_subscription' || event.entity_type === 'feed_item_state') continue;
       const existing = visibleByEvent.get(event.id) ?? { event, npubs: new Set<string>() };
       existing.npubs.add(member.npub);
       visibleByEvent.set(event.id, existing);
