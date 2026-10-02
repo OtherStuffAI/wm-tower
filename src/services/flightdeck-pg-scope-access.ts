@@ -79,6 +79,8 @@ export async function runScopeAccess(input: ContextTreeActor, body?: unknown, db
     }
     // Readers see only their own provenance. Scope managers can inspect all workspace members.
     const members = manager.allowed ? await sql`SELECT a.id,a.display_name,a.kind FROM flightdeck_pg_workspace_memberships m JOIN flightdeck_pg_actors a ON a.id=m.actor_id WHERE m.workspace_id=${input.workspaceId}` : [{id:actor.id,display_name:actor.display_name,kind:actor.kind}];
+    const principalGroups = manager.allowed ? await sql`SELECT id,name FROM flightdeck_pg_groups WHERE workspace_id=${input.workspaceId} ORDER BY name,id` : [];
+    const principals = manager.allowed ? { actors: members.map(m=>({id:m.id,kind:m.kind,label:m.display_name || (m.kind==='agent'?'Unnamed agent':'Unnamed person')})), groups: principalGroups.map(g=>({id:g.id,label:g.name || 'Unnamed group'})) } : {actors:[],groups:[]};
     const effective = [];
     for (const m of members) {
       const groups = await getEffectiveFlightDeckPgGroupIds(input.workspaceId,m.id,sql);
@@ -89,6 +91,6 @@ export async function runScopeAccess(input: ContextTreeActor, body?: unknown, db
         role:permissions.includes('scope.manage')?'scope_manager':'context_editor',sources:sources.filter(r=>ownedPermissions.includes(r.permission)).map(r=>({grant_id:r.id,permission:r.permission,via:r.principal_type==='group'?r.group_label:'Direct',group_id:r.principal_group_id}))});
     }
     const currentManage = await authorizeFlightDeckPgOperation({...input,permission:'scope.manage',resource:{type:'scope',scopeId:input.scopeId}},sql);
-    return {scope_id:input.scopeId,revision:revision(rows),can_manage:currentManage.allowed,grants:manager.allowed?bundles(rows):[],effective_access:effective,...(audit?{audit}:{})};
+    return {scope_id:input.scopeId,revision:revision(rows),can_manage:currentManage.allowed,principals,grants:manager.allowed?bundles(rows):[],effective_access:effective,...(audit?{audit}:{})};
   });
 }

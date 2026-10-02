@@ -312,6 +312,7 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
     await db`UPDATE flightdeck_pg_actors SET kind='agent',display_name='Fixture context agent' WHERE id=${outsiderId}`;
     const current=await runScopeAccess(manager,undefined,db);
     const lease=await acquireFlightDeckPgEditLease({workspaceId:manager.workspaceId,entityType:'scope',entityId:scopeId,actorId,actorNpub:manager.actorNpub},db);
+    expect(current.principals.actors.some(a=>a.id===outsiderId && a.kind==='agent')).toBe(true);
     expect(lease.ok).toBe(true); if(!lease.ok) throw Error('lease');
     const saved=await runScopeAccess(manager,{principal_type:'actor',principal_id:outsiderId,role:'context_editor',expected_revision:current.revision,lease_token:lease.lease.lease_token},db);
     expect(saved.effective_access.find(e=>e.actor_id===outsiderId)?.sources[0]?.via).toBe('Direct');
@@ -328,6 +329,15 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
     await code(runContextTree({...outsider,scopeId:scope2},'create',{body:{title:'Forbidden'}},db),'context_not_found');
     await code(runContextTree({...outsider,workspaceId:randomUUID()},'list',{},db),'context_not_found');
     await code(runContextTree(outsider,'attach',{componentId:node.id,body:{target_type:'task',target:{record_id:privateTaskId}}},db),'target_unavailable');
+    const parent=await create('Editor parent',null,outsider);
+    await runContextTree(outsider,'update',{componentId:node.id,body:{parent_id:parent.id,expected_row_version:changed.component.row_version}},db);
+    await code(runContextTree(outsider,'attach',{componentId:node.id,body:{target_type:'task',target:{record_id:taskId}}},db),'target_unavailable');
+    // Linked-target access is an independent explicit fixture grant.
+    const [targetGrant]=await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${manager.workspaceId},'actor',${outsiderId},'channel',${channelId},'task.read') RETURNING id`;
+    const linked=await runContextTree(outsider,'attach',{componentId:node.id,body:{target_type:'task',target:{record_id:taskId}}},db);
+    await runContextTree(outsider,'unlink',{componentId:node.id,referenceId:linked.reference.id,body:{expected_row_version:linked.reference.row_version}},db);
+    await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE id=${targetGrant!.id}`;
+    expect((await db`SELECT id FROM flightdeck_pg_tasks WHERE id=${taskId} AND deleted_at IS NULL`).length).toBe(1);
     const noAdmin=await authorizeFlightDeckPgOperation({...outsider,permission:'scope.manage',resource:{type:'scope',scopeId}},db);expect(noAdmin.allowed).toBe(false);
     await code(runScopeAccess(outsider,{principal_type:'actor',principal_id:outsiderId,role:'scope_manager'},db),'permission_denied');
     const preview=(await runContextTree(outsider,'preview',{componentId:node.id},db)).preview;
@@ -356,7 +366,7 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
     const agentKey=new Uint8Array(32).fill(64);
     expect((await route(`/scopes/${scopeId}`,'PATCH',{name:'Must not rename scope'},agentKey)).status).toBe(403);
     expect((await route(path,'PUT',{...mutation,role:'scope_manager'},agentKey)).status).toBe(403);
-    const visible=await route(path,'GET',undefined,agentKey);expect(visible.status).toBe(200);expect((await visible.json() as any).grants).toHaveLength(0);
+    const visible=await route(path,'GET',undefined,agentKey);expect(visible.status).toBe(200);const readerAccess=await visible.json() as any;expect(readerAccess.grants).toHaveLength(0);expect(readerAccess.principals.actors).toHaveLength(0);
     const renewed=await route('/edit-leases/acquire','POST',{entity_type:'scope',entity_id:scopeId});const l=(await renewed.json() as any).lease;
     expect((await route(path,'PUT',{principal_type:'actor',principal_id:outsiderId,revoke:true,expected_revision:(await saved.json() as any).revision,lease_token:l.lease_token})).status).toBe(200);
   });
