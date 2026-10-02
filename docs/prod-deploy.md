@@ -175,6 +175,47 @@ separately when immediate removal is required.
 
 ## Canonical Tower release checks
 
+### Context Tree activation
+
+Tower is a backend Docker Compose service, not an Autopilot-managed WApp.
+For an existing local stack, confirm its ownership before activation:
+
+```bash
+docker inspect wingman-tower-b3 --format '{{json .Config.Labels}}'
+```
+
+The Compose working directory, configuration files and service label must match
+this checkout and its `tower` service. Use `./rebuild_deploy_docker.sh` with the
+existing configuration and data volumes. The container entrypoint runs `db:init`,
+including the additive Context Tree schema and record-recovery registrations,
+before starting the API. Do not start a second `bun run start` runtime or require
+a WApp runner registration to rebuild this existing backend. Autopilot activation
+is separate and is unnecessary for Flight Deck's human Context Tree UI.
+
+After the script's HTTP and native FIPS health checks, verify the actual backend
+used by Flight Deck, including its public proxy:
+
+```bash
+curl -fsS "$TOWER_URL/openapi.json" \
+  | jq -e '[.paths | keys[] | select(contains("/context/components"))] | length > 0'
+```
+
+Use an authorized signer for the exact GET URL
+`/api/v4/flightdeck-pg/workspaces/<workspace-id>/scopes/<scope-id>/context/components?limit=1`
+and the configured `x-flightdeck-pg-app-npub`. A visible empty scope must return
+`200`, `components: []` and the actor's `capabilities`. `manage: false` is a real
+editing restriction; neither workspace visibility nor an Autopilot app-operation
+delegation grants Tower's `scope.manage`. An unregistered route returning plain
+`404 Not Found` indicates stale deployment, whereas typed `context_not_found`
+conceals missing or inaccessible context. Check these separately.
+
+For browser acceptance, use the served build and real Tower responses. A newly
+opened browser may need to finish a paginated record snapshot before Context Tree
+becomes complete. Verify root creation, child creation, rename/reparent and reload
+with an existing authorized scope manager. An agent's read-only browser/API check
+cannot prove the human manager's editing flow. Preserve true permission gates;
+do not grant an agent management permission merely to obtain a passing check.
+
 There is currently no dedicated Tower deployment smoke-check script in this
 repo. Until one exists, use these as the canonical manual release checks after
 build/restart.
