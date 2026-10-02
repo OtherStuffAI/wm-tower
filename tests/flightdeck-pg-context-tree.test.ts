@@ -310,6 +310,15 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
   });
   test('context.edit direct agent grant, exact scope/workspace, reader denial, target ACL and immediate revocation', async () => {
     await db`UPDATE flightdeck_pg_actors SET kind='agent',display_name='Fixture context agent' WHERE id=${outsiderId}`;
+    await db`INSERT INTO user_profiles(user_npub,display_name) VALUES(${outsider.actorNpub},'Mirrored fixture name') ON CONFLICT(user_npub) DO UPDATE SET display_name=EXCLUDED.display_name`;
+    const named=await runScopeAccess(manager,undefined,db);
+    expect(named.principals.actors.find(a=>a.id===outsiderId)?.label).toBe('Fixture context agent');
+    expect(named.principals.actors.find(a=>a.id===outsiderId)?.npub).toBe(outsider.actorNpub);
+    await db`UPDATE flightdeck_pg_actors SET display_name=NULL WHERE id=${outsiderId}`;
+    const mirrored=await runScopeAccess(manager,undefined,db);
+    expect(mirrored.principals.actors.find(a=>a.id===outsiderId)?.label).toBe('Mirrored fixture name');
+    await db`UPDATE flightdeck_pg_actors SET display_name='Fixture context agent' WHERE id=${outsiderId}`;
+    await db`DELETE FROM user_profiles WHERE user_npub=${outsider.actorNpub}`;
     const current=await runScopeAccess(manager,undefined,db);
     const lease=await acquireFlightDeckPgEditLease({workspaceId:manager.workspaceId,entityType:'scope',entityId:scopeId,actorId,actorNpub:manager.actorNpub},db);
     expect(current.principals.actors.some(a=>a.id===outsiderId && a.kind==='agent')).toBe(true);
