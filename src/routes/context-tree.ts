@@ -32,7 +32,7 @@ export function registerContextTreeRoutes(router: Hono) {
       return c.json({ identity, ...payload }, operation === 'create' || operation === 'attach' ? 201 : 200);
     } catch (error) {
       if (error instanceof ContextTreeError) return c.json({ error: error.message, code: error.code, status: error.status, identity,
-        ...(error.status === 403 && error.code === 'permission_denied' ? { required_permission: 'scope.manage' } : {}) }, error.status);
+        ...(error.status === 403 && error.code === 'permission_denied' ? { required_permission: 'context.edit or scope.manage' } : {}) }, error.status);
       throw error;
     }
   };

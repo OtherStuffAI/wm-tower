@@ -1,3 +1,4 @@
+import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
 import { registerFeedReaderRoutes } from './feed-reader';
 import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
@@ -348,6 +349,7 @@ import type {
 export const flightDeckPgRouter = new Hono();
 registerFeedReaderRoutes(flightDeckPgRouter);
 registerContextTreeRoutes(flightDeckPgRouter);
+registerScopeAccessRoutes(flightDeckPgRouter);
 
 const scopeKinds = new Set<FlightDeckPgScopeKind>([
   'business_unit',
@@ -1287,6 +1289,7 @@ function parseFlightDeckPgStoredDocumentContent(bytes: Uint8Array) {
 
 function normalizeEditLeaseEntityType(value: unknown): FlightDeckPgEditLeaseEntityType | null {
   const raw = String(value || '').trim();
+  if (raw === 'scope') return 'scope';
   if (raw === 'task') return 'task';
   if (raw === 'document' || raw === 'doc') return 'document';
   return null;
@@ -5705,7 +5708,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/edit-leases', async (c) => {
   const entityType = normalizeEditLeaseEntityType(c.req.query('entity_type'));
   const entityId = String(c.req.query('entity_id') || '').trim();
   const fields: { path: string; code: string; message: string }[] = [];
-  if (!entityType) fields.push({ path: 'entity_type', code: 'invalid', message: 'entity_type must be task or document' });
+  if (!entityType) fields.push({ path: 'entity_type', code: 'invalid', message: 'entity_type must be task, document or scope' });
   if (!entityId) fields.push({ path: 'entity_id', code: 'required', message: 'entity_id is required' });
   if (fields.length) return validationError(c, identity, fields);
 
@@ -5731,14 +5734,17 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/acquire', async (c
   const entityId = String(body.entity_id || '').trim();
   const ttlSeconds = body.ttl_seconds === undefined ? 120 : Number(body.ttl_seconds);
   const fields: { path: string; code: string; message: string }[] = [];
-  if (!entityType) fields.push({ path: 'entity_type', code: 'invalid', message: 'entity_type must be task or document' });
+  if (!entityType) fields.push({ path: 'entity_type', code: 'invalid', message: 'entity_type must be task, document or scope' });
   if (!entityId) fields.push({ path: 'entity_id', code: 'required', message: 'entity_id is required' });
   if (!Number.isFinite(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 600) {
     fields.push({ path: 'ttl_seconds', code: 'invalid', message: 'ttl_seconds must be between 30 and 600' });
   }
   if (fields.length) return validationError(c, identity, fields);
 
-  if (entityType === 'task') {
+  if (entityType === 'scope') {
+    const decision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'scope.manage', resource: { type: 'scope', scopeId: entityId } });
+    if (!decision.allowed) return authorizationError(c, decision, identity, 'scope.manage');
+  } else if (entityType === 'task') {
     const task = await resolveFlightDeckPgTask(context.workspace.id, entityId);
     if (!task) return jsonError(c, 404, 'task_not_found', 'Flight Deck PG task not found', identity);
     const decision = await authorizeFlightDeckPgOperation({

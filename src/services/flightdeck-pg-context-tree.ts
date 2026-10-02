@@ -60,8 +60,11 @@ async function access(input: ContextTreeActor, sql: Db, write: boolean) {
   const groupIds = await getEffectiveFlightDeckPgGroupIds(input.workspaceId, actor!.id, sql);
   if (!await canReadFlightDeckPgContextScope({ ...input, actorId: actor!.id, groupIds }, sql)) missing();
   const decision = await authorizeFlightDeckPgOperation({ ...input, permission: 'scope.manage', resource: { type: 'scope', scopeId: input.scopeId } }, sql);
-  if (write && !decision.allowed) throw new ContextTreeError(403, 'permission_denied', 'scope.manage required');
-  return { actorId: actor!.id, capabilities: { read: true, manage: decision.allowed } };
+  const editor = await authorizeFlightDeckPgOperation({ ...input, permission: 'context.edit', resource: { type: 'scope', scopeId: input.scopeId } }, sql);
+  const edit = decision.allowed || editor.allowed;
+  if (write && !edit) throw new ContextTreeError(403, 'permission_denied', 'context.edit or scope.manage required');
+  // manage is the backward-compatible context-edit capability, never scope administration.
+  return { actorId: actor!.id, capabilities: { read: true, manage: edit, edit, scope_manage: decision.allowed } };
 }
 async function component(input: ContextTreeActor, id: string, sql: Db) {
   const [row] = await sql`SELECT * FROM flightdeck_pg_context_components
@@ -120,7 +123,7 @@ async function emit(input: ContextTreeActor, actorId: string, family: 'context_c
 type Persisted<T> = Omit<T, 'created_at' | 'updated_at' | 'deleted_at'> & { created_at: Date; updated_at: Date; deleted_at: Date | null };
 type Resolution = { status: 'unavailable' | 'external' } | { status: 'available'; record_id: string; title: string | null };
 type ReferenceRow = Persisted<FlightDeckPgContextReference> & { resolution?: Resolution };
-type Capabilities = { capabilities: { read: boolean; manage: boolean } };
+type Capabilities = { capabilities: { read: boolean; manage: boolean; edit: boolean; scope_manage: boolean } };
 type Mutation = Capabilities & { audit: { event_id: string; operation: string; actor_npub: string }; outbox: Array<{ id: string; row_version: number }>; mutation_id: string };
 export type ContextTreeResults = {
   list: Capabilities & { components: Persisted<FlightDeckPgContextComponent>[]; next_cursor: string | null };

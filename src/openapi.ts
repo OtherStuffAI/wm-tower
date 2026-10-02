@@ -4566,11 +4566,15 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes/{scopeId}/grants': {
+        get: { tags: ['Flight Deck PG'], summary: 'Read exact-scope access and group provenance', security: [{ nip98: [] }], description: 'Visible scope members see their own effective access; scope.manage holders see canonical direct/group grants and effective workspace actors. No descendant scope or channel access inheritance.', parameters: ['workspaceId','scopeId'].map(name => ({name,in:'path',required:true,schema:{type:'string',format:'uuid'}})), responses: {'200': {description:'identity, scope_id, revision, can_manage, grants, effective_access'},'403':{description:'Membership required'},'404':{description:'Scope unavailable'}} },
+        put: { tags: ['Flight Deck PG'], summary: 'Add or revoke canonical scope role permissions', security: [{ nip98: [] }], description: 'Requires scope.manage, current expected_revision and a scope edit lease. context_editor adds context.edit; scope_manager adds scope.manage. Existing permissions are preserved. Explicit revoke removes only context.edit/scope.manage. Principals must be workspace members or canonical workspace groups.', parameters: ['workspaceId','scopeId'].map(name => ({name,in:'path',required:true,schema:{type:'string',format:'uuid'}})), requestBody:{required:true,content:{'application/json':{schema:{type:'object',additionalProperties:false,required:['principal_type','principal_id','expected_revision','lease_token'],properties:{principal_type:{enum:['actor','group']},principal_id:{type:'string',format:'uuid'},role:{enum:['context_editor','scope_manager']},revoke:{const:true},expected_revision:{type:'string'},lease_token:{type:'string'}}}}}}, responses:{'200':{description:'Updated access, revision and audit'},'400':{description:'Invalid principal or role'},'403':{description:'scope.manage required'},'409':{description:'Stale revision or edit lease'}} },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes': {
         get: {
           tags: ['Flight Deck PG'],
           summary: 'Contract fixture: list scopes',
-          description: 'Implemented PH1-5 runtime list of scopes visible through scope.read or readable channel grants.',
+          description: 'Implemented PH1-5 runtime list of scopes visible through scope.read, scope.manage, context.edit or readable channel grants.',
           'x-flightdeck-pg-contract-fixture': flightDeckPgContractFixturePaths['flightdeck_pg.scopes.list'],
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },

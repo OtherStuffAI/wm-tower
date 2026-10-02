@@ -529,7 +529,7 @@ export type FlightDeckPgDailyNoteVersionRow = {
   actor_npub?: string | null;
 };
 
-export type FlightDeckPgEditLeaseEntityType = 'task' | 'document';
+export type FlightDeckPgEditLeaseEntityType = 'task' | 'document' | 'scope';
 
 export type FlightDeckPgEditLeaseRow = {
   id: string;
@@ -2682,7 +2682,7 @@ export async function listVisibleFlightDeckPgScopes(
         (
           pg.resource_type = 'scope'
           AND pg.resource_scope_id = s.id
-          AND pg.permission = 'scope.read'
+          AND pg.permission IN ('scope.read', 'scope.manage', 'context.edit')
         )
         OR (
           pg.resource_type = 'channel'
@@ -7080,7 +7080,7 @@ export async function listVisibleFlightDeckPgEvents(
                 WHERE pg.workspace_id=e.workspace_id AND pg.revoked_at IS NULL
                   AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId})
                     OR (pg.principal_type='group' AND pg.principal_group_id IN ${sql(groupIds)}))
-                  AND ((pg.resource_type='scope' AND pg.resource_scope_id=s.id AND pg.permission='scope.read')
+                  AND ((pg.resource_type='scope' AND pg.resource_scope_id=s.id AND pg.permission IN ('scope.read','scope.manage','context.edit'))
                     OR (pg.resource_type='channel' AND pg.permission='channel.read' AND EXISTS (
                       SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=s.workspace_id
                         AND c.scope_id=s.id AND c.id=pg.resource_channel_id AND c.archived_at IS NULL)))

@@ -87,7 +87,7 @@ export async function readFlightDeckRecordPage(input: {
       if (e.family === 'scope') {
         const [scope] = await sql`SELECT 1 FROM flightdeck_pg_scopes WHERE workspace_id=${input.workspaceId} AND id=${e.id} AND archived_at IS NULL`;
         if (!scope) return false;
-        if (await grant('scope.read', 'scope', e.id)) return true;
+        if (await grant('scope.read', 'scope', e.id) || await grant('context.edit', 'scope', e.id) || await grant('scope.manage', 'scope', e.id)) return true;
         effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
         const groups = effectiveGroups.length ? effectiveGroups : ['00000000-0000-0000-0000-000000000000'];
         const [childGrant] = await sql`SELECT 1 FROM flightdeck_pg_permission_grants pg

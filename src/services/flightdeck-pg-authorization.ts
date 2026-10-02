@@ -110,6 +110,7 @@ const permissionResourceTypes: Record<FlightDeckPgPermission, FlightDeckPgGrantR
   'scope.read': 'scope',
   'scope.create': 'workspace',
   'scope.manage': 'scope',
+  'context.edit': 'scope',
   'channel.read': 'channel',
   'channel.create': 'scope',
   'channel.write': 'channel',
@@ -677,7 +678,7 @@ export async function canReadFlightDeckPgContextScope(
         WHERE g.workspace_id=s.workspace_id AND g.revoked_at IS NULL
           AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId})
             OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groups)}))
-          AND ((g.resource_type='scope' AND g.resource_scope_id=s.id AND g.permission='scope.read')
+          AND ((g.resource_type='scope' AND g.resource_scope_id=s.id AND g.permission IN ('scope.read','scope.manage','context.edit'))
             OR (g.resource_type='channel' AND g.permission='channel.read' AND EXISTS (
               SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=s.workspace_id AND c.scope_id=s.id
                 AND c.id=g.resource_channel_id AND c.archived_at IS NULL)))

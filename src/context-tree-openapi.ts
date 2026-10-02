@@ -30,12 +30,12 @@ export const contextTreeSchemas = {
   ContextUnlink: { type: 'object', additionalProperties: false, required: ['expected_row_version'], properties: { expected_row_version: expected } },
   ContextDelete: { type: 'object', additionalProperties: false, required: ['confirmation_token'], properties: { confirmation_token: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Hash of exact persisted subtree + active links from preview. Not an authorization token.' } } },
   ContextDeletePreview: { type: 'object', required: ['component_id', 'component_count', 'descendant_count', 'reference_count', 'confirmation_token'], properties: { component_id: uuid, component_count: integer, descendant_count: integer, reference_count: integer, confirmation_token: { type: 'string' } } },
-  ContextCapabilities: { type: 'object', required: ['read', 'manage'], properties: { read: { type: 'boolean' }, manage: { type: 'boolean' } } },
+  ContextCapabilities: { type: 'object', required: ['read', 'manage'], properties: { read: { type: 'boolean' }, manage: { type: 'boolean', description: 'Compatibility alias for edit, not scope administration' }, edit: { type: 'boolean' }, scope_manage: { type: 'boolean' } } },
 };
 const base = '/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes/{scopeId}/context/components';
 function operation(summary: string, response: object, body?: string, item = false, link = false, list = false, create = false) {
   return { tags: ['Flight Deck PG'], summary, security: [{ nip98: [] }],
-    description: 'Context Tree v1. Scope visibility for reads; scope.manage + visibility for edits and delete preview. Existing identity/error envelopes. Same-scope moves only; stale versions, circular parenting, duplicate reference and changed preview return 409. Archived/unreadable scope unavailable. Targets retain separate ACLs.',
+    description: 'Context Tree v1. Scope visibility for reads; context.edit or scope.manage + visibility for edits and delete preview. Existing identity/error envelopes. Same-scope moves only; stale versions, circular parenting, duplicate reference and changed preview return 409. Archived/unreadable scope unavailable. Targets retain separate ACLs.',
     parameters: ['workspaceId', 'scopeId', ...(item ? ['componentId'] : []), ...(link ? ['referenceId'] : [])].map(name => ({ name, in: 'path', required: true, schema: uuid })).concat(list ? [
       { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
       { name: 'cursor', in: 'query', required: false, schema: { type: 'string' }, description: 'Opaque route-bound keyset cursor. Current view, not a snapshot.' },

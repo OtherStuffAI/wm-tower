@@ -634,6 +634,7 @@ export const flightDeckPgPermissions = [
   'scope.read',
   'scope.create',
   'scope.manage',
+  'context.edit',
   'channel.read',
   'channel.create',
   'channel.write',
@@ -2930,3 +2931,7 @@ export type FlightDeckPgContextAttachRequest =
   | { target_type: 'doc' | 'file' | 'task'; target: FlightDeckPgContextRecordTarget; sort_order?: number }
   | { target_type: 'artifact'; target: FlightDeckPgContextArtifactTarget; sort_order?: number };
 export type FlightDeckPgContextEventHint = { schema_version: 1; mutation_id: string; scope_id: string; component_id: string };
+
+/** Scope roles translate to canonical grants; they are never independently persisted. */
+export type FlightDeckPgScopeAccessRole = 'context_editor' | 'scope_manager';
+export type FlightDeckPgScopeAccessMutation = { principal_type: 'actor' | 'group'; principal_id: string; expected_revision: string; lease_token: string } & ({role: FlightDeckPgScopeAccessRole} | {revoke: true});

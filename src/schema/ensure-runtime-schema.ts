@@ -1073,6 +1073,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
       ('scope.read', 'scope', 'Read accessible scopes'),
       ('scope.create', 'workspace', 'Create scopes inside a workspace'),
       ('scope.manage', 'scope', 'Manage scope metadata and access'),
+      ('context.edit', 'scope', 'Edit this scope context structure; no administration or target access'),
       ('channel.read', 'channel', 'Read accessible channels'),
       ('channel.create', 'scope', 'Create channels inside a scope'),
       ('channel.write', 'channel', 'Write messages or records in a channel'),
@@ -2838,7 +2839,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
       released_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CHECK (entity_type IN ('task', 'document')),
+      CONSTRAINT flightdeck_pg_edit_leases_entity_type_check CHECK (entity_type IN ('task', 'document', 'scope')),
       CHECK (length(trim(lease_token_hash)) > 0),
       CHECK (length(trim(holder_actor_npub)) > 0),
       CONSTRAINT flightdeck_pg_edit_leases_holder_membership_fkey
@@ -2846,6 +2847,11 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
         REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
         ON DELETE CASCADE
     )
+  `);
+
+  await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_edit_leases DROP CONSTRAINT IF EXISTS flightdeck_pg_edit_leases_entity_type_check;
+    ALTER TABLE flightdeck_pg_edit_leases ADD CONSTRAINT flightdeck_pg_edit_leases_entity_type_check CHECK (entity_type IN ('task', 'document', 'scope'));
   `);
 
   await sql.unsafe(`

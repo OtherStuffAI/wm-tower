@@ -688,6 +688,7 @@ describe('Flight Deck PG schema foundation', () => {
       { permission: 'channel.read', resource_type: 'channel' },
       { permission: 'channel.write', resource_type: 'channel' },
       { permission: 'comment.create', resource_type: 'channel' },
+      { permission: 'context.edit', resource_type: 'scope' },
       { permission: 'daily_note.read', resource_type: 'workspace' },
       { permission: 'daily_note.write', resource_type: 'workspace' },
       { permission: 'doc.read', resource_type: 'channel' },
