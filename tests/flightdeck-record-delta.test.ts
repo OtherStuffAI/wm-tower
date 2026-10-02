@@ -9,7 +9,7 @@ import { recordFamilies } from '../src/services/flightdeck-record-families';
 // Explicit opt-in: this suite must never point at the shared runtime database.
 const port = Number(process.env.RECORD_TEST_PORT);
 describe.skipIf(!port || port === 5432)('isolated record delta v1', () => {
-const dbName = `tower_record_delta_${process.pid}`;
+const dbName = `tower_record_delta_${process.pid}_${Date.now()}`;
 let db: ReturnType<typeof postgres>;
 let workspaceId: string, actorId: string, scopeId: string, channelId: string;
 const conn = { host: '127.0.0.1', port, username: 'postgres', password: 'postgres', onnotice: () => {} };
@@ -26,7 +26,7 @@ beforeAll(async () => {
   for (const permission of ['channel.read','task.read','doc.read']) await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${workspaceId},'actor',${actorId},'channel',${channelId},${permission})`;
   await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_scope_id,permission) VALUES(${workspaceId},'actor',${actorId},'scope',${scopeId},'scope.read')`;
 });
-afterAll(async () => { await db?.end(); });
+afterAll(async () => { await db?.end(); const admin=postgres({...conn,database:'postgres'}); await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`); await admin.end(); });
 async function message(body: string, sql = db) {
   const [r] = await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scopeId},${channelId},${body},${actorId},${actorId}) RETURNING *`;
   return r!;
@@ -44,7 +44,8 @@ test('every advertised family has all-mutation trigger and complete canonical fi
     const [trigger]=await db`SELECT tgtype FROM pg_trigger WHERE tgname=${`fd_record_${family}`}`;
     expect(Number(trigger!.tgtype)&(4|8|16)).toBe(4|8|16);
     const columns=await db`SELECT column_name FROM information_schema.columns WHERE table_name=${`flightdeck_pg_${table}`}`;
-    const fixture=fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
+    const context=JSON.parse(readFileSync(new URL('./fixtures/context-record-delta-v1.json',import.meta.url),'utf8'));
+    const fixture=family.startsWith('context_') ? {row:context[family==='context_component'?'components':'references'][0]} : fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
     expect(Object.keys(fixture.row).sort()).toEqual(columns.map(c=>c.column_name).sort());
   }
 });

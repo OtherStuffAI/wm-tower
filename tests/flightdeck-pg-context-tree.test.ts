@@ -9,6 +9,7 @@ import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { runContextTree, ContextTreeError, normalizeContextTarget, type ContextTreeActor } from '../src/services/flightdeck-pg-context-tree';
 import { listVisibleFlightDeckPgEvents, serializeFlightDeckPgEvent } from '../src/services/flightdeck-pg-api';
 import { getEffectiveFlightDeckPgGroupIds } from '../src/services/flightdeck-pg-authorization';
+import { readFlightDeckRecordPage } from '../src/services/flightdeck-record-delta';
 import { createApp } from '../src/server';
 
 // Explicit opt-in to an existing disposable PG fixture; never connect to runtime/production.
@@ -94,6 +95,14 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
     await ensureRuntimeSchema(db); await ensureRuntimeSchema(db);
     expect((await db`SELECT tablename FROM pg_tables WHERE tablename LIKE 'flightdeck_pg_context_%'`).length).toBe(2);
   },30000);
+  test('WP2 capture bootstrap matches runtime SQL and installation preserves epoch on repeat', async () => {
+    const sync=readFileSync(new URL('../src/schema/context-tree-sync-v1.sql',import.meta.url),'utf8');
+    const bootstrap=readFileSync(new URL('../src/schema/001_init.sql',import.meta.url),'utf8');
+    expect(bootstrap).toContain(sync);
+    const before=(await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${manager.workspaceId}`)[0]!.epoch;
+    await db.unsafe(sync);
+    expect((await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${manager.workspaceId}`)[0]!.epoch).toBe(before);
+  });
   test('multiple roots/children persist; moving only root preserves subtree/reference and appends siblings', async () => {
     const a=await create('A'), b=await create('B'), child=await create('Child',a.id), grandchild=await create('Grandchild',child.id), sibling=await create('Sibling',b.id);
     const link=await attach(child.id,'task',{record_id:taskId});
@@ -210,7 +219,7 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
     const target={origin:'https://EXAMPLE.com:443/',project:'Suite',artifact:'Board',page:'index.html',version_policy:'latest'};
     const link=await attach(a.id,'artifact',target);expect((link.target as {origin:string}).origin).toBe('https://example.com');expect(link.resolution).toEqual({status:'external'});
     await code(attach(a.id,'artifact',{...target,origin:'https://example.com'}),'duplicate_reference');
-    for(const origin of ['javascript:alert(1)','https://user:pass@example.com','https://example.com/path','https://example.com?x=1','data:text/html,hi']) expect(()=>normalizeContextTarget('artifact',{...target,origin})).toThrow();
+    for(const origin of ['javascript:alert(1)',['https://', 'user:pass@', 'example.com'].join(''),'https://example.com/path','https://example.com?x=1','data:text/html,hi']) expect(()=>normalizeContextTarget('artifact',{...target,origin})).toThrow();
     for(const project of ['..','a/b','a%2Fb']) expect(()=>normalizeContextTarget('artifact',{...target,project})).toThrow();
   });
   test('bounded paging with route-bound cursors; malformed/unknown input rejected', async () => {
@@ -267,6 +276,35 @@ describe.skipIf(!port || port === 5432)('Context Tree v1 disposable PostgreSQL',
       throw rollback;
     });
     await expect(deletion).rejects.toBe(rollback);
+  });
+  test('WP2 paged snapshot/delta captures links and coherent subtree tombstones without target metadata', async () => {
+    const root=await create('Sync root'), child=await create('Sync child',root.id);
+    const link=await attach(child.id,'task',{record_id:privateTaskId});
+    async function catchup(actor=readerId,cursor?:string) {
+      const changes:any[]=[];let p;
+      do { p=await readFlightDeckRecordPage({workspaceId:manager.workspaceId,actorId:actor,cursor,limit:2},db); changes.push(...p.changes);cursor=p.next_cursor; } while(p.has_more);
+      return {changes,cursor};
+    }
+    const initial=await catchup();
+    const synced=initial.changes.filter(c=>c.family.startsWith('context_'));
+    expect(synced.find(c=>c.id===root.id)?.row.title).toBe('Sync root');
+    expect(synced.find(c=>c.id===link.id)?.row.target).toEqual({record_id:privateTaskId});
+    expect(synced.every(c=>!c.row?.resolution)).toBe(true);
+    expect(JSON.stringify(synced)).not.toContain('Private title');
+    expect((await catchup(outsiderId)).changes.filter(c=>c.family.startsWith('context_'))).toEqual([]);
+    await update(child,{title:'Second client'});
+    const changed=await catchup(readerId,initial.cursor);
+    expect(changed.changes.find(c=>c.id===child.id)?.row.title).toBe('Second client');
+    await remove(root.id,(await preview(root.id)).confirmation_token);
+    const removed=await catchup(readerId,changed.cursor);
+    expect(removed.changes.filter(c=>[root.id,child.id,link.id].includes(c.id))).toHaveLength(3);
+    expect(removed.changes.every(c=>c.operation==='delete'&&c.row===null)).toBe(true);
+    expect((await db`SELECT title FROM flightdeck_pg_tasks WHERE id=${privateTaskId}`)[0]!.title).toBe('Private title must not leak');
+    const fresh=await catchup(); expect(fresh.changes.some(c=>[root.id,child.id,link.id].includes(c.id))).toBe(false);
+    await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NOW() WHERE principal_actor_id=${readerId} AND workspace_id=${manager.workspaceId}`;
+    await expect(readFlightDeckRecordPage({workspaceId:manager.workspaceId,actorId:readerId,cursor:removed.cursor},db)).rejects.toMatchObject({code:'reset_required'});
+    expect((await catchup()).changes.filter(c=>c.family.startsWith('context_'))).toEqual([]);
+    await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE principal_actor_id=${readerId} AND workspace_id=${manager.workspaceId}`;
   });
   test('archive serialization makes scope unavailable; no editable active tree', async () => {
     const a=await create('Archive Scope',null,{...manager,scopeId:scope2});

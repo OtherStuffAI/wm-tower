@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
-import { authorizeFlightDeckPgOperation, getEffectiveFlightDeckPgGroupIds } from './flightdeck-pg-authorization';
+import { authorizeFlightDeckPgOperation, getEffectiveFlightDeckPgGroupIds, canReadFlightDeckPgContextScope } from './flightdeck-pg-authorization';
 import { recordFamilies } from './flightdeck-record-families';
 import type { FlightDeckRecordActor, FlightDeckRecordChange, FlightDeckRecordPage } from '../types';
 
@@ -75,6 +75,13 @@ export async function readFlightDeckRecordPage(input: {
             workspaceId: input.workspaceId, permission: 'workspace.read', resource: { type: 'workspace' } }, sql);
           decisions.set(key, decision.allowed);
         }
+        return decisions.get(key)!;
+      }
+      if (['context_component', 'context_reference'].includes(e.family)) {
+        effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
+        const key = `context-scope:${r.scope_id}`;
+        if (!decisions.has(key)) decisions.set(key, await canReadFlightDeckPgContextScope({
+          workspaceId: input.workspaceId, scopeId: r.scope_id, actorId: input.actorId, groupIds: effectiveGroups }, sql));
         return decisions.get(key)!;
       }
       if (e.family === 'scope') {

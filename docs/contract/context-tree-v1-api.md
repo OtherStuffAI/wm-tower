@@ -154,3 +154,28 @@ CONTEXT_TEST_PORT=<disposable-postgres-port> bun test tests/flightdeck-pg-contex
 Runtime rebuild/migration, health and authenticated live smoke validation are
 separate WP6 activation work under explicit lifecycle authorization. Board scenes,
 Project-defn v4 and all image assets are unchanged.
+
+## WP2 canonical record recovery
+
+`context_component` and `context_reference` are registered in the canonical PG
+record-family registry. `context-tree-sync-v1.sql` installs/backfills capture
+triggers after the WP1 tables and existing record journal functions. Bootstrap
+and runtime schema use the same additive SQL. First installation rotates record
+cursor epochs so existing caches negotiate a complete replacement snapshot;
+repeated installation preserves epochs/cursors.
+
+Both families use bounded `/records` snapshot/delta paging and explicit null-row
+`delete` tombstones. Scope visibility uses the same WP1 scope/channel grant rule,
+including for deleted rows; archived/inaccessible scopes cannot disclose structure.
+Permission changes and archival invalidate cursors through the existing epoch
+protocol. Reference payloads are canonical stored rows, without title/resolution;
+use the existing typed reference read to recheck target ACLs. Outbox events remain
+WP1 mutation/scope/component hints and do not carry record/target content.
+
+Flight Deck accumulates context authority across pages, then publishes component
+and reference projections together at terminal catchup. This is stronger than
+per-event/mutation batching: split pages, reconnect and subtree tombstones never
+publish a partial hierarchy. Authority resets hide context before replacement.
+See Flight Deck `docs/design/context-tree-cache.md` for WP3/4 service entrypoints.
+Source/disposable-fixture verification does not activate the shared runtime;
+activation and live convergence checks remain WP6.

@@ -1,0 +1,45 @@
+{
+  "components": [
+    {
+      "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "workspace_id": "11111111-1111-4111-8111-111111111111",
+      "scope_id": "44444444-4444-4444-8444-444444444444",
+      "title": "API",
+      "parent_id": null,
+      "sort_order": 0,
+      "row_version": 1,
+      "created_at": "2026-10-02T00:00:00.000Z",
+      "updated_at": "2026-10-02T00:00:00.000Z",
+      "deleted_at": null
+    },
+    {
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "workspace_id": "11111111-1111-4111-8111-111111111111",
+      "scope_id": "44444444-4444-4444-8444-444444444444",
+      "title": "Child",
+      "parent_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "sort_order": 0,
+      "row_version": 1,
+      "created_at": "2026-10-02T00:00:00.000Z",
+      "updated_at": "2026-10-02T00:00:00.000Z",
+      "deleted_at": null
+    }
+  ],
+  "references": [
+    {
+      "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "workspace_id": "11111111-1111-4111-8111-111111111111",
+      "scope_id": "44444444-4444-4444-8444-444444444444",
+      "component_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "target_type": "doc",
+      "target": {
+        "record_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+      },
+      "sort_order": 0,
+      "row_version": 1,
+      "created_at": "2026-10-02T00:00:00.000Z",
+      "updated_at": "2026-10-02T00:00:00.000Z",
+      "deleted_at": null
+    }
+  ]
+}
