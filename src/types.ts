@@ -476,6 +476,14 @@ export const flightDeckPgContractNames = [
   'flightdeck_pg.channel_grants.list',
   'flightdeck_pg.channel_grants.create',
   'flightdeck_pg.events.list',
+  'flightdeck_pg.context.components.list',
+  'flightdeck_pg.context.components.create',
+  'flightdeck_pg.context.components.update',
+  'flightdeck_pg.context.references.list',
+  'flightdeck_pg.context.references.attach',
+  'flightdeck_pg.context.references.unlink',
+  'flightdeck_pg.context.delete.preview',
+  'flightdeck_pg.context.delete.confirm',
   'flightdeck_pg.auth_error',
   'flightdeck_pg.permission_denied',
   'flightdeck_pg.validation_error',
@@ -520,6 +528,14 @@ export const flightDeckPgContractFixturePaths: Record<FlightDeckPgContractName, 
   'flightdeck_pg.channel_grants.list': 'fixtures/flightdeck-pg/channel-grants-list.json',
   'flightdeck_pg.channel_grants.create': 'fixtures/flightdeck-pg/channel-grants-create.json',
   'flightdeck_pg.events.list': 'fixtures/flightdeck-pg/events-list.json',
+  'flightdeck_pg.context.components.list': 'fixtures/flightdeck-pg/context-components-list.json',
+  'flightdeck_pg.context.components.create': 'fixtures/flightdeck-pg/context-components-create.json',
+  'flightdeck_pg.context.components.update': 'fixtures/flightdeck-pg/context-components-update.json',
+  'flightdeck_pg.context.references.list': 'fixtures/flightdeck-pg/context-references-list.json',
+  'flightdeck_pg.context.references.attach': 'fixtures/flightdeck-pg/context-references-attach.json',
+  'flightdeck_pg.context.references.unlink': 'fixtures/flightdeck-pg/context-references-unlink.json',
+  'flightdeck_pg.context.delete.preview': 'fixtures/flightdeck-pg/context-delete-preview.json',
+  'flightdeck_pg.context.delete.confirm': 'fixtures/flightdeck-pg/context-delete-confirm.json',
   'flightdeck_pg.auth_error': 'fixtures/flightdeck-pg/auth-error.json',
   'flightdeck_pg.permission_denied': 'fixtures/flightdeck-pg/permission-denied.json',
   'flightdeck_pg.validation_error': 'fixtures/flightdeck-pg/validation-error.json',
@@ -2882,3 +2898,35 @@ export interface FlightDeckPgFeedItemState {
 export interface FlightDeckPgFeedMutation {
   mutation_id: string; expected_row_version: number;
 }
+
+/** Canonical Context Tree v1. Dates are ISO strings on the wire. */
+export type FlightDeckPgContextTargetType = 'doc' | 'file' | 'task' | 'artifact';
+export type FlightDeckPgContextRecordTarget = { record_id: string };
+export type FlightDeckPgContextArtifactTarget = {
+  origin: string; project: string; artifact: string; page: 'index.html'; version_policy: 'latest';
+};
+export type FlightDeckPgContextTarget = FlightDeckPgContextRecordTarget | FlightDeckPgContextArtifactTarget;
+export interface FlightDeckPgContextComponent {
+  id: string; workspace_id: string; scope_id: string; title: string; parent_id: string | null;
+  sort_order: number; row_version: number; created_at: string; updated_at: string; deleted_at: string | null;
+}
+export interface FlightDeckPgContextReference {
+  id: string; workspace_id: string; scope_id: string; component_id: string;
+  target_type: FlightDeckPgContextTargetType; target: FlightDeckPgContextTarget;
+  sort_order: number; row_version: number; created_at: string; updated_at: string; deleted_at: string | null;
+}
+export interface FlightDeckPgContextCapabilities { read: boolean; manage: boolean }
+export interface FlightDeckPgContextDeletePreview {
+  component_id: string; component_count: number; descendant_count: number; reference_count: number; confirmation_token: string;
+}
+export type FlightDeckPgContextResolution =
+  | { status: 'unavailable' }
+  | { status: 'external' }
+  | { status: 'available'; record_id: string; title: string | null };
+export type FlightDeckPgContextResolvedReference = FlightDeckPgContextReference & { resolution: FlightDeckPgContextResolution };
+export type FlightDeckPgContextCreateRequest = { title: string; parent_id?: string | null; sort_order?: number };
+export type FlightDeckPgContextPatchRequest = { expected_row_version: number; title?: string; parent_id?: string | null; sort_order?: number };
+export type FlightDeckPgContextAttachRequest =
+  | { target_type: 'doc' | 'file' | 'task'; target: FlightDeckPgContextRecordTarget; sort_order?: number }
+  | { target_type: 'artifact'; target: FlightDeckPgContextArtifactTarget; sort_order?: number };
+export type FlightDeckPgContextEventHint = { schema_version: 1; mutation_id: string; scope_id: string; component_id: string };

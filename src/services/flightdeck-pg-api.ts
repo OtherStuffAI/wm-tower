@@ -217,6 +217,7 @@ function asDbJson(value: unknown): DbJsonValue {
 export const flightDeckPgCapabilities = [
   'pg_workspaces',
   'pg_scopes',
+  'pg_context_tree',
   'pg_channels',
   'pg_channel_grants',
   'pg_tasks',
@@ -236,6 +237,7 @@ export const flightDeckPgCapabilities = [
 
 export const flightDeckPgWorkspaceCapabilities = [
   'pg_scopes',
+  'pg_context_tree',
   'pg_channels',
   'pg_channel_grants',
   'pg_tasks',
@@ -1794,6 +1796,11 @@ export function decodeFlightDeckPgEventCursor(raw: string | null | undefined): F
 function buildFlightDeckPgEventRefetchRoute(event: FlightDeckPgOutboxEventRow) {
   const workspaceId = encodeURIComponent(event.workspace_id);
   const entityId = event.entity_id ? encodeURIComponent(event.entity_id) : null;
+  if (['context_component', 'context_reference'].includes(event.entity_type) && event.scope_id) {
+    const base = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/scopes/${encodeURIComponent(event.scope_id)}/context/components`;
+    return event.entity_type === 'context_reference' && event.payload?.component_id
+      ? `${base}/${encodeURIComponent(String(event.payload.component_id))}/references` : base;
+  }
   if (event.entity_type === 'channel' && event.scope_id) {
     return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/scopes/${encodeURIComponent(event.scope_id)}/channels`;
   }
@@ -7064,8 +7071,25 @@ export async function listVisibleFlightDeckPgEvents(
           )
         )
         OR (
+          e.entity_type IN ('context_component','context_reference')
+          AND EXISTS (
+            SELECT 1 FROM flightdeck_pg_scopes s
+            WHERE s.workspace_id=e.workspace_id AND s.id=e.scope_id AND s.archived_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM flightdeck_pg_permission_grants pg
+                WHERE pg.workspace_id=e.workspace_id AND pg.revoked_at IS NULL
+                  AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId})
+                    OR (pg.principal_type='group' AND pg.principal_group_id IN ${sql(groupIds)}))
+                  AND ((pg.resource_type='scope' AND pg.resource_scope_id=s.id AND pg.permission='scope.read')
+                    OR (pg.resource_type='channel' AND pg.permission='channel.read' AND EXISTS (
+                      SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=s.workspace_id
+                        AND c.scope_id=s.id AND c.id=pg.resource_channel_id AND c.archived_at IS NULL)))
+              )
+          )
+        )
+        OR (
           e.channel_id IS NULL
-          AND e.entity_type NOT IN ('feed_subscription','feed_item_state')
+          AND e.entity_type NOT IN ('feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
         )
       )

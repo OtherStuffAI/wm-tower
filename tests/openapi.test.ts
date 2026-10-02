@@ -289,3 +289,23 @@ describe('OpenAPI docs', () => {
     expect(html).toContain('Schema manifest');
   });
 });
+
+describe('Context Tree v1 contract publication', () => {
+  const app = createApp();
+  test('publishes all eight authenticated routes, row/CAS/delete schemas and reusable fixtures', async () => {
+    const body=await (await app.request('/openapi.json')).json();
+    const names=flightDeckPgContractNames.filter(name=>name.startsWith('flightdeck_pg.context.'));
+    expect(names.length).toBe(8);
+    for(const name of names) {
+      const fixture=JSON.parse(readFileSync(join(import.meta.dir,'..',flightDeckPgContractFixturePaths[name]),'utf8'));
+      const operation=body.paths[fixture.route][fixture.method.toLowerCase()];
+      expect(operation.security).toEqual([{nip98:[]}]);
+      expect(operation['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths[name]);
+    }
+    expect(body.components.schemas.ContextComponent.properties.parent_id.type).toEqual(['string','null']);
+    expect(body.components.schemas.ContextPatch.required).toContain('expected_row_version');
+    expect(body.components.schemas.ContextUnlink.required).toContain('expected_row_version');
+    expect(body.components.schemas.ContextDelete.required).toContain('confirmation_token');
+    expect(body.components.schemas.ContextReference.properties.resolution.oneOf[0].additionalProperties).toBe(false);
+  });
+});

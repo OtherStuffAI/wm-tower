@@ -248,6 +248,8 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_audit_events',
       'flightdeck_pg_autopilot_connections',
       'flightdeck_pg_channels',
+      'flightdeck_pg_context_components',
+      'flightdeck_pg_context_references',
       'flightdeck_pg_daily_note_versions',
       'flightdeck_pg_daily_notes',
       'flightdeck_pg_daily_scope_agent_access',

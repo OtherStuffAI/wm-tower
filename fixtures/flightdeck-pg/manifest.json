@@ -42,7 +42,15 @@
     "flightdeck_pg.events.list": "fixtures/flightdeck-pg/events-list.json",
     "flightdeck_pg.auth_error": "fixtures/flightdeck-pg/auth-error.json",
     "flightdeck_pg.permission_denied": "fixtures/flightdeck-pg/permission-denied.json",
-    "flightdeck_pg.validation_error": "fixtures/flightdeck-pg/validation-error.json"
+    "flightdeck_pg.validation_error": "fixtures/flightdeck-pg/validation-error.json",
+    "flightdeck_pg.context.components.list": "fixtures/flightdeck-pg/context-components-list.json",
+    "flightdeck_pg.context.components.create": "fixtures/flightdeck-pg/context-components-create.json",
+    "flightdeck_pg.context.components.update": "fixtures/flightdeck-pg/context-components-update.json",
+    "flightdeck_pg.context.references.list": "fixtures/flightdeck-pg/context-references-list.json",
+    "flightdeck_pg.context.references.attach": "fixtures/flightdeck-pg/context-references-attach.json",
+    "flightdeck_pg.context.references.unlink": "fixtures/flightdeck-pg/context-references-unlink.json",
+    "flightdeck_pg.context.delete.preview": "fixtures/flightdeck-pg/context-delete-preview.json",
+    "flightdeck_pg.context.delete.confirm": "fixtures/flightdeck-pg/context-delete-confirm.json"
   },
   "identity_rule": "Every fixture exposes stable identity fields as tower_service_npub, workspace_service_npub, workspace_owner_npub, workspace_id, and app_npub. Fields that are not applicable to public service metadata are present as null in the identity object.",
   "channel_thread_derivation_rule": {

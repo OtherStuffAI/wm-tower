@@ -1,0 +1,92 @@
+{
+  "contract_name": "flightdeck_pg.context.components.update",
+  "fixture_version": 1,
+  "route": "/api/v4/flightdeck-pg/workspaces/{workspaceId}/scopes/{scopeId}/context/components/{componentId}",
+  "method": "PATCH",
+  "required_nip98_actor": "workspace_member",
+  "required_app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll",
+  "required_permissions": [
+    "scope.manage"
+  ],
+  "stable_identity_fields": [
+    "tower_service_npub",
+    "workspace_service_npub",
+    "workspace_owner_npub",
+    "workspace_id",
+    "app_npub"
+  ],
+  "request_shape": {
+    "type": "object",
+    "required": [
+      "title",
+      "expected_row_version"
+    ],
+    "properties": {
+      "title": "See context-tree-v1 OpenAPI",
+      "expected_row_version": "See context-tree-v1 OpenAPI"
+    }
+  },
+  "response_shape": {
+    "type": "object",
+    "required": [
+      "identity",
+      "component",
+      "capabilities",
+      "audit",
+      "outbox",
+      "mutation_id"
+    ],
+    "properties": {
+      "identity": "See context-tree-v1 OpenAPI",
+      "component": "See context-tree-v1 OpenAPI",
+      "capabilities": "See context-tree-v1 OpenAPI",
+      "audit": "See context-tree-v1 OpenAPI",
+      "outbox": "See context-tree-v1 OpenAPI",
+      "mutation_id": "See context-tree-v1 OpenAPI"
+    }
+  },
+  "example": {
+    "request": {
+      "title": "API v2",
+      "expected_row_version": 1
+    },
+    "response": {
+      "identity": {
+        "tower_service_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+        "workspace_service_npub": "npub1gcnhnt2245u4z3s5w5d8zzzl9ugwr3a9j0jwqv80kku8y889tv9sg89jj8",
+        "workspace_owner_npub": "npub1vtq2q3k6en5xmhgrg0rd8378ns3q3wsdnjw0yjndq3kjr5sljrmsma6t3d",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "app_npub": "npub17qr2rr2k20zwmaferler5c0s8lur6gm73q8wvyv8l20n0xsz3c9q7m7fll"
+      },
+      "component": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "44444444-4444-4444-8444-444444444444",
+        "title": "API v2",
+        "parent_id": null,
+        "sort_order": 0,
+        "row_version": 2,
+        "created_at": "2026-10-02T00:00:00.000Z",
+        "updated_at": "2026-10-02T00:00:00.000Z",
+        "deleted_at": null
+      },
+      "capabilities": {
+        "read": true,
+        "manage": true
+      },
+      "audit": {
+        "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "operation": "context.update",
+        "actor_npub": "npub1example"
+      },
+      "outbox": [
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "row_version": 100
+        }
+      ],
+      "mutation_id": "99999999-9999-4999-8999-999999999999"
+    }
+  },
+  "notes": "Generic source contract example; not a live deployment. Target resolution requires separate ACL; docs map doc \u2192 document in normal openers. Token is illustrative, use live preview. Scope visibility also accepts channel.read in the scope; writes require visibility plus scope.manage."
+}

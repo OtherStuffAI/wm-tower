@@ -660,3 +660,28 @@ export async function createFlightDeckPgNestedGroupEdge(
 
   return { ok: true, edge };
 }
+
+/** Same visibility rule as the scope browser: scope.read OR readable active channel.
+ * This deliberately does not authorize reference targets or grant management. */
+export async function canReadFlightDeckPgContextScope(
+  input: { workspaceId: string; scopeId: string; actorId: string; groupIds: string[] },
+  sql: DbClient = getDb(),
+): Promise<boolean> {
+  const groups = input.groupIds.length ? input.groupIds : ['00000000-0000-0000-0000-000000000000'];
+  const [visible] = await sql`
+    SELECT s.id FROM flightdeck_pg_scopes s
+    JOIN flightdeck_pg_workspace_memberships m ON m.workspace_id=s.workspace_id AND m.actor_id=${input.actorId}
+    WHERE s.workspace_id=${input.workspaceId} AND s.id=${input.scopeId} AND s.archived_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM flightdeck_pg_permission_grants g
+        WHERE g.workspace_id=s.workspace_id AND g.revoked_at IS NULL
+          AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId})
+            OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groups)}))
+          AND ((g.resource_type='scope' AND g.resource_scope_id=s.id AND g.permission='scope.read')
+            OR (g.resource_type='channel' AND g.permission='channel.read' AND EXISTS (
+              SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=s.workspace_id AND c.scope_id=s.id
+                AND c.id=g.resource_channel_id AND c.archived_at IS NULL)))
+      ) LIMIT 1
+  `;
+  return Boolean(visible);
+}

@@ -1,3 +1,4 @@
+import { contextTreePaths, contextTreeSchemas } from './context-tree-openapi';
 import { feedReaderPaths, feedReaderSchemas, FEED_READER_SOURCE_BUILD } from './feed-reader-openapi';
 import { drivePaths } from './drive-openapi';
 import { learningPaths, learningSchemas } from './learning/openapi';
@@ -2449,6 +2450,7 @@ export function buildOpenApiDocument(origin: string) {
       },
       schemas: {
         ...feedReaderSchemas,
+        ...contextTreeSchemas,
         ...learningSchemas,
         WappPublishingDestination: {
           type: 'object', additionalProperties: false, required: ['scope_id', 'channel_id'],
@@ -4194,6 +4196,7 @@ export function buildOpenApiDocument(origin: string) {
     security: [{ nip98: [] }],
     paths: {
       ...feedReaderPaths,
+      ...contextTreePaths,
       ...drivePaths,
       ...learningPaths,
       '/health': {
