@@ -9,8 +9,9 @@ const ownedPermissions = ['context.edit', 'scope.manage'];
 export type ScopeAccessRole = keyof typeof roles;
 
 async function grants(input: ContextTreeActor, sql: Db) {
-  return sql`SELECT g.*, a.display_name AS actor_label,a.npub AS actor_npub,a.kind AS actor_kind,p.name AS group_label
+  return sql`SELECT g.*, COALESCE(NULLIF(a.display_name,''),NULLIF(up.display_name,'')) AS actor_label,a.npub AS actor_npub,a.kind AS actor_kind,p.name AS group_label
     FROM flightdeck_pg_permission_grants g LEFT JOIN flightdeck_pg_actors a ON a.id=g.principal_actor_id
+    LEFT JOIN user_profiles up ON up.user_npub=a.npub
     LEFT JOIN flightdeck_pg_groups p ON p.workspace_id=g.workspace_id AND p.id=g.principal_group_id
     WHERE g.workspace_id=${input.workspaceId} AND g.resource_type='scope' AND g.resource_scope_id=${input.scopeId}
       AND g.revoked_at IS NULL ORDER BY g.id`;
@@ -24,7 +25,7 @@ function bundles(rows: any[]) {
     const id = row.principal_actor_id || row.principal_group_id, key = `${row.principal_type}:${id}`;
     const b = result.get(key) || { principal_type: row.principal_type, principal_id: id,
       label: row.actor_label || row.group_label || (row.actor_kind === 'agent' ? 'Unnamed agent' : row.principal_type === 'group' ? 'Unnamed group' : 'Unnamed person'),
-      kind: row.actor_kind || 'group', permissions: [], grant_ids: [] };
+      kind: row.actor_kind || 'group', npub: row.actor_npub || null, permissions: [], grant_ids: [] };
     b.permissions.push(row.permission); b.grant_ids.push(row.id); result.set(key,b);
   }
   return [...result.values()].map(b => ({...b, role: b.permissions.includes('scope.manage') ? 'scope_manager' : b.permissions.includes('context.edit') ? 'context_editor' : 'custom'}));
@@ -78,17 +79,17 @@ export async function runScopeAccess(input: ContextTreeActor, body?: unknown, db
       rows = await grants(input,sql);
     }
     // Readers see only their own provenance. Scope managers can inspect all workspace members.
-    const members = manager.allowed ? await sql`SELECT a.id,a.display_name,a.kind FROM flightdeck_pg_workspace_memberships m JOIN flightdeck_pg_actors a ON a.id=m.actor_id WHERE m.workspace_id=${input.workspaceId}` : [{id:actor.id,display_name:actor.display_name,kind:actor.kind}];
+    const members = manager.allowed ? await sql`SELECT a.id,a.npub,COALESCE(NULLIF(a.display_name,''),NULLIF(up.display_name,'')) AS display_name,a.kind FROM flightdeck_pg_workspace_memberships m JOIN flightdeck_pg_actors a ON a.id=m.actor_id LEFT JOIN user_profiles up ON up.user_npub=a.npub WHERE m.workspace_id=${input.workspaceId}` : [{id:actor.id,display_name:actor.display_name,kind:actor.kind,npub:actor.npub}];
     const principalGroups = manager.allowed ? await sql`SELECT id,name FROM flightdeck_pg_groups WHERE workspace_id=${input.workspaceId} ORDER BY name,id` : [];
-    const principals = manager.allowed ? { actors: members.map(m=>({id:m.id,kind:m.kind,label:m.display_name || (m.kind==='agent'?'Unnamed agent':'Unnamed person')})), groups: principalGroups.map(g=>({id:g.id,label:g.name || 'Unnamed group'})) } : {actors:[],groups:[]};
+    const principals = manager.allowed ? { actors: members.map(m=>({id:m.id,kind:m.kind,npub:m.npub,label:m.display_name || (m.kind==='agent'?'Unnamed agent':'Unnamed person')})), groups: principalGroups.map(g=>({id:g.id,label:g.name || 'Unnamed group'})) } : {actors:[],groups:[]};
     const effective = [];
     for (const m of members) {
       const groups = await getEffectiveFlightDeckPgGroupIds(input.workspaceId,m.id,sql);
       const sources = rows.filter(r => r.principal_actor_id===m.id || (r.principal_type==='group' && groups.includes(r.principal_group_id)));
       const permissions = [...new Set(sources.map(r=>r.permission))];
       if (!permissions.includes('scope.manage') && !permissions.includes('context.edit')) continue;
-      effective.push({actor_id:m.id,label:m.display_name || (m.kind==='agent'?'Unnamed agent':'Unnamed person'),kind:m.kind,
-        role:permissions.includes('scope.manage')?'scope_manager':'context_editor',sources:sources.filter(r=>ownedPermissions.includes(r.permission)).map(r=>({grant_id:r.id,permission:r.permission,via:r.principal_type==='group'?r.group_label:'Direct',group_id:r.principal_group_id}))});
+      effective.push({actor_id:m.id,npub:m.npub,label:m.display_name || (m.kind==='agent'?'Unnamed agent':'Unnamed person'),kind:m.kind,
+        role:permissions.includes('scope.manage')?'scope_manager':'context_editor',sources:sources.filter(r=>ownedPermissions.includes(r.permission)).map(r=>({grant_id:r.id,permission:r.permission,via:r.principal_type==='group'?(r.group_label || 'Unnamed group'):'Direct',group_id:r.principal_group_id}))});
     }
     const currentManage = await authorizeFlightDeckPgOperation({...input,permission:'scope.manage',resource:{type:'scope',scopeId:input.scopeId}},sql);
     return {scope_id:input.scopeId,revision:revision(rows),can_manage:currentManage.allowed,principals,grants:manager.allowed?bundles(rows):[],effective_access:effective,...(audit?{audit}:{})};
