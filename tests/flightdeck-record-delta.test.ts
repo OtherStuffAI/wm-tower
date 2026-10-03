@@ -34,6 +34,33 @@ async function message(body: string, sql = db) {
 async function page(cursor?: string, limit=200) { return readFlightDeckRecordPage({workspaceId,actorId,cursor,limit},db); }
 async function synced() { let p=await page(); while(p.has_more) p=await page(p.next_cursor); return p.next_cursor; }
 
+test('runtime upgrade migrates existing cursors without resurrecting expired rows and is idempotent',async()=>{
+  const {setDb,getDb}=await import('../src/db');
+  const previousDb=getDb();
+  const {ensureRuntimeSchema}=await import('../src/schema/ensure-runtime-schema');
+  const cursor=await synced();
+  await db`DROP INDEX idx_fd_record_cursor_last_used`;
+  await db`ALTER TABLE flightdeck_pg_record_cursors DROP COLUMN last_used_at`;
+  await db`CREATE INDEX idx_fd_record_cursor_expiry ON flightdeck_pg_record_cursors(created_at,token)`;
+  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '8 days' WHERE token=${cursor}`;
+  // Reinstall the pre-fix function to prove startup replaces existing functions.
+  const source=readFileSync(new URL('../src/schema/001_init.sql',import.meta.url),'utf8');
+  const legacy=splitSqlStatements(source).find(s=>s.startsWith('CREATE OR REPLACE FUNCTION flightdeck_pg_record_reset()'))!
+    .replace("IF TG_OP='UPDATE' AND to_jsonb(OLD) IS NOT DISTINCT FROM to_jsonb(NEW) THEN RETURN NEW; END IF;",'');
+  await db.unsafe(legacy);
+  setDb(db);
+  try {await ensureRuntimeSchema();await ensureRuntimeSchema();} finally {setDb(previousDb);}
+  const [saved]=await db`SELECT last_used_at FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  expect(saved!.last_used_at).toBeNull();
+  await expect(page(cursor)).rejects.toMatchObject({status:409});
+  const fresh=await synced();
+  await db`UPDATE flightdeck_pg_workspace_memberships SET role=role WHERE workspace_id=${workspaceId}`;
+  expect((await page(fresh)).next_cursor).toBe(fresh);
+  const indexes=await db`SELECT indexname FROM pg_indexes WHERE tablename='flightdeck_pg_record_cursors'`;
+  expect(indexes.some(i=>i.indexname==='idx_fd_record_cursor_last_used')).toBe(true);
+  expect(indexes.some(i=>i.indexname==='idx_fd_record_cursor_expiry')).toBe(false);
+},30000);
+
 test('every advertised family has all-mutation trigger and complete canonical fixture columns', async () => {
   const fixtures=JSON.parse(readFileSync(new URL('./fixtures/flightdeck-record-delta-v1.json',import.meta.url),'utf8'));
   const fixtureActors = new Map(fixtures.canonical_upserts.actors.map((actor:any)=>[actor.actor_id,actor]));
@@ -113,8 +140,8 @@ test('late commit cannot be skipped by a higher committed position; rollback is 
   let secondCommitted=false;
   const second=db.begin(async tx=>{await message('later',tx as unknown as typeof db);}).then(()=>{secondCommitted=true;});
   await new Promise(r=>setTimeout(r,30));expect(secondCommitted).toBe(false);
-  expect((await page(cursor)).changes).toHaveLength(0);
-  release();await Promise.all([first,second]);
+  const racingPage=page(cursor);
+  release();await Promise.all([first,second,racingPage]);
   const result=await page(cursor);expect(result.changes.map(c=>c.row!.body)).toEqual(['late','later']);
   expect(BigInt(result.changes[1]!.version)>BigInt(result.changes[0]!.version)).toBe(true);
   try {await db.begin(async tx=>{await message('rolled back',tx as unknown as typeof db);throw new Error('rollback');});}catch{}
@@ -144,6 +171,141 @@ test('grant/revocation reset both delta and unfinished snapshot; actor-bound cur
   await expect(page('00000000-0000-4000-8000-000000000001')).rejects.toMatchObject({status:409});
   await expect(page('legacy-cursor')).rejects.toMatchObject({status:400});
 });
+test('identical authority updates preserve epoch and delta continuation across every reset table',async()=>{
+  const [g]=await db`INSERT INTO flightdeck_pg_groups(workspace_id,name,kind) VALUES(${workspaceId},'noop edge','custom') RETURNING id`;
+  const [parent]=await db`SELECT group_id FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${actorId} LIMIT 1`;
+  await db`INSERT INTO flightdeck_pg_group_edges(workspace_id,parent_group_id,child_group_id) VALUES(${workspaceId},${parent!.group_id},${g!.id})`;
+  const cursor=await synced();
+  const [before]=await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${workspaceId}`;
+  for(const table of ['permission_grants','workspace_memberships','group_memberships','group_edges']) {
+    await db`UPDATE ${db(`flightdeck_pg_${table}`)} SET workspace_id=workspace_id WHERE workspace_id=${workspaceId}`;
+    expect((await page(cursor)).next_cursor).toBe(cursor);
+  }
+  const [after]=await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${workspaceId}`;
+  expect(after!.epoch).toBe(before!.epoch);
+  const m=await message('after no-op authority updates');
+  expect((await page(cursor)).changes.some(c=>c.id===m.id)).toBe(true);
+  await db`DELETE FROM flightdeck_pg_group_edges WHERE workspace_id=${workspaceId} AND child_group_id=${g!.id}`;
+});
+
+test('real membership and group-edge mutations reset, including INSERT and DELETE',async()=>{
+  async function resets(mutate:()=>Promise<unknown>) {
+    const cursor=await synced();await mutate();
+    await expect(page(cursor)).rejects.toMatchObject({status:409,code:'reset_required'});
+  }
+  await resets(()=>db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${workspaceId},'actor',${actorId},'channel',${channelId},'doc.write')`);
+  await resets(()=>db`DELETE FROM flightdeck_pg_permission_grants WHERE workspace_id=${workspaceId} AND permission='doc.write'`);
+  await resets(()=>db`UPDATE flightdeck_pg_workspace_memberships SET role='admin' WHERE workspace_id=${workspaceId} AND actor_id=${actorId}`);
+  await resets(()=>db`UPDATE flightdeck_pg_workspace_memberships SET role='owner' WHERE workspace_id=${workspaceId} AND actor_id=${actorId}`);
+  const groups=await db`INSERT INTO flightdeck_pg_groups(workspace_id,name,kind) VALUES(${workspaceId},'edge A','custom'),(${workspaceId},'edge B','custom'),(${workspaceId},'edge C','custom') RETURNING id`;
+  await resets(()=>db`INSERT INTO flightdeck_pg_group_memberships(workspace_id,group_id,actor_id) VALUES(${workspaceId},${groups[0]!.id},${actorId})`);
+  await resets(()=>db`UPDATE flightdeck_pg_group_memberships SET group_id=${groups[1]!.id} WHERE workspace_id=${workspaceId} AND group_id=${groups[0]!.id}`);
+  await resets(()=>db`DELETE FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND group_id=${groups[1]!.id}`);
+  await resets(()=>db`INSERT INTO flightdeck_pg_group_edges(workspace_id,parent_group_id,child_group_id) VALUES(${workspaceId},${groups[0]!.id},${groups[1]!.id})`);
+  await resets(()=>db`UPDATE flightdeck_pg_group_edges SET child_group_id=${groups[2]!.id} WHERE workspace_id=${workspaceId} AND parent_group_id=${groups[0]!.id}`);
+  await resets(()=>db`DELETE FROM flightdeck_pg_group_edges WHERE workspace_id=${workspaceId} AND parent_group_id=${groups[0]!.id}`);
+});
+
+test('quiet valid cursors renew beyond original expiry; expired and mismatched tokens never renew',async()=>{
+  const cursor=await synced();
+  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '6 days',last_used_at=NULL WHERE token=${cursor}`;
+  expect((await page(cursor)).next_cursor).toBe(cursor);
+  const [renewed]=await db`SELECT * FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  expect(renewed!.last_used_at.getTime()).toBeGreaterThan(renewed!.created_at.getTime());
+  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '8 days' WHERE token=${cursor}`;
+  expect((await page(cursor)).next_cursor).toBe(cursor);
+  const [saved]=await db`SELECT * FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  for(const mutation of ['expired','epoch','viewer','workspace']) {
+    const [bad]=await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state,created_at,last_used_at)
+      VALUES(${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)},now()-interval '8 days',NULL) RETURNING token`;
+    if(mutation!=='expired') await db`UPDATE flightdeck_pg_record_cursors SET created_at=now() WHERE token=${bad!.token}`;
+    if(mutation==='epoch') await db`UPDATE flightdeck_pg_record_cursors SET epoch=gen_random_uuid() WHERE token=${bad!.token}`;
+    const input={workspaceId,actorId,cursor:bad!.token};
+    if(mutation==='viewer') {
+      const [other]=await db`INSERT INTO flightdeck_pg_actors(npub,kind) VALUES('npub1wrongviewer','human') RETURNING id`;
+      await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id) VALUES(${workspaceId},${other!.id})`;
+      const [clock]=await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${workspaceId}`;
+      await db`UPDATE flightdeck_pg_record_cursors SET epoch=${clock!.epoch} WHERE token=${bad!.token}`;
+      input.actorId=other!.id;
+    }
+    if(mutation==='workspace') {
+      const [other]=await db`INSERT INTO flightdeck_pg_workspaces(tower_service_npub,workspace_service_npub,workspace_owner_npub,app_npub,name) VALUES('tower','other','owner','app','Other') RETURNING id`;
+      await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id) VALUES(${other!.id},${actorId})`;
+      input.workspaceId=other!.id;
+    }
+    await expect(readFlightDeckRecordPage(input,db)).rejects.toMatchObject({status:409});
+    const [unchanged]=await db`SELECT last_used_at FROM flightdeck_pg_record_cursors WHERE token=${bad!.token}`;
+    expect(unchanged!.last_used_at).toBeNull();
+  }
+});
+
+test('concurrent quiet uses commit safely; reset during scan retries without renewing revoked cursor',async()=>{
+  const cursor=await synced();
+  const responses=await Promise.all([page(cursor),page(cursor)]);
+  expect(responses.map(p=>p.next_cursor)).toEqual([cursor,cursor]);
+  await db`UPDATE flightdeck_pg_record_cursors SET last_used_at=now()-interval '1 day' WHERE token=${cursor}`;
+  const [before]=await db`SELECT last_used_at FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  let entered!:()=>void,release!:()=>void;
+  const ready=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+  let paused=false;
+  const gated=new Proxy(db,{get(target,key){
+    if(key!=='begin') return Reflect.get(target,key);
+    return (options:any,callback:any)=>target.begin(options,async tx=>{
+      const wrapped=new Proxy(tx as unknown as typeof db,{apply(sql,thisArg,args){
+        if(!paused && Array.isArray(args[0]) && args[0].join('').includes('FOR SHARE')) {
+          paused=true;entered();return gate.then(()=>Reflect.apply(sql,thisArg,args));
+        }
+        return Reflect.apply(sql,thisArg,args);
+      }});
+      return callback(wrapped);
+    });
+  }});
+  const racing=readFlightDeckRecordPage({workspaceId,actorId,cursor},gated);
+  await ready;
+  await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
+  release();
+  await expect(racing).rejects.toMatchObject({status:409,code:'reset_required'});
+  const [after]=await db`SELECT last_used_at FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  expect(after!.last_used_at.getTime()).toBe(before!.last_used_at.getTime());
+  await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
+});
+
+test('cleanup expires by last valid use while retaining issuance-based 512 cap',async()=>{
+  const cursor=await synced();const [saved]=await db`SELECT * FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
+  const rows=await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state,created_at,last_used_at)
+    VALUES(${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)},now()-interval '8 days',now()),
+    (${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)},now()-interval '8 days',NULL),
+    (${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)},now()-interval '9 days',now()-interval '8 days') RETURNING token`;
+  await page();
+  const remaining=await db`SELECT token FROM flightdeck_pg_record_cursors WHERE token IN ${db(rows.map(r=>r.token))}`;
+  expect(remaining.map(r=>r.token)).toEqual([rows[0]!.token]);
+});
+
+test('expiry cleanup rechecks a cursor renewed while its delete waits on the row lock',async()=>{
+  const cursor=await synced();
+  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '9 days',last_used_at=now()-interval '8 days' WHERE token=${cursor}`;
+  let entered!:()=>void,release!:()=>void;
+  const ready=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+  const renewal=db.begin(async tx=>{
+    const sql=tx as unknown as typeof db;
+    await sql`UPDATE flightdeck_pg_record_cursors SET last_used_at=now() WHERE token=${cursor}`;
+    entered();await gate;
+  });
+  await ready;
+  const cleanup=page();
+  let waiting=false;
+  try {
+    for(let i=0;i<100;i++) {
+      const [blocked]=await db`SELECT 1 FROM pg_stat_activity WHERE datname=${dbName} AND wait_event_type='Lock' AND query LIKE '%DELETE FROM flightdeck_pg_record_cursors%'`;
+      if(blocked) {waiting=true;break;}
+      await new Promise(r=>setTimeout(r,10));
+    }
+  } finally {release();}
+  await Promise.all([renewal,cleanup]);
+  expect(waiting).toBe(true);
+  expect((await page(cursor)).next_cursor).toBe(cursor);
+});
+
 test('payload limits fail safely and split full canonical rows',async()=>{
   const cursor=await synced();
   const a=await message('x'.repeat(600_000));const b=await message('y'.repeat(600_000));
@@ -249,7 +411,7 @@ test('idle polling reuses its cursor, progress retention is capped and expired r
   await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state) SELECT ${workspaceId},${actorId},${saved!.epoch},${db.json(saved!.state)} FROM generate_series(1,511)`;
   await message('cursor progress');const progress=await page(cursor);
   const [count]=await db`SELECT count(*)::int AS n FROM flightdeck_pg_record_cursors WHERE workspace_id=${workspaceId}`;expect(count!.n).toBe(512);
-  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '8 days' WHERE token=${progress.next_cursor}`;
+  await db`UPDATE flightdeck_pg_record_cursors SET created_at=now()-interval '8 days',last_used_at=now()-interval '8 days' WHERE token=${progress.next_cursor}`;
   await expect(page(progress.next_cursor)).rejects.toMatchObject({status:409});
 });
 

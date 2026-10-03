@@ -14,7 +14,7 @@ export class RecordSyncError extends Error {
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Transactions serialize on the clock only when writing, never via allocation-order sequences. */
+/** Record scans use a snapshot; the short cursor commit shares the clock lock with other readers. */
 export async function readFlightDeckRecordPage(input: {
   workspaceId: string; actorId: string; cursor?: string | null; limit?: number;
 }, db: Db = getDb()): Promise<FlightDeckRecordPage> {
@@ -36,7 +36,7 @@ export async function readFlightDeckRecordPage(input: {
     }
     let state: State;
     if (input.cursor) {
-      const [saved] = await sql`SELECT epoch,state FROM flightdeck_pg_record_cursors WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND created_at>now()-interval '7 days'`;
+      const [saved] = await sql`SELECT epoch,state FROM flightdeck_pg_record_cursors WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND COALESCE(last_used_at,created_at)>statement_timestamp()-interval '7 days'`;
       if (!saved || saved.epoch !== clock!.epoch) throw new RecordSyncError(409, 'reset_required');
       state = saved.state as State;
     } else {
@@ -188,6 +188,17 @@ export async function readFlightDeckRecordPage(input: {
       response.has_more = true;
       next.mode = 'delta'; next.snapshotId = null; next.after = state.boundary;
     }
+    // Lock only after the bounded scan. A reset/write since our snapshot raises
+    // 40001 and retries with fresh authority; a later reset waits for this commit.
+    // Always take clock before cursor locks, matching record writer lock order.
+    if (input.cursor) {
+      await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
+      const renewed = await sql`UPDATE flightdeck_pg_record_cursors SET last_used_at=clock_timestamp()
+        WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
+          AND epoch=${clock!.epoch} AND COALESCE(last_used_at,created_at)>clock_timestamp()-interval '7 days'
+        RETURNING token`;
+      if (!renewed.length) throw new RecordSyncError(409, 'reset_required');
+    }
     if (state.mode === 'delta' && entries.length === 0 && input.cursor) {
       response.next_cursor = input.cursor;
       return response;
@@ -216,8 +227,8 @@ export async function readFlightDeckRecordPage(input: {
           ORDER BY created_at DESC,token OFFSET 512 LIMIT 64
         )`;
         await sql`DELETE FROM flightdeck_pg_record_cursors WHERE token IN (
-          SELECT token FROM flightdeck_pg_record_cursors WHERE created_at<now()-interval '7 days' ORDER BY created_at,token LIMIT 64
-        )`;
+          SELECT token FROM flightdeck_pg_record_cursors WHERE COALESCE(last_used_at,created_at)<=statement_timestamp()-interval '7 days' ORDER BY COALESCE(last_used_at,created_at),token LIMIT 64
+        ) AND COALESCE(last_used_at,created_at)<=clock_timestamp()-interval '7 days'`;
       });
     } catch (error) {
       // A later progress page can reclaim these rows. Never fail a committed cursor.

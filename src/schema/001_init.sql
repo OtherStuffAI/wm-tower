@@ -3337,7 +3337,12 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_record_cursors (
  epoch UUID NOT NULL, state JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fd_record_cursor_workspace ON flightdeck_pg_record_cursors(workspace_id,actor_id,created_at DESC,token);
-CREATE INDEX IF NOT EXISTS idx_fd_record_cursor_expiry ON flightdeck_pg_record_cursors(created_at,token);
+-- Existing rows retain issuance-based expiry until their first valid use. Adding
+-- a nullable column without a default first avoids renewing old/expired tokens.
+ALTER TABLE flightdeck_pg_record_cursors ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+ALTER TABLE flightdeck_pg_record_cursors ALTER COLUMN last_used_at SET DEFAULT now();
+DROP INDEX IF EXISTS idx_fd_record_cursor_expiry;
+CREATE INDEX IF NOT EXISTS idx_fd_record_cursor_last_used ON flightdeck_pg_record_cursors(COALESCE(last_used_at,created_at),token);
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_identity(f TEXT, r JSONB) RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $$ SELECT CASE f
  WHEN 'task_assignment' THEN r->>'task_id' || ':' || (r->>'actor_id')
@@ -3372,6 +3377,8 @@ LANGUAGE plpgsql AS $$ DECLARE r JSONB; oldr JSONB; w UUID; BEGIN
 END $$;
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_reset() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$ DECLARE r JSONB; w UUID; BEGIN
+ -- Conservative across all authority tables: only identical full rows skip.
+ IF TG_OP='UPDATE' AND to_jsonb(OLD) IS NOT DISTINCT FROM to_jsonb(NEW) THEN RETURN NEW; END IF;
  r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
  IF TG_OP='UPDATE' AND TG_TABLE_NAME IN ('flightdeck_pg_scopes','flightdeck_pg_channels')
  AND (to_jsonb(OLD)->'archived_at') IS NOT DISTINCT FROM (r->'archived_at')
