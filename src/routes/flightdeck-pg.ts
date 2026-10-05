@@ -334,6 +334,7 @@ import type {
   FlightDeckPgAgentActivityState,
   FlightDeckPgScopeKind,
   FlightDeckPgTaskPriority,
+  FlightDeckPgTaskRow,
   FlightDeckPgTaskState,
   FlightDeckPgWorkroomAccessStatus,
   FlightDeckPgWorkroomEventType,
