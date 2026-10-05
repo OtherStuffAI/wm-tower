@@ -3741,3 +3741,179 @@ DO $$ BEGIN
  END IF;
 END $$;
 -- end_context_tree_sync_v1
+
+-- personal_attention_v1
+ALTER TABLE flightdeck_pg_tasks ADD COLUMN IF NOT EXISTS attention JSONB;
+ALTER TABLE flightdeck_pg_docs ADD COLUMN IF NOT EXISTS attention JSONB;
+
+-- Event positions are kept per surviving comment, not per latest unrelated update.
+-- Historical positions come only from an exact structured outbox event. Missing
+-- history stays neutral rather than inventing an unread event at today's version.
+UPDATE flightdeck_pg_tasks r SET attention = jsonb_build_object(
+  'policy_version',1,'body_activity_version',0,
+  'last_activity_actor_id',r.updated_by_actor_id,
+  'comment_activity_versions',COALESCE((SELECT jsonb_object_agg(comment_id,version) FROM (
+    SELECT c.id::text AS comment_id, MAX((e.payload->>'activity_version')::bigint) AS version
+    FROM flightdeck_pg_task_comments c JOIN flightdeck_pg_outbox_events e
+      ON e.workspace_id=c.workspace_id AND e.entity_id=c.id AND e.event_type='flightdeck_pg.task_comment.created'
+    WHERE c.workspace_id=r.workspace_id AND c.task_id=r.id AND c.deleted_at IS NULL
+      AND e.payload->>'activity_version' ~ '^[0-9]+$' GROUP BY c.id
+  ) positions),'{}'::jsonb),'mention_activity_versions','{}'::jsonb
+) WHERE attention IS NULL;
+UPDATE flightdeck_pg_docs r SET attention = jsonb_build_object(
+  'policy_version',1,'last_activity_actor_id',r.updated_by_actor_id,
+  'body_activity_version',COALESCE((SELECT (e.payload->>'activity_version')::bigint
+    FROM flightdeck_pg_outbox_events e WHERE e.workspace_id=r.workspace_id AND e.entity_id=r.id
+      AND e.event_type IN ('flightdeck_pg.doc.created','flightdeck_pg.doc.updated')
+      AND (e.event_type='flightdeck_pg.doc.created' OR (e.payload->'body_version' IS DISTINCT FROM e.payload->'prior_body_version' OR jsonb_array_length(CASE WHEN jsonb_typeof(e.payload->'newly_added_mentions')='array' THEN e.payload->'newly_added_mentions' ELSE '[]'::jsonb END)>0))
+      AND e.payload->>'activity_version' ~ '^[0-9]+$'
+    ORDER BY (e.payload->>'activity_version')::bigint DESC LIMIT 1),0),
+  'body_actor_id',(SELECT e.actor_id FROM flightdeck_pg_outbox_events e
+    WHERE e.workspace_id=r.workspace_id AND e.entity_id=r.id
+      AND e.event_type IN ('flightdeck_pg.doc.created','flightdeck_pg.doc.updated')
+      AND (e.event_type='flightdeck_pg.doc.created' OR (e.payload->'body_version' IS DISTINCT FROM e.payload->'prior_body_version' OR jsonb_array_length(CASE WHEN jsonb_typeof(e.payload->'newly_added_mentions')='array' THEN e.payload->'newly_added_mentions' ELSE '[]'::jsonb END)>0))
+      AND e.payload->>'activity_version' ~ '^[0-9]+$'
+    ORDER BY (e.payload->>'activity_version')::bigint DESC LIMIT 1),
+  'comment_activity_versions',COALESCE((SELECT jsonb_object_agg(comment_id,version) FROM (
+    SELECT c.id::text AS comment_id, MAX((e.payload->>'activity_version')::bigint) AS version
+    FROM flightdeck_pg_doc_comments c JOIN flightdeck_pg_outbox_events e
+      ON e.workspace_id=c.workspace_id AND e.entity_id=c.id AND e.event_type='flightdeck_pg.doc_comment.created'
+    WHERE c.workspace_id=r.workspace_id AND c.doc_id=r.id AND c.deleted_at IS NULL
+      AND e.payload->>'activity_version' ~ '^[0-9]+$' GROUP BY c.id
+  ) positions),'{}'::jsonb),'mention_activity_versions','{}'::jsonb
+) WHERE attention IS NULL;
+ALTER TABLE flightdeck_pg_tasks ALTER COLUMN attention SET DEFAULT '{"policy_version":1,"body_activity_version":0,"mention_activity_versions":{},"comment_activity_versions":{}}'::jsonb;
+ALTER TABLE flightdeck_pg_docs ALTER COLUMN attention SET DEFAULT '{"policy_version":1,"body_activity_version":0,"mention_activity_versions":{},"comment_activity_versions":{}}'::jsonb;
+ALTER TABLE flightdeck_pg_tasks ALTER COLUMN attention SET NOT NULL;
+ALTER TABLE flightdeck_pg_docs ALTER COLUMN attention SET NOT NULL;
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_refresh_comment_attention(w UUID, kind TEXT, target UUID)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE positions JSONB; mentions JSONB; previous JSONB;
+BEGIN
+  IF kind='task' THEN
+    SELECT attention INTO previous FROM flightdeck_pg_tasks WHERE workspace_id=w AND id=target FOR UPDATE;
+  ELSIF kind='document' THEN
+    SELECT attention INTO previous FROM flightdeck_pg_docs WHERE workspace_id=w AND id=target FOR UPDATE;
+  ELSE RETURN;
+  END IF;
+  IF previous IS NULL THEN RETURN; END IF;
+  SELECT COALESCE(jsonb_object_agg(c.id::text,previous->'comment_activity_versions'->c.id::text),'{}'::jsonb)
+    INTO positions FROM (
+      SELECT id FROM flightdeck_pg_task_comments WHERE kind='task' AND workspace_id=w AND task_id=target AND deleted_at IS NULL
+      UNION ALL SELECT id FROM flightdeck_pg_doc_comments WHERE kind='document' AND workspace_id=w AND doc_id=target AND deleted_at IS NULL
+    ) c WHERE previous->'comment_activity_versions' ? c.id::text;
+  SELECT COALESCE(jsonb_object_agg(actor_id,version),'{}'::jsonb) INTO mentions FROM (
+    SELECT a.id::text AS actor_id, MAX((positions->>c.id::text)::bigint) AS version
+    FROM (
+      SELECT id,metadata,created_by_actor_id FROM flightdeck_pg_task_comments WHERE kind='task' AND workspace_id=w AND task_id=target AND deleted_at IS NULL
+      UNION ALL SELECT id,metadata,created_by_actor_id FROM flightdeck_pg_doc_comments WHERE kind='document' AND workspace_id=w AND doc_id=target AND deleted_at IS NULL
+    ) c CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.metadata->'mentions')='array' THEN c.metadata->'mentions' ELSE '[]'::jsonb END) m
+    JOIN flightdeck_pg_actors a ON (m->>'actor_id'=a.id::text OR (m->>'actor_id' IS NULL AND m->>'npub'=a.npub))
+    JOIN flightdeck_pg_workspace_memberships wm ON wm.workspace_id=w AND wm.actor_id=a.id
+    WHERE m->>'type' IN ('person','agent','human') AND a.id<>c.created_by_actor_id AND positions ? c.id::text
+    GROUP BY a.id
+  ) relevant;
+  IF kind='task' THEN
+    UPDATE flightdeck_pg_tasks SET attention=previous || jsonb_build_object('comment_activity_versions',positions,'mention_activity_versions',mentions)
+      WHERE workspace_id=w AND id=target AND attention IS DISTINCT FROM previous || jsonb_build_object('comment_activity_versions',positions,'mention_activity_versions',mentions);
+  ELSE
+    UPDATE flightdeck_pg_docs SET attention=previous || jsonb_build_object('comment_activity_versions',positions,'mention_activity_versions',mentions)
+      WHERE workspace_id=w AND id=target AND attention IS DISTINCT FROM previous || jsonb_build_object('comment_activity_versions',positions,'mention_activity_versions',mentions);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_comment_attention_changed() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE r JSONB;
+BEGIN
+  r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+  PERFORM flightdeck_pg_refresh_comment_attention((r->>'workspace_id')::uuid,TG_ARGV[0],
+    (CASE WHEN TG_ARGV[0]='task' THEN r->>'task_id' ELSE r->>'doc_id' END)::uuid);
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS fd_task_comment_attention ON flightdeck_pg_task_comments;
+CREATE TRIGGER fd_task_comment_attention AFTER UPDATE OR DELETE ON flightdeck_pg_task_comments
+  FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_comment_attention_changed('task');
+DROP TRIGGER IF EXISTS fd_doc_comment_attention ON flightdeck_pg_doc_comments;
+CREATE TRIGGER fd_doc_comment_attention AFTER UPDATE OR DELETE ON flightdeck_pg_doc_comments
+  FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_comment_attention_changed('document');
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_initial_attention() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.attention:=jsonb_build_object('policy_version',1,'last_activity_actor_id',NEW.created_by_actor_id,
+    'body_actor_id',NEW.created_by_actor_id,'body_activity_version',CASE WHEN TG_TABLE_NAME='flightdeck_pg_docs' THEN NEW.activity_version ELSE 0 END,
+    'comment_activity_versions','{}'::jsonb,'mention_activity_versions','{}'::jsonb);
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS fd_task_initial_attention ON flightdeck_pg_tasks;
+CREATE TRIGGER fd_task_initial_attention BEFORE INSERT ON flightdeck_pg_tasks FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_initial_attention();
+DROP TRIGGER IF EXISTS fd_doc_initial_attention ON flightdeck_pg_docs;
+CREATE TRIGGER fd_doc_initial_attention BEFORE INSERT ON flightdeck_pg_docs FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_initial_attention();
+
+-- One projection for legacy view APIs and both record-delta protocols.
+CREATE OR REPLACE FUNCTION flightdeck_pg_attention_version(w UUID, kind TEXT, target UUID, viewer UUID)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(MAX(version),0) FROM (
+    SELECT t.activity_version AS version FROM flightdeck_pg_threads t
+      WHERE kind='thread' AND t.workspace_id=w AND t.id=target AND t.deleted_at IS NULL AND t.archived_at IS NULL
+    UNION ALL
+    SELECT GREATEST(COALESCE((t.attention->'mention_activity_versions'->>viewer::text)::bigint,0),
+      CASE WHEN t.attention->>'last_activity_actor_id' IS DISTINCT FROM viewer::text AND
+        (EXISTS(SELECT 1 FROM flightdeck_pg_task_assignments a WHERE a.workspace_id=w AND a.task_id=t.id AND a.actor_id=viewer AND a.deleted_at IS NULL)
+         OR t.metadata->>'assigned_to_npub'=(SELECT npub FROM flightdeck_pg_actors WHERE id=viewer))
+        THEN t.activity_version ELSE 0 END)
+      FROM flightdeck_pg_tasks t WHERE kind='task' AND t.workspace_id=w AND t.id=target AND t.deleted_at IS NULL
+    UNION ALL
+    SELECT GREATEST(COALESCE((d.attention->'mention_activity_versions'->>viewer::text)::bigint,0),
+      CASE WHEN d.attention->>'body_actor_id' IS DISTINCT FROM viewer::text AND EXISTS(
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.metadata->'mentions')='array' THEN d.metadata->'mentions' ELSE '[]'::jsonb END) m
+        WHERE m->>'type' IN ('person','agent','human') AND (m->>'actor_id'=viewer::text
+          OR (m->>'actor_id' IS NULL AND m->>'npub'=(SELECT npub FROM flightdeck_pg_actors WHERE id=viewer))))
+        THEN COALESCE((d.attention->>'body_activity_version')::bigint,0) ELSE 0 END)
+      FROM flightdeck_pg_docs d WHERE kind='document' AND d.workspace_id=w AND d.id=target AND d.deleted_at IS NULL AND d.archived_at IS NULL
+  ) events WHERE EXISTS(SELECT 1 FROM flightdeck_pg_workspace_memberships WHERE workspace_id=w AND actor_id=viewer)
+$$;
+-- Persist personalized projections so record journal rows remain immutable.
+-- Derived refreshes do not change viewed_activity_version, read time or row_version.
+ALTER TABLE flightdeck_pg_resource_view_states ADD COLUMN IF NOT EXISTS activity_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE flightdeck_pg_resource_view_states ADD COLUMN IF NOT EXISTS attention_policy_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE flightdeck_pg_resource_view_states ADD COLUMN IF NOT EXISTS attention_activity_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE flightdeck_pg_resource_view_states ADD COLUMN IF NOT EXISTS attention_unread BOOLEAN NOT NULL DEFAULT false;
+CREATE OR REPLACE FUNCTION flightdeck_pg_project_view_attention() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.resource_type='thread' THEN
+    SELECT activity_version INTO NEW.activity_version FROM flightdeck_pg_threads WHERE workspace_id=NEW.workspace_id AND id=NEW.resource_id;
+  ELSIF NEW.resource_type='task' THEN
+    SELECT activity_version INTO NEW.activity_version FROM flightdeck_pg_tasks WHERE workspace_id=NEW.workspace_id AND id=NEW.resource_id;
+  ELSE
+    SELECT activity_version INTO NEW.activity_version FROM flightdeck_pg_docs WHERE workspace_id=NEW.workspace_id AND id=NEW.resource_id;
+  END IF;
+  NEW.activity_version:=COALESCE(NEW.activity_version,0);
+  NEW.attention_policy_version:=1;
+  NEW.attention_activity_version:=flightdeck_pg_attention_version(NEW.workspace_id,NEW.resource_type,NEW.resource_id,NEW.viewer_actor_id);
+  NEW.attention_unread:=NEW.attention_activity_version>NEW.viewed_activity_version;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS fd_project_view_attention ON flightdeck_pg_resource_view_states;
+CREATE TRIGGER fd_project_view_attention BEFORE INSERT OR UPDATE ON flightdeck_pg_resource_view_states FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_project_view_attention();
+CREATE OR REPLACE FUNCTION flightdeck_pg_refresh_view_attention() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE flightdeck_pg_resource_view_states s SET activity_version=NEW.activity_version
+    WHERE s.workspace_id=NEW.workspace_id AND s.resource_type=TG_ARGV[0] AND s.resource_id=NEW.id
+      AND (s.activity_version IS DISTINCT FROM NEW.activity_version
+        OR s.attention_activity_version IS DISTINCT FROM flightdeck_pg_attention_version(NEW.workspace_id,TG_ARGV[0],NEW.id,s.viewer_actor_id));
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS fd_refresh_task_view_attention ON flightdeck_pg_tasks;
+CREATE TRIGGER fd_refresh_task_view_attention AFTER UPDATE ON flightdeck_pg_tasks FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_refresh_view_attention('task');
+DROP TRIGGER IF EXISTS fd_refresh_doc_view_attention ON flightdeck_pg_docs;
+CREATE TRIGGER fd_refresh_doc_view_attention AFTER UPDATE ON flightdeck_pg_docs FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_refresh_view_attention('document');
+DROP TRIGGER IF EXISTS fd_refresh_thread_view_attention ON flightdeck_pg_threads;
+CREATE TRIGGER fd_refresh_thread_view_attention AFTER UPDATE ON flightdeck_pg_threads FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_refresh_view_attention('thread');
+-- Install derived fields on existing rows; equality capture guards skip repeat startup.
+UPDATE flightdeck_pg_resource_view_states SET activity_version=activity_version;
+-- Recompute once from exact surviving history. Equality guards avoid no-op
+-- journals on startup and never touch read watermarks or checkpoint records.
+SELECT flightdeck_pg_refresh_comment_attention(workspace_id,'task',id) FROM flightdeck_pg_tasks WHERE attention->'comment_activity_versions'<>'{}'::jsonb AND attention->'mention_activity_versions'='{}'::jsonb;
+SELECT flightdeck_pg_refresh_comment_attention(workspace_id,'document',id) FROM flightdeck_pg_docs WHERE attention->'comment_activity_versions'<>'{}'::jsonb AND attention->'mention_activity_versions'='{}'::jsonb;
+-- end_personal_attention_v1

@@ -939,6 +939,15 @@ export interface FlightDeckPgPermissionGrant {
   revoked_at: Date | null;
 }
 
+export interface FlightDeckPgAttention {
+  policy_version: 1;
+  last_activity_actor_id?: string;
+  body_actor_id?: string;
+  body_activity_version: number;
+  mention_activity_versions: Record<string, number>;
+  comment_activity_versions?: Record<string, number>;
+}
+
 export interface FlightDeckPgTask {
   id: string;
   workspace_id: string;
@@ -954,6 +963,7 @@ export interface FlightDeckPgTask {
   updated_by_actor_id: string;
   row_version: number;
   activity_version: number;
+  attention?: FlightDeckPgAttention;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -1022,6 +1032,7 @@ export interface FlightDeckPgDoc {
   updated_by_actor_id: string;
   row_version: number;
   activity_version: number;
+  attention?: FlightDeckPgAttention;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -1078,6 +1089,11 @@ export interface FlightDeckPgDocRecoveryVersion {
 export type FlightDeckPgResourceViewStateType = 'thread' | 'task' | 'document';
 
 export interface FlightDeckPgResourceViewState {
+  /** Derived attention fields; the stored viewed_activity_version remains authoritative. */
+  attention_policy_version?: 1;
+  attention_activity_version?: number;
+  attention_unread?: boolean;
+  activity_version?: number;
   workspace_id: string;
   viewer_actor_id: string;
   resource_type: FlightDeckPgResourceViewStateType;

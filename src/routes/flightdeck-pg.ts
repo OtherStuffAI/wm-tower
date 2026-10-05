@@ -5669,6 +5669,11 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/docs', asy
   const channel = await resolveFlightDeckPgChannel(context.workspace.id, channelId);
   if (!channel) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
 
+  const canonicalMentions = await canonicalDocMentions({ value: body.mentions ?? metadata?.mentions,
+    path: body.mentions !== undefined ? 'mentions' : 'metadata.mentions', workspaceId: context.workspace.id,
+    appNpub: context.workspace.app_npub, channelId });
+  if (canonicalMentions.errors.length) return validationError(c, identity, canonicalMentions.errors);
+
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
@@ -5678,9 +5683,15 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/docs', asy
         storageObjectId,
         title,
         summary: typeof body.summary === 'string' ? body.summary : null,
-        metadata: metadata ?? undefined,
+        metadata: { ...(metadata ?? {}), mentions: canonicalMentions.mentions },
         actorId: context.actor.id,
       }, sql);
+      if (canonicalMentions.mentions.length) {
+        const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: doc.id, bodyActivity: true }, sql);
+        doc.activity_version = activity.resource.activity_version;
+        doc.attention = (await resolveFlightDeckPgDoc(context.workspace.id, doc.id, sql))?.attention;
+        await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
+      }
       await snapshotFlightDeckPgDocVersion({ doc, actorId: context.actor.id, operation: 'created' }, sql);
       const link = await createFlightDeckPgStorageLink({
         workspaceId: context.workspace.id,
@@ -6089,8 +6100,9 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/recoveries/:recove
     }, sql);
     if (!promotion || promotion.outcome !== 'promoted') return promotion;
     const promotedLink = await ensureFlightDeckPgDocStorageLink({ workspaceId: context.workspace.id, channelId: promotion.doc.channel_id, docId, storageObjectId: promotion.recovery.storage_object_id, actorId: context.actor.id, metadata: { doc_id: docId, recovery_id: promotion.recovery.id, recovery_state: 'promoted' } }, sql);
-    const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: promotion.doc.id }, sql);
+    const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: promotion.doc.id, bodyActivity: true }, sql);
     promotion.doc.activity_version = activity.resource.activity_version;
+    promotion.doc.attention = (await resolveFlightDeckPgDoc(context.workspace.id, promotion.doc.id, sql))?.attention;
     const viewStateOutbox = await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
     await snapshotFlightDeckPgDocVersion({ doc: promotion.doc, actorId: context.actor.id, operation: 'updated' }, sql);
     const promotedBody = await documentBodyVersionInfo(promotion.recovery.storage_object_id);
@@ -6247,7 +6259,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/docs/:docId', async (c) => {
       ]);
 
   const archiveOnly = archived !== undefined && title === undefined && channelId === undefined && storageObjectId === undefined && body.summary === undefined && body.metadata === undefined;
-  const qualifyingDocUpdate = title !== undefined || storageObjectId !== undefined || body.summary !== undefined;
+  const qualifyingDocUpdate = title !== undefined || storageObjectId !== undefined || body.summary !== undefined || body.mentions !== undefined || metadata?.mentions !== undefined;
   const leaseError = archiveOnly || bodySave ? null : await requireValidFlightDeckPgEditLeaseForSave(c, {
     identity,
     workspaceId: context.workspace.id,
@@ -6359,8 +6371,8 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/docs/:docId', async (c) => {
         },
       }, sql);
       if (!doc) return null;
-      const activity = qualifyingDocUpdate ? await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: doc.id }, sql) : null;
-      if (activity) doc.activity_version = activity.resource.activity_version;
+      const activity = qualifyingDocUpdate ? await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: doc.id, bodyActivity: storageObjectId !== undefined || body.summary !== undefined || mentionSource !== undefined }, sql) : null;
+      if (activity) { doc.activity_version = activity.resource.activity_version; doc.attention = (await resolveFlightDeckPgDoc(context.workspace.id, doc.id, sql))?.attention; }
       const viewStateOutbox = activity
         ? await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql)
         : null;
@@ -6725,7 +6737,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/comments', async (
         metadata: commentMetadata,
         actorId: context.actor.id,
       }, sql);
-      const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: doc.id }, sql);
+      const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'document', resourceId: doc.id, commentId: comment.id }, sql);
       const viewStateOutbox = await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
       const auditId = await writeFlightDeckPgAudit({
         workspaceId: context.workspace.id,
@@ -10496,7 +10508,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
   const mentionSource = body.mentions !== undefined ? body.mentions : metadata?.mentions;
   const canonicalMentions = await canonicalTaskMentions({ value: mentionSource, path: body.mentions !== undefined ? 'mentions' : 'metadata.mentions', workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, channelId });
   if (canonicalMentions.errors.length) return validationError(c, identity, canonicalMentions.errors);
-  const canonicalTaskMetadata = { ...(taskMetadata ?? {}), ...(mentionSource !== undefined ? { mentions: canonicalMentions.mentions } : {}) };
+  const canonicalTaskMetadata: Record<string, unknown> = { ...(taskMetadata ?? {}), ...(mentionSource !== undefined ? { mentions: canonicalMentions.mentions } : {}) };
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
@@ -10511,6 +10523,12 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
       metadata: canonicalTaskMetadata,
       actorId: context.actor.id,
     }, sql);
+    if (canonicalTaskMetadata.assigned_to_npub) {
+      const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql);
+      task.activity_version = activity.resource.activity_version;
+      task.attention = (await resolveFlightDeckPgTask(context.workspace.id, task.id, sql))?.attention;
+      await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
+    }
     const auditId = await writeFlightDeckPgAudit({
       workspaceId: context.workspace.id,
       actorId: context.actor.id,
@@ -10648,8 +10666,9 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
       },
     }, sql);
     if (!task) return null;
-    const activity = qualifyingTaskUpdate ? await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql) : null;
-    if (activity) task.activity_version = activity.resource.activity_version;
+    const assignmentChanged = (task.metadata?.assigned_to_npub ?? null) !== (existing.metadata?.assigned_to_npub ?? null);
+    const activity = qualifyingTaskUpdate || assignmentChanged ? await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql) : null;
+    if (activity) { task.activity_version = activity.resource.activity_version; task.attention = (await resolveFlightDeckPgTask(context.workspace.id, task.id, sql))?.attention; }
     const viewStateOutbox = activity ? await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql) : null;
     const auditId = await writeFlightDeckPgAudit({
       workspaceId: context.workspace.id,
@@ -10954,7 +10973,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/tasks/:taskId/comments', async
       metadata: commentMetadata,
       actorId: context.actor.id,
     }, sql);
-    const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql);
+    const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id, commentId: comment.id }, sql);
     const viewStateOutbox = await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
     const auditId = await writeFlightDeckPgAudit({
       workspaceId: context.workspace.id,
@@ -11027,6 +11046,8 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/tasks/:taskId/assignments', as
       if (!assignmentResult.changed) {
         return { assignment, auditId: null, outbox: null, changed: false };
       }
+      const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql);
+      await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
       const auditId = await writeFlightDeckPgAudit({
         workspaceId: context.workspace.id,
         actorId: context.actor.id,
@@ -11045,7 +11066,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/tasks/:taskId/assignments', as
         entityId: task.id,
         operation: 'assigned',
         entityRowVersion: assignment.row_version,
-        payload: { task_id: task.id, actor_id: actorId, assignee: { actor_id: actorId, actor_npub: assignment.actor_npub ?? null }, transition: { previous: 'absent', current: 'present' }, assignment: serializeFlightDeckPgTaskAssignment(assignment), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
+        payload: { activity_version: Number(activity.resource.activity_version), task_id: task.id, actor_id: actorId, assignee: { actor_id: actorId, actor_npub: assignment.actor_npub ?? null }, transition: { previous: 'absent', current: 'present' }, assignment: serializeFlightDeckPgTaskAssignment(assignment), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
       }, sql);
       return { assignment, auditId, outbox, changed: true };
     });
@@ -11091,6 +11112,8 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/tasks/:taskId/assignments/:a
       assigneeActorId: c.req.param('actorId'),
     }, sql);
     if (!assignment) return null;
+    const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql);
+    await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql);
     const auditId = await writeFlightDeckPgAudit({
       workspaceId: context.workspace.id,
       actorId: context.actor.id,
@@ -11109,7 +11132,7 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/tasks/:taskId/assignments/:a
       entityId: task.id,
       operation: 'unassigned',
       entityRowVersion: assignment.row_version,
-      payload: { task_id: task.id, actor_id: c.req.param('actorId'), assignee: { actor_id: assignment.actor_id, actor_npub: assignment.actor_npub ?? null }, transition: { previous: 'present', current: 'absent' }, assignment: serializeFlightDeckPgTaskAssignment(assignment), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
+      payload: { activity_version: Number(activity.resource.activity_version), task_id: task.id, actor_id: c.req.param('actorId'), assignee: { actor_id: assignment.actor_id, actor_npub: assignment.actor_npub ?? null }, transition: { previous: 'present', current: 'absent' }, assignment: serializeFlightDeckPgTaskAssignment(assignment), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
     }, sql);
     return { assignment, auditId, outbox };
   });

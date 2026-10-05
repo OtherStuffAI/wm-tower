@@ -5562,7 +5562,7 @@ export function buildOpenApiDocument(origin: string) {
         get: {
           summary: 'Bounded canonical record-family sync v1 or opt-in v2',
           tags: ['Flight Deck PG'], security: [{ nip98: [] }],
-          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes; see docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged. V2 requires registered client_id and explicit cursor; page delivery never acknowledges local commit. See docs/contract/record-device-checkpoints-v2.md.',
+          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes. Task/doc rows include server-owned attention policy positions; resource_view_state rows include persisted activity_version, attention_policy_version, attention_activity_version and attention_unread. Journal payloads stay pinned; neither delivery nor device acknowledgement advances viewed_activity_version. See docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged. V2 requires registered client_id and explicit cursor; page delivery never acknowledges local commit. See docs/contract/record-device-checkpoints-v2.md.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1, 2] } },
@@ -6060,7 +6060,7 @@ export function buildOpenApiDocument(origin: string) {
         get: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }],
           summary: 'List the current viewer resource view states',
-          description: 'Baselines visible resources on first use, then returns every visible thread/task/document in deterministic resource_type/resource_id order. Resources created after baseline without a stored view row are returned with viewed_activity_version and row_version 0. Unread is activity_version > viewed_activity_version. Follow next_cursor until null for a complete Dexie hydration snapshot.',
+          description: 'Baselines visible resources on first use, then returns every visible thread/task/document in deterministic resource_type/resource_id order. Resources created after baseline without a stored view row are returned with viewed_activity_version and row_version 0. Legacy unread remains activity_version > viewed_activity_version. Additive attention_policy_version=1, attention_activity_version and attention_unread separate personal attention from general activity; task/doc responses also expose server-owned attention positions keyed by canonical actor ID. Follow next_cursor until null for a complete Dexie hydration snapshot.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'resource_type', in: 'query', schema: { type: 'string', enum: ['thread', 'task', 'document'] } },

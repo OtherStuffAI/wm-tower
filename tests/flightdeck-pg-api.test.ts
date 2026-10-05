@@ -3539,27 +3539,27 @@ describe('Flight Deck PG API routes', () => {
     expect(noLeaseUpdate.res.status).toBe(200);
     expect(noLeaseUpdate.json.task.row_version).toBe(2);
     expect(noLeaseUpdate.json.task.title).toBe('Task updates do not require edit leases');
-    expect(noLeaseUpdate.json.task.activity_version).toBe(1);
+    expect(noLeaseUpdate.json.task.activity_version).toBe(taskCreate.json.task.activity_version + 1);
     expect(noLeaseUpdate.json.view_state_outbox.id).toBeTruthy();
 
     const ownerAfterOwnActivity = await requestJson(viewStatesPath, 'GET', ownerSecret);
     const memberAfterOtherActivity = await requestJson(viewStatesPath, 'GET', memberSecret);
     const ownerTaskView = ownerAfterOwnActivity.json.states.find((state: any) => state.resource_id === taskId);
     const memberTaskView = memberAfterOtherActivity.json.states.find((state: any) => state.resource_id === taskId);
-    expect(ownerTaskView.viewed_activity_version).toBe(1);
+    expect(ownerTaskView.viewed_activity_version).toBe(noLeaseUpdate.json.task.activity_version);
     expect(ownerTaskView.unread).toBe(false);
-    expect(memberTaskView.viewed_activity_version).toBe(0);
+    expect(memberTaskView.viewed_activity_version).toBe(taskCreate.json.task.activity_version);
     expect(memberTaskView.unread).toBe(true);
 
     const memberMarkPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/resource-view-states/task/${taskId}`;
-    const memberMarked = await requestJson(memberMarkPath, 'PUT', memberSecret, { viewed_activity_version: 1 });
+    const memberMarked = await requestJson(memberMarkPath, 'PUT', memberSecret, { viewed_activity_version: noLeaseUpdate.json.task.activity_version });
     const memberReplay = await requestJson(memberMarkPath, 'PUT', memberSecret, { viewed_activity_version: 0 });
     expect(memberMarked.res.status).toBe(200);
     expect(memberMarked.json.changed).toBe(true);
     expect(memberMarked.json.state.unread).toBe(false);
     expect(memberReplay.res.status).toBe(200);
     expect(memberReplay.json.changed).toBe(false);
-    expect(memberReplay.json.state.viewed_activity_version).toBe(1);
+    expect(memberReplay.json.state.viewed_activity_version).toBe(noLeaseUpdate.json.task.activity_version);
     expect(memberReplay.json.outbox).toBeNull();
 
     const bulkReplay = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/resource-view-states/mark-viewed`, 'POST', memberSecret, {

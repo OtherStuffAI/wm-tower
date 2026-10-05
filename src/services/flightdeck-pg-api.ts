@@ -815,6 +815,7 @@ export function serializeFlightDeckPgTask(task: FlightDeckPgTaskWithAssignments)
     priority: task.priority,
     metadata: task.metadata,
     assigned_to_npub: assignedToNpub,
+    attention: task.attention,
     row_version: task.row_version,
     activity_version: Number(task.activity_version),
     created_by_actor_id: task.created_by_actor_id,
@@ -1276,7 +1277,7 @@ export function serializeFlightDeckPgThread(thread: FlightDeckPgThreadRow) {
   };
 }
 
-export function serializeFlightDeckPgResourceViewState(state: FlightDeckPgResourceViewState & { activity_version?: number }) {
+export function serializeFlightDeckPgResourceViewState(state: FlightDeckPgResourceViewState & { activity_version?: number; attention_activity_version?: number }) {
   const activityVersion = Number(state.activity_version ?? state.viewed_activity_version);
   return {
     workspace_id: state.workspace_id,
@@ -1288,6 +1289,7 @@ export function serializeFlightDeckPgResourceViewState(state: FlightDeckPgResour
     activity_version: activityVersion,
     viewed_activity_version: Number(state.viewed_activity_version),
     unread: activityVersion > Number(state.viewed_activity_version),
+    ...(state.attention_activity_version !== undefined ? { attention_policy_version: 1, attention_activity_version: Number(state.attention_activity_version), attention_unread: Number(state.attention_activity_version) > Number(state.viewed_activity_version) } : {}),
     row_version: state.row_version,
     created_at: state.created_at,
     updated_at: state.updated_at,
@@ -1380,6 +1382,7 @@ export function serializeFlightDeckPgDoc(doc: FlightDeckPgDocRow, options: { sto
     summary: doc.summary,
     metadata: doc.metadata,
     row_version: doc.row_version,
+    attention: doc.attention,
     activity_version: Number(doc.activity_version),
     created_by_actor_id: doc.created_by_actor_id,
     updated_by_actor_id: doc.updated_by_actor_id,
@@ -7991,22 +7994,26 @@ export async function listVisibleFlightDeckPgResourceViewStates(
     limit: number;
   },
   sql: DbClient = getDb(),
-): Promise<{ states: Array<FlightDeckPgResourceViewState & { activity_version: number }>; baselineCreated: boolean }> {
+): Promise<{ states: Array<FlightDeckPgResourceViewState & { activity_version: number; attention_activity_version: number }>; baselineCreated: boolean }> {
   const run = async (client: DbClient) => {
     const baselineCreated = await insertVisibleFlightDeckPgResourceViewStateBaseline(input, client);
     const groupIds = input.groupIds.length ? input.groupIds : ['00000000-0000-0000-0000-000000000000'];
-    const states = await client<Array<FlightDeckPgResourceViewState & { activity_version: number }>>`
+    const states = await client<Array<FlightDeckPgResourceViewState & { activity_version: number; attention_activity_version: number }>>`
       WITH visible AS (
-        SELECT 'thread'::text AS resource_type, t.id AS resource_id, t.scope_id, t.channel_id, t.activity_version, t.created_at, t.updated_at
+        SELECT 'thread'::text AS resource_type, t.id AS resource_id, t.scope_id, t.channel_id, t.activity_version, t.created_at, t.updated_at, t.activity_version AS attention_activity_version
         FROM flightdeck_pg_threads t
         WHERE t.workspace_id = ${input.workspaceId} AND t.deleted_at IS NULL AND t.archived_at IS NULL
           AND EXISTS (SELECT 1 FROM flightdeck_pg_permission_grants pg WHERE pg.workspace_id=t.workspace_id AND pg.resource_channel_id=t.channel_id AND pg.resource_type='channel' AND pg.permission='channel.read' AND pg.revoked_at IS NULL AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId}) OR (pg.principal_type='group' AND pg.principal_group_id IN ${client(groupIds)})))
         UNION ALL
-        SELECT 'task', t.id, t.scope_id, t.channel_id, t.activity_version, t.created_at, t.updated_at FROM flightdeck_pg_tasks t
+        SELECT 'task', t.id, t.scope_id, t.channel_id, t.activity_version, t.created_at, t.updated_at,
+          flightdeck_pg_attention_version(t.workspace_id, 'task', t.id, ${input.actorId}::uuid) AS attention_activity_version
+          FROM flightdeck_pg_tasks t
         WHERE t.workspace_id=${input.workspaceId} AND t.deleted_at IS NULL
           AND EXISTS (SELECT 1 FROM flightdeck_pg_permission_grants pg WHERE pg.workspace_id=t.workspace_id AND pg.resource_channel_id=t.channel_id AND pg.resource_type='channel' AND pg.permission IN ('task.read','channel.read') AND pg.revoked_at IS NULL AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId}) OR (pg.principal_type='group' AND pg.principal_group_id IN ${client(groupIds)})))
         UNION ALL
-        SELECT 'document', d.id, d.scope_id, d.channel_id, d.activity_version, d.created_at, d.updated_at FROM flightdeck_pg_docs d
+        SELECT 'document', d.id, d.scope_id, d.channel_id, d.activity_version, d.created_at, d.updated_at,
+          flightdeck_pg_attention_version(d.workspace_id, 'document', d.id, ${input.actorId}::uuid) AS attention_activity_version
+          FROM flightdeck_pg_docs d
         WHERE d.workspace_id=${input.workspaceId} AND d.deleted_at IS NULL AND d.archived_at IS NULL
           AND EXISTS (SELECT 1 FROM flightdeck_pg_permission_grants pg WHERE pg.workspace_id=d.workspace_id AND pg.resource_channel_id=d.channel_id AND pg.resource_type='channel' AND pg.permission IN ('doc.read','channel.read') AND pg.revoked_at IS NULL AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId}) OR (pg.principal_type='group' AND pg.principal_group_id IN ${client(groupIds)})))
       )
@@ -8021,7 +8028,7 @@ export async function listVisibleFlightDeckPgResourceViewStates(
         COALESCE(s.row_version, 0) AS row_version,
         COALESCE(s.created_at, v.created_at) AS created_at,
         COALESCE(s.updated_at, v.updated_at) AS updated_at,
-        v.activity_version
+        v.activity_version, v.attention_activity_version
       FROM visible v
       LEFT JOIN flightdeck_pg_resource_view_states s
         ON s.workspace_id=${input.workspaceId} AND s.viewer_actor_id=${input.actorId}
@@ -8080,11 +8087,11 @@ export async function markFlightDeckPgResourceViewed(
       updated_at=CASE WHEN EXCLUDED.viewed_activity_version > flightdeck_pg_resource_view_states.viewed_activity_version THEN NOW() ELSE flightdeck_pg_resource_view_states.updated_at END
     RETURNING *
   `;
-  return { state, changed: true };
+  return { state: state, changed: true };
 }
 
 export async function advanceFlightDeckPgResourceActivity(
-  input: { workspaceId: string; actorId: string; resourceType: FlightDeckPgResourceViewStateType; resourceId: string },
+  input: { workspaceId: string; actorId: string; resourceType: FlightDeckPgResourceViewStateType; resourceId: string; commentId?: string; bodyActivity?: boolean },
   sql: DbClient = getDb(),
 ): Promise<{ resource: FlightDeckPgResourceActivityRow; state: FlightDeckPgResourceViewState }> {
   const rows = input.resourceType === 'thread'
@@ -8094,6 +8101,19 @@ export async function advanceFlightDeckPgResourceActivity(
       : await sql<FlightDeckPgResourceActivityRow[]>`UPDATE flightdeck_pg_docs SET activity_version=activity_version+1 WHERE workspace_id=${input.workspaceId} AND id=${input.resourceId} AND deleted_at IS NULL RETURNING 'document'::text AS resource_type, id AS resource_id, scope_id, channel_id, activity_version`;
   const resource = rows[0];
   if (!resource) throw new Error('resource not found while advancing activity');
+  // Server-owned attention positions use the same sequence as user read state.
+  // Comment activity must never advance the document-body position.
+  if (input.resourceType !== 'thread') {
+    const table = input.resourceType === 'task' ? 'flightdeck_pg_tasks' : 'flightdeck_pg_docs';
+    await sql`UPDATE ${sql(table)} SET attention = attention || jsonb_build_object(
+      'policy_version', 1, 'last_activity_actor_id', ${input.actorId}::text,
+      'body_actor_id', CASE WHEN ${input.bodyActivity === true} THEN ${input.actorId}::text ELSE attention->>'body_actor_id' END,
+      'body_activity_version', CASE WHEN ${input.bodyActivity === true} THEN ${Number(resource.activity_version)} ELSE COALESCE((attention->>'body_activity_version')::bigint, 0) END,
+      'comment_activity_versions', COALESCE(attention->'comment_activity_versions', '{}'::jsonb) ||
+        ${sql.json(input.commentId ? { [input.commentId]: Number(resource.activity_version) } : {})}::jsonb
+    ) WHERE workspace_id=${input.workspaceId} AND id=${input.resourceId}`;
+    if (input.commentId) await sql`SELECT flightdeck_pg_refresh_comment_attention(${input.workspaceId}::uuid, ${input.resourceType}, ${input.resourceId}::uuid)`;
+  }
   const marked = await markFlightDeckPgResourceViewed({ workspaceId: input.workspaceId, actorId: input.actorId, resource, viewedActivityVersion: Number(resource.activity_version) }, sql);
   return { resource, state: marked.state };
 }

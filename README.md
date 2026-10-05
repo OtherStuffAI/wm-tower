@@ -69,3 +69,9 @@ legacy publishing remains intact.
 documents the Tower-only durable checkpoint extension, signed acknowledgements,
 retention policy and separate Flight Deck integration follow-up. Existing v1
 record-sync clients retain their current behavior.
+
+## Personal attention
+
+[Personal attention v1](docs/contract/personal-attention-v1.md) documents the
+additive task/document attention metadata, persisted personalized view projections,
+existing-row backfill and independent user read/device checkpoint behavior.
