@@ -334,7 +334,7 @@ import type {
   FlightDeckPgAgentActivityState,
   FlightDeckPgScopeKind,
   FlightDeckPgTaskPriority,
-  FlightDeckPgTaskRow,
+  FlightDeckPgTask,
   FlightDeckPgTaskState,
   FlightDeckPgWorkroomAccessStatus,
   FlightDeckPgWorkroomEventType,
@@ -10674,7 +10674,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
-    const [current] = await sql<FlightDeckPgTaskRow[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id} AND id=${taskId} FOR UPDATE`;
+    const [current] = await sql<FlightDeckPgTask[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id} AND id=${taskId} FOR UPDATE`;
     const task = await updateFlightDeckPgTask({
       workspaceId: context.workspace.id,
       taskId,
