@@ -1123,7 +1123,24 @@ function taskMetadataFromBody(body: Record<string, unknown>, baseMetadata: Recor
     const npub = raw.map((value) => String(value ?? '').trim()).find(Boolean) || '';
     metadata.assigned_to_npub = npub || null;
   }
+  if (!hasAssignedToNpub && !hasAssignedToNpubs && Object.prototype.hasOwnProperty.call(metadata, 'assigned_to_npubs')) {
+    const raw = Array.isArray(metadata.assigned_to_npubs) ? metadata.assigned_to_npubs : [];
+    metadata.assigned_to_npub = raw.map(value => String(value || '').trim()).find(Boolean) || null;
+  }
+  delete metadata.assigned_to_npubs;
   return metadata;
+}
+
+async function taskAssigneeErrors(body: Record<string, unknown>, metadata: Record<string, unknown> | undefined, workspaceId: string) {
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const [path, raw] of [['assigned_to_npubs', body.assigned_to_npubs], ['metadata.assigned_to_npubs', (body.metadata as any)?.assigned_to_npubs]] as const) {
+    if (raw !== undefined && (!Array.isArray(raw) || new Set(raw.map(v => String(v || '').trim()).filter(Boolean)).size > 1))
+      errors.push({ path, code: 'single_assignee_required', message: 'Tasks accept zero or one assignee' });
+  }
+  const primary = metadata?.assigned_to_npub;
+  if (primary && !await resolveFlightDeckPgWorkspaceActorId(workspaceId, { actorNpub: primary }))
+    errors.push({ path: 'assigned_to_npub', code: 'invalid_assignee', message: 'Task assignee must be a workspace actor' });
+  return errors;
 }
 
 async function canonicalTaskMentions(input: {
@@ -10491,6 +10508,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
   if (!taskStates.has(state)) fields.push({ path: 'state', code: 'invalid', message: 'state is not a valid task state' });
   if (!taskPriorities.has(priority)) fields.push({ path: 'priority', code: 'invalid', message: 'priority is not a valid task priority' });
   if (metadata === null) fields.push({ path: 'metadata', code: 'invalid', message: 'metadata must be an object when provided' });
+  fields.push(...await taskAssigneeErrors(body, taskMetadata, context.workspace.id));
   if (fields.length) return validationError(c, identity, fields);
 
   const decision = await authorizeFlightDeckPgOperation({
@@ -10523,6 +10541,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
       metadata: canonicalTaskMetadata,
       actorId: context.actor.id,
     }, sql);
+    Object.assign(task, (await withFlightDeckPgTaskAssignments(context.workspace.id, [task], sql))[0]);
     if (canonicalTaskMetadata.assigned_to_npub) {
       const activity = await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql);
       task.activity_version = activity.resource.activity_version;
@@ -10630,6 +10649,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
   if (body.title !== undefined && !String(body.title).trim()) fields.push({ path: 'title', code: 'invalid', message: 'title must be non-empty when provided' });
   if (priority !== undefined && !taskPriorities.has(priority)) fields.push({ path: 'priority', code: 'invalid', message: 'priority is not a valid task priority' });
   if (metadata === null) fields.push({ path: 'metadata', code: 'invalid', message: 'metadata must be an object when provided' });
+  fields.push(...await taskAssigneeErrors(body, taskMetadata, context.workspace.id));
   if (fields.length) return validationError(c, identity, fields);
 
   const decision = await authorizeFlightDeckPgOperation({
@@ -10649,24 +10669,26 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
   const previousMentions = Array.isArray(existing.metadata?.mentions) ? existing.metadata.mentions : [];
   const canonicalTaskMetadata = taskMetadata === undefined && mentionSource === undefined
     ? undefined
-    : { ...(taskMetadata ?? existing.metadata ?? {}), mentions: canonicalMentions.mentions };
+    : { ...(taskMetadata ?? {}), ...(mentionSource === undefined ? {} : { mentions: canonicalMentions.mentions }) };
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    const [current] = await sql<FlightDeckPgTaskRow[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id} AND id=${taskId} FOR UPDATE`;
     const task = await updateFlightDeckPgTask({
       workspaceId: context.workspace.id,
       taskId,
       actorId: context.actor.id,
-      rowVersion: null,
+      rowVersion: taskMetadata && Object.prototype.hasOwnProperty.call(taskMetadata, 'assigned_to_npub') ? rowVersion : null,
       patch: {
         title: body.title === undefined ? undefined : String(body.title).trim(),
         description: body.description === undefined ? undefined : (body.description === null ? null : String(body.description)),
         priority,
-        metadata: canonicalTaskMetadata,
+        metadata: canonicalTaskMetadata === undefined ? undefined : { ...current.metadata, ...canonicalTaskMetadata },
       },
     }, sql);
     if (!task) return null;
-    const assignmentChanged = (task.metadata?.assigned_to_npub ?? null) !== (existing.metadata?.assigned_to_npub ?? null);
+    Object.assign(task, (await withFlightDeckPgTaskAssignments(context.workspace.id, [task], sql))[0]);
+    const assignmentChanged = (task.metadata?.assigned_to_npub ?? null) !== (current.metadata?.assigned_to_npub ?? null);
     const activity = qualifyingTaskUpdate || assignmentChanged ? await advanceFlightDeckPgResourceActivity({ workspaceId: context.workspace.id, actorId: context.actor.id, resourceType: 'task', resourceId: task.id }, sql) : null;
     if (activity) { task.activity_version = activity.resource.activity_version; task.attention = (await resolveFlightDeckPgTask(context.workspace.id, task.id, sql))?.attention; }
     const viewStateOutbox = activity ? await createFlightDeckPgResourceViewStateOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, state: activity.state, activityVersion: Number(activity.resource.activity_version) }, sql) : null;
@@ -11136,7 +11158,7 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/tasks/:taskId/assignments/:a
     }, sql);
     return { assignment, auditId, outbox };
   });
-  if (!payload) return jsonError(c, 404, 'assignment_not_found', 'Flight Deck PG task assignment not found', identity);
+  if (!payload) return c.json({ identity, assignment: null, changed: false, audit: null, outbox: null });
 
   return c.json({
     identity,

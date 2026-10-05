@@ -3859,8 +3859,9 @@ RETURNS BIGINT LANGUAGE sql STABLE AS $$
     UNION ALL
     SELECT GREATEST(COALESCE((t.attention->'mention_activity_versions'->>viewer::text)::bigint,0),
       CASE WHEN t.attention->>'last_activity_actor_id' IS DISTINCT FROM viewer::text AND
-        (EXISTS(SELECT 1 FROM flightdeck_pg_task_assignments a WHERE a.workspace_id=w AND a.task_id=t.id AND a.actor_id=viewer AND a.deleted_at IS NULL)
-         OR t.metadata->>'assigned_to_npub'=(SELECT npub FROM flightdeck_pg_actors WHERE id=viewer))
+        (CASE WHEN t.metadata ? 'assigned_to_npub' THEN
+          t.metadata->>'assigned_to_npub'=(SELECT npub FROM flightdeck_pg_actors WHERE id=viewer)
+         ELSE EXISTS(SELECT 1 FROM flightdeck_pg_task_assignments a WHERE a.workspace_id=w AND a.task_id=t.id AND a.actor_id=viewer AND a.deleted_at IS NULL) END)
         THEN t.activity_version ELSE 0 END)
       FROM flightdeck_pg_tasks t WHERE kind='task' AND t.workspace_id=w AND t.id=target AND t.deleted_at IS NULL
     UNION ALL
@@ -3917,3 +3918,103 @@ UPDATE flightdeck_pg_resource_view_states SET activity_version=activity_version;
 SELECT flightdeck_pg_refresh_comment_attention(workspace_id,'task',id) FROM flightdeck_pg_tasks WHERE attention->'comment_activity_versions'<>'{}'::jsonb AND attention->'mention_activity_versions'='{}'::jsonb;
 SELECT flightdeck_pg_refresh_comment_attention(workspace_id,'document',id) FROM flightdeck_pg_docs WHERE attention->'comment_activity_versions'<>'{}'::jsonb AND attention->'mention_activity_versions'='{}'::jsonb;
 -- end_personal_attention_v1
+
+-- task_single_assignee_v1
+-- Read-only unresolved evidence remains available; startup never invents an
+-- owner or fails because an unrelated historical task needs human resolution.
+CREATE OR REPLACE VIEW flightdeck_pg_task_assignment_ambiguities AS
+ SELECT t.workspace_id,t.id AS task_id,t.metadata->>'assigned_to_npub' AS primary_npub,
+   ARRAY(SELECT a.actor_id FROM flightdeck_pg_task_assignments a WHERE a.task_id=t.id AND a.deleted_at IS NULL ORDER BY a.actor_id) AS active_actor_ids
+ FROM flightdeck_pg_tasks t
+ WHERE (NULLIF(btrim(t.metadata->>'assigned_to_npub'),'') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM flightdeck_pg_actors a JOIN flightdeck_pg_workspace_memberships m ON m.actor_id=a.id
+    WHERE m.workspace_id=t.workspace_id AND a.npub=btrim(t.metadata->>'assigned_to_npub')))
+    OR (NOT (t.metadata ? 'assigned_to_npub') AND (SELECT count(*) FROM flightdeck_pg_task_assignments a
+      WHERE a.workspace_id=t.workspace_id AND a.task_id=t.id AND a.deleted_at IS NULL)>1);
+DO $$
+BEGIN
+  LOCK TABLE flightdeck_pg_tasks, flightdeck_pg_task_assignments IN SHARE ROW EXCLUSIVE MODE;
+  -- Missing primary plus exactly one relation row is unambiguous. Explicit null
+  -- is unassigned. Invalid primaries/ambiguous rows remain intact for resolution.
+  UPDATE flightdeck_pg_tasks t SET metadata=(t.metadata-'assigned_to_npubs') || jsonb_build_object('assigned_to_npub',
+    CASE WHEN t.metadata ? 'assigned_to_npub' THEN NULLIF(btrim(t.metadata->>'assigned_to_npub'),'')
+      ELSE (SELECT actor.npub FROM flightdeck_pg_task_assignments a JOIN flightdeck_pg_actors actor ON actor.id=a.actor_id
+        WHERE a.workspace_id=t.workspace_id AND a.task_id=t.id AND a.deleted_at IS NULL) END)
+    WHERE NOT EXISTS(SELECT 1 FROM flightdeck_pg_task_assignment_ambiguities u WHERE u.task_id=t.id)
+      AND (NOT (t.metadata ? 'assigned_to_npub') OR t.metadata ? 'assigned_to_npubs'
+      OR t.metadata->>'assigned_to_npub' IS DISTINCT FROM NULLIF(btrim(t.metadata->>'assigned_to_npub'),''));
+  UPDATE flightdeck_pg_task_assignments a SET deleted_at=now(),row_version=a.row_version+1,
+    updated_at=now(),updated_by_actor_id=t.updated_by_actor_id
+    FROM flightdeck_pg_tasks t, flightdeck_pg_actors actor
+    WHERE t.id=a.task_id AND t.workspace_id=a.workspace_id AND actor.id=a.actor_id AND a.deleted_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM flightdeck_pg_task_assignment_ambiguities u WHERE u.task_id=t.id)
+      AND actor.npub IS DISTINCT FROM t.metadata->>'assigned_to_npub';
+  INSERT INTO flightdeck_pg_task_assignments(workspace_id,scope_id,channel_id,task_id,actor_id,created_by_actor_id,updated_by_actor_id)
+    SELECT t.workspace_id,t.scope_id,t.channel_id,t.id,actor.id,t.created_by_actor_id,t.updated_by_actor_id
+    FROM flightdeck_pg_tasks t JOIN flightdeck_pg_actors actor ON actor.npub=t.metadata->>'assigned_to_npub'
+    WHERE NOT EXISTS(SELECT 1 FROM flightdeck_pg_task_assignment_ambiguities u WHERE u.task_id=t.id)
+    ON CONFLICT(task_id,actor_id) DO UPDATE SET deleted_at=NULL,row_version=flightdeck_pg_task_assignments.row_version+1,
+      updated_at=now(),updated_by_actor_id=EXCLUDED.updated_by_actor_id
+      WHERE flightdeck_pg_task_assignments.deleted_at IS NOT NULL;
+  -- Install the stronger index when historical ambiguity does not prevent it.
+  -- The row-locking guard below applies on every deployment regardless.
+  IF NOT EXISTS(SELECT 1 FROM flightdeck_pg_task_assignments WHERE deleted_at IS NULL GROUP BY task_id HAVING count(*)>1) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fd_task_single_assignee ON flightdeck_pg_task_assignments(task_id) WHERE deleted_at IS NULL;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_guard_single_assignment() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.deleted_at IS NULL THEN
+    IF NOT EXISTS(SELECT 1 FROM flightdeck_pg_workspace_memberships WHERE workspace_id=NEW.workspace_id AND actor_id=NEW.actor_id) THEN
+      RAISE EXCEPTION 'Task assignee must be a workspace actor' USING ERRCODE='23503';
+    END IF;
+    PERFORM 1 FROM flightdeck_pg_tasks WHERE id=NEW.task_id AND workspace_id=NEW.workspace_id FOR UPDATE;
+    IF EXISTS(SELECT 1 FROM flightdeck_pg_task_assignments WHERE task_id=NEW.task_id AND deleted_at IS NULL AND actor_id<>NEW.actor_id) THEN
+      RAISE EXCEPTION 'Tasks accept zero or one assignee';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS fd_guard_single_assignment ON flightdeck_pg_task_assignments;
+CREATE TRIGGER fd_guard_single_assignment BEFORE INSERT OR UPDATE ON flightdeck_pg_task_assignments
+  FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_guard_single_assignment();
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_normalize_task_primary() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.metadata := (NEW.metadata-'assigned_to_npubs') || jsonb_build_object('assigned_to_npub',NULLIF(btrim(NEW.metadata->>'assigned_to_npub'),''));
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS fd_normalize_task_primary ON flightdeck_pg_tasks;
+CREATE TRIGGER fd_normalize_task_primary BEFORE INSERT OR UPDATE OF metadata ON flightdeck_pg_tasks
+  FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_normalize_task_primary();
+
+CREATE OR REPLACE FUNCTION flightdeck_pg_sync_task_primary_assignment() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE primary_actor UUID;
+BEGIN
+  IF NULLIF(btrim(NEW.metadata->>'assigned_to_npub'),'') IS NOT NULL THEN
+    SELECT a.id INTO primary_actor FROM flightdeck_pg_actors a JOIN flightdeck_pg_workspace_memberships m ON m.actor_id=a.id
+      WHERE m.workspace_id=NEW.workspace_id AND a.npub=NEW.metadata->>'assigned_to_npub';
+    IF primary_actor IS NULL THEN RAISE EXCEPTION 'Task assignee must be a workspace actor'; END IF;
+  END IF;
+  UPDATE flightdeck_pg_task_assignments SET deleted_at=now(),row_version=row_version+1,updated_at=now(),updated_by_actor_id=NEW.updated_by_actor_id
+    WHERE task_id=NEW.id AND workspace_id=NEW.workspace_id AND deleted_at IS NULL AND actor_id IS DISTINCT FROM primary_actor;
+  IF primary_actor IS NOT NULL THEN
+    INSERT INTO flightdeck_pg_task_assignments(workspace_id,scope_id,channel_id,task_id,actor_id,created_by_actor_id,updated_by_actor_id)
+      VALUES(NEW.workspace_id,NEW.scope_id,NEW.channel_id,NEW.id,primary_actor,NEW.updated_by_actor_id,NEW.updated_by_actor_id)
+      ON CONFLICT(task_id,actor_id) DO UPDATE SET deleted_at=NULL,row_version=flightdeck_pg_task_assignments.row_version+1,
+        updated_at=now(),updated_by_actor_id=EXCLUDED.updated_by_actor_id
+        WHERE flightdeck_pg_task_assignments.deleted_at IS NOT NULL;
+  END IF;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS fd_sync_task_primary_assignment ON flightdeck_pg_tasks;
+CREATE TRIGGER fd_sync_task_primary_assignment AFTER INSERT OR UPDATE OF metadata ON flightdeck_pg_tasks
+  FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_sync_task_primary_assignment();
+
+-- Refresh only derived attention. Never modify activity, viewed watermarks,
+-- task versions, leases, or checkpoint cursors during repair.
+UPDATE flightdeck_pg_resource_view_states s SET activity_version=s.activity_version
+  WHERE resource_type='task' AND attention_activity_version IS DISTINCT FROM
+    flightdeck_pg_attention_version(s.workspace_id,s.resource_type,s.resource_id,s.viewer_actor_id);
+-- end_task_single_assignee_v1

@@ -294,6 +294,7 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_response_activities',
       'flightdeck_pg_scopes',
       'flightdeck_pg_storage_links',
+      'flightdeck_pg_task_assignment_ambiguities',
       'flightdeck_pg_task_assignments',
       'flightdeck_pg_task_comments',
       'flightdeck_pg_task_watchers',

@@ -6220,7 +6220,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Patch a task',
-          description: 'Patches a task transactionally. Canonical description agent mentions may be supplied as top-level mentions or metadata.mentions and are stored with actor_id and npub after task.read validation. The event payload exposes previous/current mention arrays, current task location, logical author and NIP-98 signer provenance, and entity row version for idempotent transition detection.',
+          description: 'Patches a task transactionally. Assignment inputs (assigned_to_npub, a zero-or-one assigned_to_npubs array, or their metadata equivalents) replace both canonical representations atomically; null clears ownership. Assignment edits honor an optional row_version. Partial metadata preserves omitted fields. Canonical description agent mentions may be supplied as top-level mentions or metadata.mentions and are stored with actor_id and npub after task.read validation. The event payload exposes previous/current mention arrays, current task location, logical author and NIP-98 signer provenance, and entity row version for idempotent transition detection.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6424,7 +6424,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Assign a task',
-          description: 'Idempotently assigns one workspace actor. A newly created assignment event includes assignee actor_id/npub, assignment row version, and an explicit absent-to-present transition; an unchanged assignment emits no event.',
+          description: 'Atomically replaces the previous assignee with one workspace actor in both metadata.assigned_to_npub and active assignments. An unchanged retry is idempotent. A newly created assignment event includes assignee actor_id/npub, assignment row version, and an explicit absent-to-present transition; an unchanged assignment emits no event.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6447,7 +6447,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Unassign a task',
-          description: 'Unassigns one workspace actor and emits present-to-absent transition evidence with assignee identity and assignment row version.',
+          description: 'Clears both primary metadata and the active assignment only if this actor is still assigned; repeated or delayed deletes succeed without clearing a replacement. Emits present-to-absent transition evidence with assignee identity and assignment row version.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6457,7 +6457,7 @@ export function buildOpenApiDocument(origin: string) {
             '200': { description: 'Task assignment removed', content: { 'application/json': { schema: { type: 'object' } } } },
             '401': { description: 'Invalid NIP-98 auth', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
             '403': { description: 'Permission denied', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-            '404': { description: 'Assignment not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '404': { description: 'Task not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
           },
         },
       },

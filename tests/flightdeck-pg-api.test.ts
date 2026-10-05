@@ -4530,7 +4530,7 @@ describe('Flight Deck PG API routes', () => {
     expect(invalidTaskMove.res.status).toBe(404);
     expect(invalidTaskMove.json.code).toBe('destination_channel_not_found');
 
-    const movedTask = await requestJson(taskMovePath, 'POST', ownerSecret, { destination_channel_id: destinationChannelId, destination_scope_id: destinationScopeId, row_version: taskCreate.json.task.row_version });
+    const movedTask = await requestJson(taskMovePath, 'POST', ownerSecret, { destination_channel_id: destinationChannelId, destination_scope_id: destinationScopeId, row_version: (await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/tasks/${taskId}`, 'GET', ownerSecret)).json.task.row_version });
     expect(movedTask.res.status).toBe(200);
     expect(movedTask.json.task).toMatchObject({ id: taskId, scope_id: destinationScopeId, channel_id: destinationChannelId, title: 'Move this task' });
     expect(movedTask.json.task.assignments).toHaveLength(1);

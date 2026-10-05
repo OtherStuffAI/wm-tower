@@ -958,6 +958,7 @@ export interface FlightDeckPgTask {
   description: string | null;
   state: FlightDeckPgTaskState;
   priority: FlightDeckPgTaskPriority;
+  /** assigned_to_npub is the canonical zero-or-one primary; null clears assignment. */
   metadata: Record<string, unknown>;
   created_by_actor_id: string;
   updated_by_actor_id: string;

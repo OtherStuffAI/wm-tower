@@ -7446,7 +7446,7 @@ export async function createFlightDeckPgTask(
     )
     RETURNING *
   `;
-  return task;
+  return (await withFlightDeckPgTaskAssignments(input.workspaceId, [task], sql))[0];
 }
 
 export async function updateFlightDeckPgTask(
@@ -7483,7 +7483,7 @@ export async function updateFlightDeckPgTask(
       AND (${input.rowVersion ?? null}::integer IS NULL OR row_version = ${input.rowVersion ?? null})
     RETURNING *
   `;
-  return task ?? null;
+  return task ? (await withFlightDeckPgTaskAssignments(input.workspaceId, [task], sql))[0] : null;
 }
 
 export async function moveFlightDeckPgTask(
@@ -7560,7 +7560,7 @@ export async function moveFlightDeckPgTask(
     )
     SELECT * FROM moved_task
   `;
-  return task ?? null;
+  return task ? (await withFlightDeckPgTaskAssignments(input.workspaceId, [task], sql))[0] : null;
 }
 
 export async function updateFlightDeckPgTaskState(
@@ -7580,7 +7580,7 @@ export async function updateFlightDeckPgTaskState(
       AND (${input.rowVersion ?? null}::integer IS NULL OR row_version = ${input.rowVersion ?? null})
     RETURNING *
   `;
-  return task ?? null;
+  return task ? (await withFlightDeckPgTaskAssignments(input.workspaceId, [task], sql))[0] : null;
 }
 
 export async function deleteFlightDeckPgTask(
@@ -7600,7 +7600,7 @@ export async function deleteFlightDeckPgTask(
       AND (${input.rowVersion ?? null}::integer IS NULL OR row_version = ${input.rowVersion ?? null})
     RETURNING *
   `;
-  return task ?? null;
+  return task ? (await withFlightDeckPgTaskAssignments(input.workspaceId, [task], sql))[0] : null;
 }
 
 export async function createFlightDeckPgTaskComment(
@@ -7818,103 +7818,40 @@ export async function assignFlightDeckPgTask(
   input: { workspaceId: string; task: FlightDeckPgTaskRow; actorId: string; assigneeActorId: string },
   sql: DbClient = getDb(),
 ): Promise<{ assignment: FlightDeckPgTaskAssignmentWithActorNpub; changed: boolean }> {
-  const [existing] = await sql<FlightDeckPgTaskAssignmentRow[]>`
-    SELECT *
-    FROM flightdeck_pg_task_assignments
-    WHERE workspace_id = ${input.workspaceId}
-      AND task_id = ${input.task.id}
-      AND actor_id = ${input.assigneeActorId}
-      AND deleted_at IS NULL
-    LIMIT 1
-  `;
-  if (existing) {
-    const hydratedExisting = (await listFlightDeckPgTaskAssignments({ workspaceId: input.workspaceId, taskId: input.task.id }, sql))
-      .find((item) => item.actor_id === input.assigneeActorId);
-    if (!hydratedExisting) throw new Error('Task assignment actor identity could not be resolved');
-    return { assignment: hydratedExisting, changed: false };
-  }
-
-  const [assignment] = await sql<FlightDeckPgTaskAssignmentRow[]>`
-    INSERT INTO flightdeck_pg_task_assignments (
-      workspace_id,
-      scope_id,
-      channel_id,
-      task_id,
-      actor_id,
-      created_by_actor_id,
-      updated_by_actor_id
-    )
-    VALUES (
-      ${input.workspaceId},
-      ${input.task.scope_id},
-      ${input.task.channel_id},
-      ${input.task.id},
-      ${input.assigneeActorId},
-      ${input.actorId},
-      ${input.actorId}
-    )
-    ON CONFLICT (task_id, actor_id)
-    DO UPDATE SET
-      deleted_at = NULL,
-      updated_by_actor_id = EXCLUDED.updated_by_actor_id,
-      row_version = flightdeck_pg_task_assignments.row_version + 1,
-      updated_at = NOW()
-    WHERE flightdeck_pg_task_assignments.deleted_at IS NOT NULL
-    RETURNING *
-  `;
-  if (assignment) {
-    const created = (await listFlightDeckPgTaskAssignments({ workspaceId: input.workspaceId, taskId: input.task.id }, sql))
-      .find((item) => item.actor_id === input.assigneeActorId);
-    if (!created) throw new Error('Task assignment actor identity could not be resolved');
-    return { assignment: created, changed: true };
-  }
-
-  const [active] = await sql<FlightDeckPgTaskAssignmentRow[]>`
-    SELECT *
-    FROM flightdeck_pg_task_assignments
-    WHERE workspace_id = ${input.workspaceId}
-      AND task_id = ${input.task.id}
-      AND actor_id = ${input.assigneeActorId}
-      AND deleted_at IS NULL
-    LIMIT 1
-  `;
-  if (active) {
-    const hydratedActive = (await listFlightDeckPgTaskAssignments({ workspaceId: input.workspaceId, taskId: input.task.id }, sql))
-      .find((item) => item.actor_id === input.assigneeActorId);
-    if (!hydratedActive) throw new Error('Task assignment actor identity could not be resolved');
-    return { assignment: hydratedActive, changed: false };
-  }
-  throw new Error('Task assignment could not be created');
+  // All assignment paths serialize on the parent row, including metadata edits.
+  const [task] = await sql<FlightDeckPgTaskRow[]>`SELECT * FROM flightdeck_pg_tasks
+    WHERE workspace_id=${input.workspaceId} AND id=${input.task.id} AND deleted_at IS NULL FOR UPDATE`;
+  if (!task) throw new Error('Task not found');
+  const [actor] = await sql<{ npub: string }[]>`SELECT a.npub FROM flightdeck_pg_actors a
+    JOIN flightdeck_pg_workspace_memberships m ON m.actor_id=a.id
+    WHERE m.workspace_id=${input.workspaceId} AND a.id=${input.assigneeActorId}`;
+  if (!actor) throw new Error('Task assignee must be a workspace actor');
+  const changed = task.metadata?.assigned_to_npub !== actor.npub;
+  if (changed) await sql`UPDATE flightdeck_pg_tasks SET
+    metadata=(metadata-'assigned_to_npubs') || jsonb_build_object('assigned_to_npub',${actor.npub}::text),
+    updated_by_actor_id=${input.actorId},row_version=row_version+1,updated_at=now()
+    WHERE workspace_id=${input.workspaceId} AND id=${task.id}`;
+  const assignment = (await listFlightDeckPgTaskAssignments({ workspaceId: input.workspaceId, taskId: task.id }, sql))[0];
+  if (!assignment) throw new Error('Task assignment could not be created');
+  return { assignment, changed };
 }
 
 export async function unassignFlightDeckPgTask(
   input: { workspaceId: string; task: FlightDeckPgTaskRow; actorId: string; assigneeActorId: string },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgTaskAssignmentWithActorNpub | null> {
-  const [assignment] = await sql<FlightDeckPgTaskAssignmentWithActorNpub[]>`
-    UPDATE flightdeck_pg_task_assignments
-    SET
-      deleted_at = NOW(),
-      updated_by_actor_id = ${input.actorId},
-      row_version = row_version + 1,
-      updated_at = NOW()
-    WHERE workspace_id = ${input.workspaceId}
-      AND task_id = ${input.task.id}
-      AND actor_id = ${input.assigneeActorId}
-      AND deleted_at IS NULL
-    RETURNING *
-  `;
-  if (!assignment) return null;
-  const [actor] = await sql<{ npub: string | null }[]>`
-    SELECT npub
-    FROM flightdeck_pg_actors
-    WHERE id = ${assignment.actor_id}
-    LIMIT 1
-  `;
-  return {
-    ...assignment,
-    actor_npub: actor?.npub ?? null,
-  };
+  const [task] = await sql<FlightDeckPgTaskRow[]>`SELECT * FROM flightdeck_pg_tasks
+    WHERE workspace_id=${input.workspaceId} AND id=${input.task.id} AND deleted_at IS NULL FOR UPDATE`;
+  if (!task) return null;
+  const assignment = (await listFlightDeckPgTaskAssignments({ workspaceId: input.workspaceId, taskId: task.id }, sql))
+    .find(a => a.actor_id === input.assigneeActorId);
+  if (!assignment) return null; // A delayed delete for A must never clear B.
+  await sql`UPDATE flightdeck_pg_tasks SET metadata=(metadata-'assigned_to_npubs') || jsonb_build_object('assigned_to_npub',NULL),
+    updated_by_actor_id=${input.actorId},row_version=row_version+1,updated_at=now()
+    WHERE workspace_id=${input.workspaceId} AND id=${task.id}`;
+  const [deleted] = await sql<FlightDeckPgTaskAssignmentRow[]>`SELECT * FROM flightdeck_pg_task_assignments
+    WHERE workspace_id=${input.workspaceId} AND task_id=${task.id} AND actor_id=${input.assigneeActorId}`;
+  return { ...deleted, actor_npub: assignment.actor_npub };
 }
 
 type FlightDeckPgResourceActivityRow = {
