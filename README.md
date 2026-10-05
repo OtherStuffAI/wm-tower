@@ -62,3 +62,10 @@ Tower also exposes an admin web at `/admin` for `ADMIN_NPUB` users. It can inspe
 flags, CAS/idempotency and PG recovery. The [proposed suite contract](docs/contract/wapp-feed-v1-proposed.md)
 remains the baseline for other packages. Source implementation is not live activation;
 legacy publishing remains intact.
+
+## Opt-in device sync checkpoints
+
+[Record device checkpoints v2](docs/contract/record-device-checkpoints-v2.md)
+documents the Tower-only durable checkpoint extension, signed acknowledgements,
+retention policy and separate Flight Deck integration follow-up. Existing v1
+record-sync clients retain their current behavior.

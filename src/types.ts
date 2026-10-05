@@ -2935,3 +2935,21 @@ export type FlightDeckPgContextEventHint = { schema_version: 1; mutation_id: str
 /** Scope roles translate to canonical grants; they are never independently persisted. */
 export type FlightDeckPgScopeAccessRole = 'context_editor' | 'scope_manager';
 export type FlightDeckPgScopeAccessMutation = { principal_type: 'actor' | 'group'; principal_id: string; expected_revision: string; lease_token: string } & ({role: FlightDeckPgScopeAccessRole} | {revoke: true});
+
+/** Explicitly opted-in device/cache protocol; v1 wire shape remains unchanged. */
+export interface FlightDeckRecordPageV2 extends Omit<FlightDeckRecordPage, 'protocol_version'> {
+  protocol_version: 2;
+  client_id: string;
+  /** Revision observed when this immutable page token was issued. */
+  checkpoint_revision: string;
+}
+export interface FlightDeckRecordCheckpoint {
+  protocol_version: 2;
+  client_id: string;
+  authority_epoch: string;
+  /** Bootstrap only; never silently substitute for a client's local cursor. */
+  initial_cursor: string;
+  checkpoint_cursor: string | null;
+  checkpoint_revision: string;
+  last_active_at: string;
+}

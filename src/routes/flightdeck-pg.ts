@@ -1,6 +1,7 @@
 import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
 import { registerFeedReaderRoutes } from './feed-reader';
+import { registerRecordClient, readRecordCheckpoint, retireRecordClient, acknowledgeRecordCheckpoint, recordSyncDiscovery } from '../services/flightdeck-record-checkpoints';
 import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -1450,6 +1451,7 @@ flightDeckPgRouter.get('/service', async (c) => {
       schema_version: 1,
     },
     capabilities: flightDeckPgCapabilities,
+    record_sync: recordSyncDiscovery,
     links: {
       workspace_descriptor_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor',
       me_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me',
@@ -2134,22 +2136,52 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/drive/delta', async (c) => {
   });
 });
 
+function recordSyncErrorResponse(c: Context, error: unknown, protocol: 1 | 2) {
+  if (!(error instanceof RecordSyncError)) throw error;
+  const discard = ['reset_required', 'history_pruned', 'client_expired', 'client_not_registered'].includes(error.code);
+  return c.json({ error: error.code, protocol_version: protocol,
+    ...(discard ? { reset: { discard_authoritative: true, preserve_pending: true } } : {}) }, error.status);
+}
+
 flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {
   const auth = await requireNip98AuthResolved(c);
   if (auth instanceof Response) return auth;
   const result = await requireFlightDeckPgContext(c, auth.userNpub);
   if ('response' in result) return result.response;
-  if (c.req.query('protocol_version') !== '1') return c.json({ error: 'unsupported_protocol_version' }, 400);
+  const version = c.req.query('protocol_version');
+  if (version !== '1' && version !== '2') return c.json({ error: 'unsupported_protocol_version' }, 400);
   try {
-    return c.json(await readFlightDeckRecordPage({ workspaceId: result.context.workspace.id,
-      actorId: result.context.actor.id, cursor: c.req.query('cursor'),
-      limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) }));
-  } catch (error) {
-    if (!(error instanceof RecordSyncError)) throw error;
-    return c.json({ error: error.code, protocol_version: 1,
-      ...(error.code === 'reset_required' ? { reset: { discard_authoritative: true, preserve_pending: true } } : {}) }, error.status);
-  }
+    const input = { workspaceId: result.context.workspace.id, actorId: result.context.actor.id,
+      cursor: c.req.query('cursor'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) };
+    return c.json(version === '2'
+      ? await readFlightDeckRecordPage({ ...input, protocolVersion: 2, clientId: c.req.query('client_id')! })
+      : await readFlightDeckRecordPage(input));
+  } catch (error) { return recordSyncErrorResponse(c, error, version === '2' ? 2 : 1); }
 });
+
+// NIP-98 signs the exact URL; POST additionally verifies the exact body hash.
+for (const operation of ['register', 'read', 'ack', 'retire'] as const) {
+  const path = '/workspaces/:workspaceId/record-sync/clients/:clientId' + (operation === 'ack' ? '/ack' : '');
+  flightDeckPgRouter.on(operation === 'read' ? 'GET' : operation === 'retire' ? 'DELETE' : 'POST', path, async c => {
+    const auth = await requireNip98AuthResolved(c);
+    if (auth instanceof Response) return auth;
+    const result = await requireFlightDeckPgContext(c, auth.userNpub);
+    if ('response' in result) return result.response;
+    if (c.req.query('protocol_version') !== '2') return c.json({ error: 'unsupported_protocol_version' }, 400);
+    const input = { workspaceId: result.context.workspace.id, actorId: result.context.actor.id, clientId: c.req.param('clientId')! };
+    try {
+      if (operation === 'retire') return c.json(await retireRecordClient(input));
+      if (operation === 'read') return c.json(await readRecordCheckpoint(input));
+      if (operation === 'register') return c.json(await registerRecordClient(input));
+      let body: any;
+      try { body = await c.req.json(); } catch { throw new RecordSyncError(400, 'invalid_body'); }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['cursor','expected_revision'].includes(key))) {
+        throw new RecordSyncError(400, 'invalid_body');
+      }
+      return c.json(await acknowledgeRecordCheckpoint({ ...input, cursor: body.cursor, expectedRevision: body.expected_revision }));
+    } catch (error) { return recordSyncErrorResponse(c, error, 2); }
+  });
+}
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/sync', async (c) => {
   const auth = await requireNip98AuthResolved(c);

@@ -1,23 +1,31 @@
+import { requireRecordClient, requireRecordHistory, validateRecordClientId } from './flightdeck-record-checkpoints';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import { authorizeFlightDeckPgOperation, getEffectiveFlightDeckPgGroupIds, canReadFlightDeckPgContextScope } from './flightdeck-pg-authorization';
 import { recordFamilies } from './flightdeck-record-families';
-import type { FlightDeckRecordActor, FlightDeckRecordChange, FlightDeckRecordPage } from '../types';
+import type { FlightDeckRecordActor, FlightDeckRecordChange, FlightDeckRecordPage, FlightDeckRecordPageV2 } from '../types';
 
 type Db = ReturnType<typeof getDb>;
-type State = { mode: 'snapshot' | 'delta'; boundary: string; after: string; family: string; id: string; snapshotId: string | null };
+import { RecordSyncError, type RecordSyncState } from './flightdeck-record-sync-state';
+export { RecordSyncError, type RecordSyncState } from './flightdeck-record-sync-state';
 type Entry = { family: string; id: string; operation: 'upsert' | 'delete'; position: string; row: Record<string, any>; bytes: number };
 export const RECORD_MAX_ROWS = 200;
 export const RECORD_MAX_BYTES = 1_048_576;
-export class RecordSyncError extends Error {
-  constructor(public status: 400 | 403 | 409 | 413, public code: string) { super(code); }
-}
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+type PageInput = { workspaceId: string; actorId: string; cursor?: string | null; limit?: number };
+type DevicePageInput = PageInput & { protocolVersion: 2; clientId: string };
+export function readFlightDeckRecordPage(input: DevicePageInput, db?: Db): Promise<FlightDeckRecordPageV2>;
+export function readFlightDeckRecordPage(input: PageInput & { protocolVersion?: 1 }, db?: Db): Promise<FlightDeckRecordPage>;
 /** Record scans use a snapshot; the short cursor commit shares the clock lock with other readers. */
-export async function readFlightDeckRecordPage(input: {
-  workspaceId: string; actorId: string; cursor?: string | null; limit?: number;
-}, db: Db = getDb()): Promise<FlightDeckRecordPage> {
+export async function readFlightDeckRecordPage(input: PageInput & { protocolVersion?: number; clientId?: string }, db: Db = getDb()): Promise<FlightDeckRecordPage | FlightDeckRecordPageV2> {
+  if (input.protocolVersion !== undefined && ![1,2].includes(input.protocolVersion)) throw new RecordSyncError(400, 'unsupported_protocol_version');
+  const device = input.protocolVersion === 2;
+  if (device) {
+    validateRecordClientId(input.clientId);
+    if (!input.cursor) throw new RecordSyncError(400, 'cursor_required');
+  }
+  const clientInput = { workspaceId: input.workspaceId, actorId: input.actorId, clientId: input.clientId! };
   if (input.cursor && !uuid.test(input.cursor)) throw new RecordSyncError(400, 'invalid_cursor');
   const limit = input.limit ?? RECORD_MAX_ROWS;
   if (!Number.isInteger(limit) || limit < 1 || limit > RECORD_MAX_ROWS) throw new RecordSyncError(400, 'invalid_limit');
@@ -30,15 +38,28 @@ export async function readFlightDeckRecordPage(input: {
       WHERE m.workspace_id=${input.workspaceId} AND m.actor_id=${input.actorId}
     `;
     if (!viewer) throw new RecordSyncError(403, 'workspace_membership_required');
-    let [clock] = await sql`SELECT position::text, epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
+    let [clock] = await sql`SELECT position::text, epoch, journal_floor::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
     if (!clock) {
       [clock] = await sql`INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(${input.workspaceId}) RETURNING position::text,epoch`;
     }
-    let state: State;
-    if (input.cursor) {
+    let state: RecordSyncState;
+    let client: Awaited<ReturnType<typeof requireRecordClient>> | undefined;
+    if (device) {
+      client = await requireRecordClient(clientInput, clock!.epoch, sql);
+      if (input.cursor === client.initial_cursor) state = client.initial_state as RecordSyncState;
+      else if (input.cursor === client.checkpoint_cursor) state = client.checkpoint_state as RecordSyncState;
+      else {
+        const [saved] = await sql`SELECT epoch,state FROM flightdeck_pg_record_page_tokens WHERE token=${input.cursor!}
+          AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}
+          AND last_used_at>statement_timestamp()-interval '7 days'`;
+        if (!saved || saved.epoch !== clock!.epoch) throw new RecordSyncError(409, 'page_token_invalid');
+        state = saved.state as RecordSyncState;
+      }
+      await requireRecordHistory(input.workspaceId, state, clock, sql);
+    } else if (input.cursor) {
       const [saved] = await sql`SELECT epoch,state FROM flightdeck_pg_record_cursors WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND COALESCE(last_used_at,created_at)>statement_timestamp()-interval '7 days'`;
       if (!saved || saved.epoch !== clock!.epoch) throw new RecordSyncError(409, 'reset_required');
-      state = saved.state as State;
+      state = saved.state as RecordSyncState;
     } else {
       state = { mode: 'snapshot', boundary: clock!.position, after: clock!.position, family: '', id: '', snapshotId: randomUUID() };
     }
@@ -129,8 +150,9 @@ export async function readFlightDeckRecordPage(input: {
       return grant('channel.read', 'channel', channelId);
     }
     const nextToken = randomUUID();
-    const response: FlightDeckRecordPage = {
-      protocol_version: 1, families: Object.keys(recordFamilies), mode: state.mode, changes: [], actors: [],
+    const response: FlightDeckRecordPage | FlightDeckRecordPageV2 = {
+      ...(device ? { protocol_version: 2 as const, client_id: input.clientId!, checkpoint_revision: client!.revision }
+        : { protocol_version: 1 as const }), families: Object.keys(recordFamilies), mode: state.mode, changes: [], actors: [],
       next_cursor: nextToken, has_more: entries.length > limit, snapshot_id: state.snapshotId,
       snapshot_complete: false, partitions_complete: [], bounds: { max_rows: RECORD_MAX_ROWS, max_bytes: RECORD_MAX_BYTES },
     };
@@ -191,7 +213,20 @@ export async function readFlightDeckRecordPage(input: {
     // Lock only after the bounded scan. A reset/write since our snapshot raises
     // 40001 and retries with fresh authority; a later reset waits for this commit.
     // Always take clock before cursor locks, matching record writer lock order.
-    if (input.cursor) {
+    if (device) {
+      await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
+      client = await requireRecordClient(clientInput, clock!.epoch, sql, true);
+      // Revalidate the temporary input after waiting for the client row lock.
+      if (input.cursor !== client.initial_cursor && input.cursor !== client.checkpoint_cursor) {
+        const renewed = await sql`UPDATE flightdeck_pg_record_page_tokens SET last_used_at=clock_timestamp()
+          WHERE token=${input.cursor!} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}
+          AND epoch=${clock!.epoch} AND last_used_at>clock_timestamp()-interval '7 days' RETURNING token`;
+        if (!renewed.length) throw new RecordSyncError(409, 'page_token_invalid');
+      }
+      await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
+        WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}`;
+      (response as FlightDeckRecordPageV2).checkpoint_revision = client.revision;
+    } else if (input.cursor) {
       await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
       const renewed = await sql`UPDATE flightdeck_pg_record_cursors SET last_used_at=clock_timestamp()
         WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
@@ -199,22 +234,35 @@ export async function readFlightDeckRecordPage(input: {
         RETURNING token`;
       if (!renewed.length) throw new RecordSyncError(409, 'reset_required');
     }
-    if (state.mode === 'delta' && entries.length === 0 && input.cursor) {
+    if (!device && state.mode === 'delta' && entries.length === 0 && input.cursor) {
       response.next_cursor = input.cursor;
       return response;
     }
-    await sql`INSERT INTO flightdeck_pg_record_cursors(token,workspace_id,actor_id,epoch,state)
+    if (device) {
+      await sql`INSERT INTO flightdeck_pg_record_page_tokens(token,workspace_id,actor_id,client_id,epoch,state,base_revision)
+        VALUES(${nextToken},${input.workspaceId},${input.actorId},${input.clientId!},${clock!.epoch},${sql.json(next)},${client!.revision})`;
+      // Serialized per client, bounded by 512 even when pages race. Checkpoints
+      // and bootstrap cursors are in the durable table and cannot be evicted.
+      await sql`DELETE FROM flightdeck_pg_record_page_tokens WHERE token IN (
+        SELECT token FROM flightdeck_pg_record_page_tokens WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}
+        ORDER BY created_at DESC,token OFFSET 512
+      )`;
+      await sql`DELETE FROM flightdeck_pg_record_page_tokens WHERE token IN (
+        SELECT token FROM flightdeck_pg_record_page_tokens WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}
+        AND last_used_at<=statement_timestamp()-interval '7 days' ORDER BY last_used_at,token LIMIT 64
+      ) AND last_used_at<=clock_timestamp()-interval '7 days'`;
+    } else await sql`INSERT INTO flightdeck_pg_record_cursors(token,workspace_id,actor_id,epoch,state)
       VALUES(${nextToken},${input.workspaceId},${input.actorId},${clock!.epoch},${sql.json(next)})`;
     return response;
-  }) as unknown as Promise<FlightDeckRecordPage>;
-  let response: FlightDeckRecordPage;
+  }) as unknown as Promise<FlightDeckRecordPage | FlightDeckRecordPageV2>;
+  let response: FlightDeckRecordPage | FlightDeckRecordPageV2;
   for (let attempt=0; ; attempt++) {
     try { response = await run(); break; }
     catch (error) {
       if (attempt >= 2 || !['40001','40P01'].includes(String((error as {code?:string}).code))) throw error;
     }
   }
-  if (response.next_cursor !== input.cursor) {
+  if (!device && response.next_cursor !== input.cursor) {
     // The page and its cursor have committed. Maintenance needs a fresh read-committed
     // snapshot: concurrent DELETEs in the page's repeatable-read snapshot cause 40001.
     // Serialize only this viewer's short cleanup, not the record scan or other viewers.

@@ -3538,6 +3538,35 @@ CREATE INDEX IF NOT EXISTS idx_fd_message_thread_effective_timeline
   WHERE thread_id IS NOT NULL;
 
 -- end_flightdeck_record_delta_v1
+-- flightdeck_record_checkpoints_v2
+-- Separate durable device state from legacy cursors and disposable page tokens.
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_clients (
+ workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ actor_id UUID NOT NULL REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE,
+ client_id UUID NOT NULL, epoch UUID NOT NULL,
+ initial_cursor UUID NOT NULL DEFAULT gen_random_uuid(), initial_state JSONB NOT NULL,
+ checkpoint_cursor UUID, checkpoint_state JSONB,
+ revision BIGINT NOT NULL DEFAULT 0 CHECK(revision >= 0),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_active_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,actor_id,client_id),
+ CHECK((checkpoint_cursor IS NULL AND checkpoint_state IS NULL AND revision=0)
+   OR (checkpoint_cursor IS NOT NULL AND checkpoint_state IS NOT NULL AND revision>0))
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_client_activity ON flightdeck_pg_record_clients(last_active_at);
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_page_tokens (
+ token UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ workspace_id UUID NOT NULL, actor_id UUID NOT NULL, client_id UUID NOT NULL,
+ epoch UUID NOT NULL, state JSONB NOT NULL, base_revision BIGINT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ FOREIGN KEY(workspace_id,actor_id,client_id)
+   REFERENCES flightdeck_pg_record_clients(workspace_id,actor_id,client_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_page_client ON flightdeck_pg_record_page_tokens(workspace_id,actor_id,client_id,created_at DESC,token);
+CREATE INDEX IF NOT EXISTS idx_fd_record_page_activity ON flightdeck_pg_record_page_tokens(last_used_at,token);
+-- Future prefix-pruning must advance this floor under the workspace clock lock.
+ALTER TABLE flightdeck_pg_record_clock ADD COLUMN IF NOT EXISTS journal_floor BIGINT NOT NULL DEFAULT 0;
+-- end_flightdeck_record_checkpoints_v2
+
 
 -- Authentication identity only; legacy git_* data remains for audit.
 CREATE TABLE IF NOT EXISTS forgejo_login_identities (

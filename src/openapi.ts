@@ -2381,6 +2381,26 @@ function preferredOrigin(origin: string) {
   return config.directHttpsUrl || origin;
 }
 
+const recordCheckpointParameters = [
+  { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+  { name: 'clientId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Canonical lowercase nonzero UUID identifying one cache; conveys no authorization.' },
+  { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [2] } },
+];
+const recordCheckpointResponses = {
+  '200': { description: 'Device checkpoint; revision remains unchanged except after a successful acknowledgement.', content: { 'application/json': { schema: {
+    type: 'object', required: ['protocol_version','client_id','authority_epoch','initial_cursor','checkpoint_cursor','checkpoint_revision','last_active_at'], properties: {
+      protocol_version: { type: 'integer', enum: [2] }, client_id: { type: 'string', format: 'uuid' }, authority_epoch: { type: 'string', format: 'uuid' },
+      initial_cursor: { type: 'string', format: 'uuid' }, checkpoint_cursor: { type: 'string', format: 'uuid', nullable: true },
+      checkpoint_revision: { type: 'string', pattern: '^[0-9]+$' }, last_active_at: { type: 'string', format: 'date-time' },
+    },
+  } } } },
+  '400': { description: 'Invalid protocol, client ID, cursor, revision or body' },
+  '401': { description: 'NIP-98 exact URL/method/payload authentication required' },
+  '403': { description: 'Membership required; hide workspace authoritative cache and preserve pending commands' },
+  '404': { description: 'Workspace not found' },
+  '409': { description: 'reset_required, history_pruned, client_not_registered, client_expired, client_capacity, page_token_invalid, checkpoint_conflict or checkpoint_regression; see v2 contract for recovery' },
+};
+
 export function buildDocsHtml(origin: string) {
   return docsHtml(`${preferredOrigin(origin)}/openapi.json`);
 }
@@ -4305,6 +4325,7 @@ export function buildOpenApiDocument(origin: string) {
               type: 'object',
               required: ['identity', 'service', 'capabilities', 'links'],
               properties: {
+                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], device_checkpoints true, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
                 identity: { type: 'object' }, service: { type: 'object' }, capabilities: { type: 'array', items: { type: 'string' } }, links: { type: 'object' },
 
               },
@@ -5504,15 +5525,49 @@ export function buildOpenApiDocument(origin: string) {
           responses: { '200': { description: 'SSE event stream' }, '400': { description: 'Invalid cursor or audience' }, '401': { description: 'Invalid NIP-98 auth' }, '403': { description: 'Workspace membership or audience authorization required' }, '404': { description: 'Workspace not found' } },
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}': {
+        delete: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Retire an owned cache and free a registration slot',
+          description: 'Signed exact URL/method. Idempotently deletes this actor/client checkpoint and temporary tokens even after epoch reset or expiry. Use a fresh client ID for replacement cache. Does not revoke workspace authority.',
+          parameters: recordCheckpointParameters,
+          responses: { '200': { description: '{protocol_version:2,client_id,retired:true}' }, '400': { description: 'Invalid protocol/client' }, '401': { description: 'NIP-98 required' }, '403': { description: 'Workspace membership required' } },
+        },
+        post: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Register a v2 record-sync cache identity',
+          description: 'Idempotent for a current active client. NIP-98 POST payload hash is required even for an empty body. Does not acknowledge any page. Capacity rejects rather than evicting active clients. See docs/contract/record-device-checkpoints-v2.md.',
+          parameters: recordCheckpointParameters,
+          responses: recordCheckpointResponses,
+        },
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read the last explicitly committed device checkpoint',
+          description: 'Returns initial_cursor, checkpoint_cursor (null before first ack), checkpoint_revision (decimal string), client_id, authority_epoch and last_active_at. Never substitute this checkpoint for an older valid local cursor or use it with an empty cache.',
+          parameters: recordCheckpointParameters,
+          responses: recordCheckpointResponses,
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/ack': {
+        post: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Acknowledge an atomically materialised v2 page',
+          description: 'Only after local rows and cursor commit. Server-issued token bound to exact signer actor, workspace, client and epoch. CAS checks expected_revision and token issuance revision; full snapshot keyset/delta ordering prevents regression. Retry of current checkpoint cursor is idempotent even after page-token expiry. Conflicts do not advance state.',
+          parameters: recordCheckpointParameters,
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object', additionalProperties: false, required: ['cursor','expected_revision'], properties: {
+              cursor: { type: 'string', format: 'uuid' }, expected_revision: { type: 'string', pattern: '^(0|[1-9][0-9]{0,18})$' },
+            },
+          } } } },
+          responses: recordCheckpointResponses,
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync': {
         get: {
-          summary: 'Bounded canonical record-family sync v1',
+          summary: 'Bounded canonical record-family sync v1 or opt-in v2',
           tags: ['Flight Deck PG'], security: [{ nip98: [] }],
-          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes; see docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged.',
+          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes; see docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged. V2 requires registered client_id and explicit cursor; page delivery never acknowledges local commit. See docs/contract/record-device-checkpoints-v2.md.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-            { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1] } },
-            { name: 'cursor', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1, 2] } },
+            { name: 'client_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Required for v2; canonical lowercase nonzero UUID for this local cache.' },
+            { name: 'cursor', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Required for v2. Exact local committed position; never defaults to a server checkpoint.' },
             { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 200 } },
           ],
           responses: {
@@ -5520,8 +5575,14 @@ export function buildOpenApiDocument(origin: string) {
               description: 'At most 200 scanned entries and 1048576 UTF-8 response bytes. Empty hidden-entry pages may have has_more=true.',
               content: { 'application/json': { schema: {
                 type: 'object', required: ['protocol_version','families','mode','changes','next_cursor','has_more','snapshot_id','snapshot_complete','partitions_complete','bounds'],
+                oneOf: [
+                  { properties: { protocol_version: { enum: [1] } } },
+                  { required: ['client_id','checkpoint_revision'], properties: { protocol_version: { enum: [2] } } },
+                ],
                 properties: {
-                  protocol_version: { type: 'integer', enum: [1] },
+                  protocol_version: { type: 'integer', enum: [1, 2] },
+                  client_id: { type: 'string', format: 'uuid', description: 'V2 only' },
+                  checkpoint_revision: { type: 'string', pattern: '^[0-9]+$', description: 'V2 only: issuance revision for CAS acknowledgement' },
                   families: { type: 'array', items: { type: 'string' } },
                   mode: { type: 'string', enum: ['snapshot','delta'] },
                   next_cursor: { type: 'string', format: 'uuid' }, has_more: { type: 'boolean' },
@@ -5548,7 +5609,7 @@ export function buildOpenApiDocument(origin: string) {
             },
             '400': { description: 'Unsupported version or invalid input' },
             '403': { description: 'Membership lost: hide workspace authoritative cache, preserve pending commands' },
-            '409': { description: 'reset_required: discard authoritative generation, preserve pending commands, restart without cursor' },
+            '409': { description: 'V1 reset_required: discard authoritative generation, preserve pending commands, restart without cursor. V2 reset/expiry/history/token errors follow docs/contract/record-device-checkpoints-v2.md; replace the cache ID and snapshot when no valid local resume handle remains.' },
             '413': { description: 'record_too_large: cursor has not advanced' },
           },
         },
