@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { getDb } from '../db';
 import { config } from '../config';
 import { resolveWsKeyNpub } from './user-workspace-keys';
@@ -251,22 +252,21 @@ export async function completeStorageObject(objectId: string, input: CompleteSto
   const creatorRealNpub = await resolveWsKeyNpub(existing.created_by_npub) ?? existing.created_by_npub;
   if (creatorRealNpub !== authNpub) return null;
 
-  if (inMemoryStorageForTest) {
-    if (!inMemoryStorageBytes.has(existing.storage_path)) return null;
-  } else {
-    try {
-      await storageBucket.stat(existing.storage_path);
-    } catch {
-      return null;
-    }
+  if (existing.completed_at) return verifyStorageIdentity(existing);
+  const identity = await hashStorageBytes(existing);
+  if (!identity) return null;
+  // Client claims are hints only; identity and size always come from stored bytes.
+  if (input.sha256_hex && input.sha256_hex.toLowerCase() !== identity.sha256) {
+    throw new Error('storage SHA-256 mismatch');
   }
 
   // Use the original created_by_npub for the WHERE clause (matches what's in the DB)
   const [row] = await sql<V4StorageObject[]>`
     UPDATE v4_storage_objects
     SET
-      sha256_hex = COALESCE(${input.sha256_hex || null}, sha256_hex),
-      size_bytes = COALESCE(${Number.isFinite(Number(input.size_bytes)) ? Number(input.size_bytes) : null}, size_bytes),
+      sha256_hex = ${identity.sha256},
+      sha256_verified_etag = ${identity.etag},
+      size_bytes = ${identity.size},
       completed_at = NOW()
     WHERE id = ${objectId}
       AND created_by_npub = ${existing.created_by_npub}
@@ -277,7 +277,7 @@ export async function completeStorageObject(objectId: string, input: CompleteSto
 
 export async function writeStorageObject(objectId: string, bytes: Uint8Array, authNpub: string): Promise<V4StorageObject | null> {
   const row = await getStorageObject(objectId);
-  if (!row) return null;
+  if (!row || row.completed_at) return null;
 
   // Resolve created_by_npub in case the object was created with a ws_key
   const creatorRealNpub = await resolveWsKeyNpub(row.created_by_npub) ?? row.created_by_npub;
@@ -323,4 +323,132 @@ export async function getStorageDownloadUrl(objectId: string): Promise<string | 
   return publicBucket.presign(row.storage_path, {
     expiresIn: Math.max(60, config.storage.presignDownloadTtlSeconds),
   });
+}
+
+// Hash incrementally so historical backfill never buffers an entire object.
+export async function hashStorageBytes(row: V4StorageObject, maxBytes = Infinity) {
+  try {
+    const stat = await statStorageBytes(row);
+    if (!stat || stat.size > maxBytes) return null;
+    const hash = createHash('sha256');
+    let size = 0;
+    const stream = inMemoryStorageForTest
+      ? new Blob([new Uint8Array(inMemoryStorageBytes.get(row.storage_path)!)]).stream()
+      : storageBucket.file(row.storage_path).stream();
+    for await (const chunk of stream) {
+      size += chunk.byteLength;
+      if (size > maxBytes) return null;
+      hash.update(chunk);
+    }
+    const after = await statStorageBytes(row);
+    if (!after || stat.etag !== after.etag || size !== stat.size) return null;
+    return { sha256: hash.digest('hex'), size, etag: stat.etag };
+  } catch { return null; }
+}
+
+export async function statStorageBytes(row: V4StorageObject) {
+  try {
+    if (!inMemoryStorageForTest) return await storageBucket.stat(row.storage_path);
+    const bytes = inMemoryStorageBytes.get(row.storage_path);
+    return bytes ? { size: bytes.byteLength, etag: createHash('sha256').update(bytes).digest('hex') } : null;
+  } catch { return null; }
+}
+
+export async function verifyStorageIdentity(row: V4StorageObject, maxBytes = Infinity) {
+  if (!row.completed_at || !await hasActiveStorageReference(row.id)) return null;
+  const stat = await statStorageBytes(row);
+  if (!stat || stat.size > maxBytes) return null;
+  if (row.sha256_verified_etag === stat.etag && /^[0-9a-f]{64}$/.test(row.sha256_hex || '')) return row;
+  const identity = await hashStorageBytes(row, maxBytes);
+  if (!identity) return null;
+  const [updated] = await getDb()<V4StorageObject[]>`
+    UPDATE v4_storage_objects SET sha256_hex = ${identity.sha256},
+      sha256_verified_etag = ${identity.etag}, size_bytes = ${identity.size}
+    WHERE id = ${row.id} AND completed_at IS NOT NULL AND storage_path = ${row.storage_path}
+    RETURNING *
+  `;
+  return updated || null;
+}
+
+export async function storageBlossomMetadata(row: V4StorageObject, origin: string) {
+  const verified = await verifyStorageIdentity(row);
+  if (verified) Object.assign(row, verified);
+  return {
+    blossom_url: verified ? `${origin}/${verified.sha256_hex}` : null,
+    blossom_auth: row.is_public ? 'public' as const : 'nostr' as const,
+  };
+}
+
+export async function storageObjectsByHash(hash: string) {
+  return getDb()<V4StorageObject[]>`
+    SELECT * FROM v4_storage_objects
+    WHERE sha256_hex = ${hash} AND sha256_verified_etag IS NOT NULL AND completed_at IS NOT NULL
+    ORDER BY id
+  `;
+}
+
+/** Keyset cursor bounds each run and permits failures to be retried on a new pass. */
+export async function backfillStorageHashes(options: { after?: string; limit?: number; maxBytes?: number } = {}) {
+  const limit = Math.min(100, Math.max(1, options.limit || 20));
+  const maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
+  const rows = await getDb()<V4StorageObject[]>`
+    SELECT * FROM v4_storage_objects WHERE completed_at IS NOT NULL
+      AND sha256_verified_etag IS NULL AND id > ${options.after || '00000000-0000-0000-0000-000000000000'}::uuid
+    ORDER BY id LIMIT ${limit}
+  `;
+  let remaining = maxBytes;
+  const results = [];
+  for (const row of rows) {
+    const stat = await statStorageBytes(row);
+    if (!stat) { results.push({ id: row.id, status: 'missing' }); continue; }
+    if (!await hasActiveStorageReference(row.id)) { results.push({ id: row.id, status: 'deleted_reference' }); continue; }
+    if (stat.size > remaining) { results.push({ id: row.id, status: 'budget_exceeded' }); continue; }
+    remaining -= stat.size;
+    const verified = await verifyStorageIdentity(row, stat.size);
+    results.push({ id: row.id, status: verified ? 'verified' : 'failed' });
+  }
+  return { results, next_cursor: rows.at(-1)?.id || null, bytes_budget_used: maxBytes - remaining };
+}
+
+/** Tombstoned app references revoke links; another active reference keeps bytes available. */
+export async function hasActiveStorageReference(id: string): Promise<boolean> {
+  const [result] = await getDb()<[{ eligible: boolean }]>`
+    SELECT (NOT EXISTS (SELECT 1 FROM flightdeck_pg_storage_links WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_docs WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_files WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_audio_notes WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_doc_versions WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_file_versions WHERE storage_object_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_doc_recovery_versions WHERE storage_object_id = ${id} OR head_storage_object_id = ${id}))
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_docs WHERE storage_object_id = ${id} AND deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_files WHERE storage_object_id = ${id} AND deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_audio_notes WHERE storage_object_id = ${id} AND deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_doc_versions v JOIN flightdeck_pg_docs d ON d.workspace_id=v.workspace_id AND d.id=v.doc_id WHERE v.storage_object_id=${id} AND d.deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_file_versions v JOIN flightdeck_pg_files f ON f.workspace_id=v.workspace_id AND f.id=v.file_id WHERE v.storage_object_id=${id} AND f.deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM flightdeck_pg_doc_recovery_versions v JOIN flightdeck_pg_docs d ON d.workspace_id=v.workspace_id AND d.id=v.doc_id WHERE (v.storage_object_id=${id} OR v.head_storage_object_id=${id}) AND d.deleted_at IS NULL)
+      OR EXISTS (
+        SELECT 1 FROM flightdeck_pg_storage_links l
+        WHERE l.storage_object_id = ${id} AND l.deleted_at IS NULL
+          AND (l.entity_type = 'message' AND EXISTS (SELECT 1 FROM flightdeck_pg_messages e WHERE e.id = l.entity_id AND e.workspace_id = l.workspace_id AND e.deleted_at IS NULL)
+            OR l.entity_type = 'doc' AND EXISTS (SELECT 1 FROM flightdeck_pg_docs e WHERE e.id = l.entity_id AND e.workspace_id = l.workspace_id AND e.deleted_at IS NULL)
+            OR l.entity_type = 'file' AND EXISTS (SELECT 1 FROM flightdeck_pg_files e WHERE e.id = l.entity_id AND e.workspace_id = l.workspace_id AND e.deleted_at IS NULL)
+            OR l.entity_type = 'audio_note' AND EXISTS (SELECT 1 FROM flightdeck_pg_audio_notes e WHERE e.id = l.entity_id AND e.workspace_id = l.workspace_id AND e.deleted_at IS NULL))
+      ) AS eligible
+  `;
+  return result.eligible;
+}
+
+/** Conditional S3 GET freezes the verified object version without buffering file bytes. */
+export async function openVerifiedStorageStream(row: V4StorageObject, range: { start: number; end: number } | null) {
+  if (inMemoryStorageForTest) {
+    const bytes = inMemoryStorageBytes.get(row.storage_path);
+    if (!bytes || createHash('sha256').update(bytes).digest('hex') !== row.sha256_hex) return null;
+    return new Blob([new Uint8Array(range ? bytes.slice(range.start, range.end + 1) : bytes)]).stream();
+  }
+  const url = storageBucket.presign(row.storage_path, { method: 'GET', expiresIn: 60 });
+  const headers: Record<string, string> = { 'If-Match': row.sha256_verified_etag! };
+  if (range) headers.Range = `bytes=${range.start}-${range.end}`;
+  const response = await fetch(url, { headers });
+  if (!response.ok || !response.body) { await response.body?.cancel(); return null; }
+  return response.body;
 }

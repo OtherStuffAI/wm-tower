@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { requireNip98AuthResolved } from '../auth';
 import { getInsufficientCreditsBlock } from '../services/billing';
 import {
+  storageBlossomMetadata,
   canAccessStorageObject,
   completeStorageObject,
   getStorageDownloadUrl,
@@ -39,6 +40,7 @@ storageRouter.post('/prepare', async (c) => {
     const uploadUrl = await getStorageUploadUrl(row.id);
     const downloadUrl = await getStorageDownloadUrl(row.id);
     return c.json({
+      ...(await storageBlossomMetadata(row, origin)),
       object_id: row.id,
       owner_npub: row.owner_npub,
       owner_group_id: row.owner_group_id,
@@ -72,6 +74,7 @@ storageRouter.get('/:objectId', async (c) => {
     const origin = new URL(c.req.url).origin;
     const downloadUrl = obj.completed_at ? await getStorageDownloadUrl(obj.id) : null;
     return c.json({
+      ...(await storageBlossomMetadata(obj, origin)),
       object_id: obj.id,
       owner_npub: obj.owner_npub,
       owner_group_id: obj.owner_group_id,
@@ -99,6 +102,7 @@ storageRouter.get('/:objectId', async (c) => {
   const origin = new URL(c.req.url).origin;
   const downloadUrl = row.completed_at ? await getStorageDownloadUrl(row.id) : null;
   return c.json({
+    ...(await storageBlossomMetadata(row, new URL(c.req.url).origin)),
     object_id: row.id,
     owner_npub: row.owner_npub,
     owner_group_id: row.owner_group_id,
@@ -133,6 +137,7 @@ storageRouter.put('/:objectId', async (c) => {
   if (!row) return c.json({ error: 'storage object not found or not writable by this npub' }, 404);
 
   return c.json({
+    ...(await storageBlossomMetadata(row, new URL(c.req.url).origin)),
     object_id: row.id,
     size_bytes: buffer.byteLength,
     content_type: row.content_type,
@@ -148,10 +153,16 @@ storageRouter.post('/:objectId/complete', async (c) => {
   if (!objectId) return c.json({ error: 'objectId required' }, 400);
 
   const body = await c.req.json<CompleteStorageInput>().catch(() => ({} as CompleteStorageInput));
-  const row = await completeStorageObject(objectId, body, authNpub);
+  let row;
+  try { row = await completeStorageObject(objectId, body, authNpub); }
+  catch (error) {
+    if (error instanceof Error && error.message === 'storage SHA-256 mismatch') return c.json({ error: error.message }, 409);
+    throw error;
+  }
   if (!row) return c.json({ error: 'storage object not found or not writable by this npub' }, 404);
 
   return c.json({
+    ...(await storageBlossomMetadata(row, new URL(c.req.url).origin)),
     object_id: row.id,
     owner_npub: row.owner_npub,
     owner_group_id: row.owner_group_id,
@@ -174,6 +185,7 @@ storageRouter.get('/:objectId/download-url', async (c) => {
   if (obj?.is_public) {
     const origin = new URL(c.req.url).origin;
     return c.json({
+      ...(await storageBlossomMetadata(obj, origin)),
       object_id: obj.id,
       content_url: `${origin}/api/v4/storage/${obj.id}/content`,
       download_url: (await getStorageDownloadUrl(obj.id)) || `${origin}/api/v4/storage/${obj.id}/content`,
@@ -189,6 +201,7 @@ storageRouter.get('/:objectId/download-url', async (c) => {
 
   const origin = new URL(c.req.url).origin;
   return c.json({
+    ...(await storageBlossomMetadata(row, new URL(c.req.url).origin)),
     object_id: row.id,
     content_url: `${origin}/api/v4/storage/${row.id}/content`,
     download_url: (await getStorageDownloadUrl(row.id)) || `${origin}/api/v4/storage/${row.id}/content`,

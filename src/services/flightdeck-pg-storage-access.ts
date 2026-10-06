@@ -7,7 +7,7 @@ import type {
 } from '../types';
 import { authorizeFlightDeckPgOperation, type FlightDeckPgAuthorizationDecision, resolveFlightDeckPgWorkspace } from './flightdeck-pg-authorization';
 import { resolveFlightDeckPgChannel } from './flightdeck-pg-api';
-import { canAccessStorageObject } from './storage';
+import { canAccessStorageObject, getStorageObject } from './storage';
 
 type DbClient = ReturnType<typeof getDb>;
 type DbJsonValue = Parameters<DbClient['json']>[0];
@@ -396,4 +396,56 @@ export async function resolveReadableFlightDeckPgMessageAttachment(
     LIMIT 1
   `;
   return storageObject ?? null;
+}
+
+/** Use the linked app/workspace ACL for hash retrieval, without broadening uploader rights. */
+export async function resolveReadableFlightDeckPgBlossomObject(
+  input: { actorNpub: string; storageObjectId: string },
+): Promise<V4StorageObject | null> {
+  const sql = getDb();
+  const links = await sql<(FlightDeckPgStorageLink & { app_npub: string })[]>`
+    SELECT l.*, w.app_npub FROM flightdeck_pg_storage_links l
+    JOIN flightdeck_pg_workspaces w ON w.id = l.workspace_id
+    WHERE l.storage_object_id = ${input.storageObjectId} AND l.deleted_at IS NULL
+      AND (l.entity_type = 'message' AND EXISTS (SELECT 1 FROM flightdeck_pg_messages e WHERE e.id=l.entity_id AND e.workspace_id=l.workspace_id AND e.deleted_at IS NULL)
+        OR l.entity_type = 'doc' AND EXISTS (SELECT 1 FROM flightdeck_pg_docs e WHERE e.id=l.entity_id AND e.workspace_id=l.workspace_id AND e.deleted_at IS NULL)
+        OR l.entity_type = 'file' AND EXISTS (SELECT 1 FROM flightdeck_pg_files e WHERE e.id=l.entity_id AND e.workspace_id=l.workspace_id AND e.deleted_at IS NULL)
+        OR l.entity_type = 'audio_note' AND EXISTS (SELECT 1 FROM flightdeck_pg_audio_notes e WHERE e.id=l.entity_id AND e.workspace_id=l.workspace_id AND e.deleted_at IS NULL))
+  `;
+  for (const link of links) {
+    const readable = await resolveReadableFlightDeckPgStorageObject({
+      ...input, workspaceId: link.workspace_id, appNpub: link.app_npub,
+    });
+    if (readable.ok) return readable.storageObject;
+  }
+  // Retained versions of a live resource remain readable under its current ACL.
+  const versions = await sql<{ workspace_id: string; channel_id: string; entity_type: 'doc' | 'file' | 'audio_note'; app_npub: string; workspace_owner_npub: string }[]>`
+    SELECT r.*, w.app_npub, w.workspace_owner_npub FROM (
+      SELECT workspace_id, channel_id, 'doc'::text AS entity_type FROM flightdeck_pg_docs WHERE storage_object_id=${input.storageObjectId} AND deleted_at IS NULL
+      UNION
+      SELECT workspace_id, channel_id, 'file'::text AS entity_type FROM flightdeck_pg_files WHERE storage_object_id=${input.storageObjectId} AND deleted_at IS NULL
+      UNION
+      SELECT workspace_id, channel_id, 'audio_note'::text AS entity_type FROM flightdeck_pg_audio_notes WHERE storage_object_id=${input.storageObjectId} AND deleted_at IS NULL
+      UNION
+      SELECT d.workspace_id, d.channel_id, 'doc'::text AS entity_type
+      FROM flightdeck_pg_doc_versions v JOIN flightdeck_pg_docs d ON d.workspace_id=v.workspace_id AND d.id=v.doc_id
+      WHERE v.storage_object_id=${input.storageObjectId} AND d.deleted_at IS NULL
+      UNION
+      SELECT f.workspace_id, f.channel_id, 'file'::text AS entity_type
+      FROM flightdeck_pg_file_versions v JOIN flightdeck_pg_files f ON f.workspace_id=v.workspace_id AND f.id=v.file_id
+      WHERE v.storage_object_id=${input.storageObjectId} AND f.deleted_at IS NULL
+      UNION
+      SELECT d.workspace_id, d.channel_id, 'doc'::text AS entity_type
+      FROM flightdeck_pg_doc_recovery_versions v JOIN flightdeck_pg_docs d ON d.workspace_id=v.workspace_id AND d.id=v.doc_id
+      WHERE (v.storage_object_id=${input.storageObjectId} OR v.head_storage_object_id=${input.storageObjectId}) AND d.deleted_at IS NULL
+    ) r JOIN flightdeck_pg_workspaces w ON w.id=r.workspace_id
+  `;
+  for (const version of versions) {
+    const access = await authorizeFlightDeckPgStorageRead({ actorNpub: input.actorNpub, appNpub: version.app_npub,
+      workspaceId: version.workspace_id, channelId: version.channel_id, entityType: version.entity_type }, sql);
+    if (!access.allowed) continue;
+    const object = await getStorageObject(input.storageObjectId);
+    if (object?.owner_npub === version.workspace_owner_npub) return object;
+  }
+  return null;
 }

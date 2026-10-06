@@ -365,11 +365,13 @@ CREATE TABLE IF NOT EXISTS v4_storage_objects (
   content_type TEXT NOT NULL,
   size_bytes BIGINT NOT NULL DEFAULT 0,
   sha256_hex TEXT,
+  sha256_verified_etag TEXT,
   storage_path TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMPTZ
 );
 
+CREATE INDEX IF NOT EXISTS idx_v4_storage_hash ON v4_storage_objects(sha256_hex) WHERE completed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_v4_storage_owner ON v4_storage_objects(owner_npub);
 CREATE INDEX IF NOT EXISTS idx_v4_storage_creator ON v4_storage_objects(created_by_npub);
 CREATE INDEX IF NOT EXISTS idx_v4_storage_group ON v4_storage_objects(owner_group_id);

@@ -211,6 +211,20 @@ describe('Storage API', () => {
     const completed = await completeRes.json();
     expect(completed.owner_group_id).toBeNull();
 
+    expect(completed.blossom_url).toBe(`http://localhost/${sha256Hex(bytes)}`);
+    expect(completed.blossom_auth).toBe('nostr');
+    const blobPath = `/${sha256Hex(bytes)}`;
+    const blob = await app.request(blobPath, { headers: { Authorization: authHeader(blobPath, 'GET', ownerSecret) } });
+    expect(blob.status).toBe(200);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
+    const head = await app.request(blobPath, { method: 'HEAD', headers: { Authorization: authHeader(blobPath, 'HEAD', ownerSecret) } });
+    expect(head.status).toBe(200);
+    expect(head.headers.get('content-length')).toBe('4');
+    expect(await head.text()).toBe('');
+    const range = await app.request(blobPath, { headers: { Range: 'bytes=1-2', Authorization: authHeader(blobPath, 'GET', ownerSecret) } });
+    expect(range.status).toBe(206);
+    expect(new Uint8Array(await range.arrayBuffer())).toEqual(new Uint8Array([2, 3]));
+
     const contentPath = `/api/v4/storage/${prepared.object_id}/content`;
     const contentRes = await app.request(contentPath, {
       headers: {
@@ -221,6 +235,24 @@ describe('Storage API', () => {
     const fetched = new Uint8Array(await contentRes.arrayBuffer());
     expect(Array.from(fetched)).toEqual([1, 2, 3, 4]);
     expect(contentRes.headers.get('content-type')).toContain('audio/webm');
+
+    // A still-valid presigned PUT can overwrite S3 after completion: stale hashes must stop working.
+    const { config } = await import('../src/config');
+    const bucket = new Bun.S3Client({ accessKeyId: config.storage.s3AccessKey, secretAccessKey: config.storage.s3SecretKey,
+      endpoint: config.storage.s3Endpoint, bucket: config.storage.s3Bucket, region: config.storage.s3Region,
+      virtualHostedStyle: !config.storage.s3ForcePathStyle });
+    const [object] = await sql`SELECT storage_path FROM v4_storage_objects WHERE id=${prepared.object_id}`;
+    const changed = new Uint8Array([1, 2, 3, 9]);
+    await bucket.write(object.storage_path, changed);
+    const stale = await app.request(blobPath, { headers: { Authorization: authHeader(blobPath, 'GET', ownerSecret) } });
+    expect(stale.status).toBe(404);
+    const metadataPath = `/api/v4/storage/${prepared.object_id}`;
+    const fresh = await app.request(metadataPath, { headers: { Authorization: authHeader(metadataPath, 'GET', ownerSecret) } });
+    expect((await fresh.json()).blossom_url).toBe(`http://localhost/${sha256Hex(changed)}`);
+    await bucket.delete(object.storage_path);
+    const missing = await app.request(metadataPath, { headers: { Authorization: authHeader(metadataPath, 'GET', ownerSecret) } });
+    expect((await missing.json()).blossom_url).toBeNull();
+
   });
 
   test('non-owner cannot prepare workspace-owned object', async () => {

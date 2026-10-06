@@ -480,6 +480,9 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     )
   `);
 
+  await sql.unsafe(`ALTER TABLE v4_storage_objects ADD COLUMN IF NOT EXISTS sha256_verified_etag TEXT`);
+  await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_v4_storage_hash ON v4_storage_objects(sha256_hex) WHERE completed_at IS NOT NULL`);
+
   await sql.unsafe(`
     CREATE INDEX IF NOT EXISTS idx_v4_storage_owner ON v4_storage_objects(owner_npub)
   `);

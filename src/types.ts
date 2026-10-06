@@ -2111,6 +2111,11 @@ export interface WorkspaceListEntry {
   updated_at: Date;
 }
 
+export interface StorageBlossomMetadata {
+  blossom_url: string | null;
+  blossom_auth: 'public' | 'nostr';
+}
+
 export interface V4StorageObject {
   id: string;
   owner_npub: string;
@@ -2122,6 +2127,7 @@ export interface V4StorageObject {
   content_type: string;
   size_bytes: number;
   sha256_hex: string | null;
+  sha256_verified_etag?: string | null;
   storage_path: string;
   created_at: Date;
   completed_at: Date | null;

@@ -1,3 +1,4 @@
+import { blossomRouter } from './routes/blossom';
 import { driveRouter } from './routes/drive';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -26,9 +27,9 @@ export function createApp() {
 
   app.use('*', cors({
     origin: '*',
-    allowHeaders: ['Content-Type', 'Authorization', 'x-wingman-workspace-owner', 'x-flightdeck-pg-app-npub', 'x-wingman-git-service-token', 'x-learning-grant-id'],
-    exposeHeaders: ['x-wingman-stale-version'],
-    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'x-wingman-workspace-owner', 'x-flightdeck-pg-app-npub', 'x-wingman-git-service-token', 'x-learning-grant-id', 'Range', 'If-Range', '*'],
+    exposeHeaders: ['x-wingman-stale-version', 'Content-Length', 'Content-Range', 'Accept-Ranges', 'ETag'],
+    allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   }));
 
   app.get('/health', (c) => {
@@ -89,6 +90,8 @@ export function createApp() {
   app.route('/api/v4/workspaces', streamRouter);
   app.route('/api/v4/user', userRouter);
   app.route('/api/v4/admin', adminRouter);
+
+  app.route('/', blossomRouter);
 
   return app;
 }

@@ -1599,6 +1599,9 @@ describe('Flight Deck PG API routes', () => {
     const channelMemberAttachmentRead = await requestRaw(attachedContentPath, 'GET', groupMemberSecret);
     expect(channelMemberAttachmentRead.res.status).toBe(200);
     expect(channelMemberAttachmentRead.bytes).toEqual(attachedBytes);
+    const attachmentHashRead = await requestRaw(`/${sha256Hex(attachedBytes)}`, 'GET', groupMemberSecret);
+    expect(attachmentHashRead.res.status).toBe(200);
+    expect(attachmentHashRead.bytes).toEqual(attachedBytes);
     const inaccessibleAttachmentRead = await requestJson(attachedContentPath, 'GET', inaccessibleAgentSecret);
     expect(inaccessibleAttachmentRead.res.status).toBe(404);
 
@@ -2929,6 +2932,9 @@ describe('Flight Deck PG API routes', () => {
     expect(fileObjectRead.json.object.file_name).toBe('launch-checklist.txt');
     expect(fileObjectRead.json.object.size_bytes).toBe(fileBytes.byteLength);
     expect(fileObjectRead.json.object.sha256_hex).toBe(sha256Hex(fileBytes));
+    const fileHashRead = await requestRaw(`/${sha256Hex(fileBytes)}`, 'GET', memberSecret);
+    expect(fileHashRead.res.status).toBe(200);
+    expect(fileHashRead.bytes).toEqual(fileBytes);
     expect(fileObjectRead.json.object.encoding).toBe('base64');
     expect(fileObjectRead.json.object.base64_data).toBe(Buffer.from(fileBytes).toString('base64'));
     const fileObjectPayload = JSON.stringify(fileObjectRead.json).toLowerCase();
@@ -3011,6 +3017,9 @@ describe('Flight Deck PG API routes', () => {
     expect(fileVersionCreate.json.version.etag).toBe(`"${sha256Hex(replacementBytes)}"`);
     expect(fileVersionCreate.json.storage_link.storage_object_id).toBe(replacementFileStorageObject.id);
     const replacementVersionId = fileVersionCreate.json.version.id as string;
+    const retainedHashRead = await requestRaw(`/${sha256Hex(fileBytes)}`, 'GET', memberSecret);
+    expect(retainedHashRead.res.status).toBe(200);
+    expect(retainedHashRead.bytes).toEqual(fileBytes);
 
     const fileVersionList = await requestJson(
       `/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${fileId}/versions?limit=1`,
@@ -3195,6 +3204,8 @@ describe('Flight Deck PG API routes', () => {
     const deletedFileObjectRead = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${fileId}/object`, 'GET', memberSecret);
     expect(deletedFileObjectRead.res.status).toBe(404);
     expect(deletedFileObjectRead.json.code).toBe('file_not_found');
+    const deletedHashRead = await requestRaw(`/${sha256Hex(fileBytes)}`, 'GET', ownerSecret);
+    expect(deletedHashRead.res.status).toBe(404);
 
     const filesAfterDelete = await requestJson(filesPath, 'GET', memberSecret);
     expect(filesAfterDelete.res.status).toBe(200);
