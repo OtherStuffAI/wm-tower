@@ -390,6 +390,89 @@ afterAll(async () => {
 });
 
 describe('Flight Deck PG API routes', () => {
+  test('message reference lookup routes cold IDs narrowly and hides denied or deleted targets', async () => {
+    const { workspaceId, ownerId, groupMemberId } = await seedWorkspace('npub1messagelookuptest');
+    const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind)
+      VALUES(${workspaceId},'Lookup','project') RETURNING id`;
+    const [channel] = await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name)
+      VALUES(${workspaceId},${scope!.id},'Lookup') RETURNING id`;
+    const [root] = await sql`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},'Root',${ownerId},${ownerId}) RETURNING id`;
+    const insertMessage = async (threadId: string | null, body: string) => {
+      const [message] = await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,thread_id,body,created_by_actor_id,updated_by_actor_id)
+        VALUES(${workspaceId},${scope!.id},${channel!.id},${threadId},${body},${ownerId},${ownerId}) RETURNING id`;
+      return message!.id as string;
+    };
+    const sourceId = await insertMessage(root!.id, 'Source');
+    const replyId = await insertMessage(root!.id, 'Reply');
+    const threadlessId = await insertMessage(null, 'Threadless');
+    await sql`UPDATE flightdeck_pg_threads SET source_message_id=${sourceId} WHERE id=${root!.id}`;
+    const [branch] = await sql`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,parent_thread_id,branch_point_message_id,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},'Branch',${root!.id},${sourceId},${ownerId},${ownerId}) RETURNING id`;
+    const branchMessageId = await insertMessage(branch!.id, 'Branch reply');
+    const base = `/api/v4/flightdeck-pg/workspaces/${workspaceId}`;
+    const read = (id: string, secret = groupMemberSecret, headers: Record<string, string> = {}) =>
+      requestJson(`${base}/messages/${id}`, 'GET', secret, undefined, headers);
+    const missing = await read(randomUUID());
+    expect(missing.res.status).toBe(404);
+    expect((await read(replyId)).json).toEqual(missing.json);
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${groupMemberId},'channel',${channel!.id},'channel.read')`;
+    for (const id of [sourceId, replyId]) {
+      const found = await read(id);
+      expect(found.res.status).toBe(200);
+      expect(found.json).toMatchObject({ channel_id: channel!.id, thread_id: root!.id,
+        message: { id, thread_source_message_id: sourceId, created_by_actor_npub: OWNER_NPUB, created_by_actor_label: 'Owner' },
+        thread: { id: root!.id, source_message_id: sourceId } });
+    }
+    // Inherited source IDs remain owned by the root, rather than selecting an arbitrary child.
+    expect((await read(branchMessageId)).json.thread_id).toBe(branch!.id);
+    expect((await read(sourceId)).json.thread_id).toBe(root!.id);
+    // Reassociated records use the saved current owner, not client metadata aliases.
+    const movedId = await insertMessage(root!.id, 'Reassociated');
+    await sql`UPDATE flightdeck_pg_messages SET thread_id=${branch!.id}, metadata='{"merged_into_thread_id":"untrusted-client-alias"}'::jsonb WHERE id=${movedId}`;
+    expect((await read(movedId)).json.thread_id).toBe(branch!.id);
+    await sql`UPDATE flightdeck_pg_threads SET archived_at=now() WHERE id=${branch!.id}`;
+    expect((await read(branchMessageId)).res.status).toBe(200);
+    expect((await read(threadlessId)).json).toMatchObject({ thread_id: null, thread: null, message: { id: threadlessId } });
+    expect((await read(replyId, groupMemberSecret, { 'x-flightdeck-pg-app-npub': 'npub1wrongapp' })).json).toEqual(missing.json);
+    expect((await requestJson(`${base}/messages/${replyId}?app_npub=npub1wrongapp`, 'GET', groupMemberSecret)).json).toEqual(missing.json);
+    expect((await read(replyId, groupMemberSecret, { 'x-flightdeck-pg-app-npub': APP_NPUB })).res.status).toBe(200);
+    expect((await read('not-a-uuid')).res.status).toBe(400);
+    expect((await read(replyId, inviteeSecret)).res.status).toBe(403);
+    const other = await seedWorkspace('npub1messagelookupforeign');
+    const foreign = await requestJson(`/api/v4/flightdeck-pg/workspaces/${other.workspaceId}/messages/${replyId}`, 'GET', ownerSecret);
+    expect(foreign.res.status).toBe(404);
+    expect(foreign.json.message).toBeUndefined();
+    expect(foreign.json.channel_id).toBeUndefined();
+    const canonical = await requestJson(`${base}/threads/${root!.id}`, 'GET', groupMemberSecret);
+    expect(canonical.res.status).toBe(200);
+    expect((await requestJson(`${base}/threads/${sourceId}`, 'GET', groupMemberSecret)).res.status).toBe(404);
+    // Non-human lookup must not bypass the existing thread-title participation rule.
+    const [bot] = await sql`INSERT INTO flightdeck_pg_actors(npub,kind,display_name) VALUES(${AGENT_NPUB},'agent','Lookup bot')
+      ON CONFLICT(npub) DO UPDATE SET kind='agent' RETURNING id`;
+    await sql`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${workspaceId},${bot!.id},'agent')`;
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${bot!.id},'channel',${channel!.id},'channel.read')`;
+    expect((await read(replyId, agentSecret)).json).toEqual(missing.json);
+    await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,thread_id,body,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scope!.id},${channel!.id},${root!.id},'Participant',${bot!.id},${bot!.id})`;
+    expect((await read(replyId, agentSecret)).res.status).toBe(200);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND principal_actor_id=${groupMemberId}`;
+    expect((await read(replyId)).json).toEqual(missing.json);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE workspace_id=${workspaceId} AND principal_actor_id=${groupMemberId}`;
+    await sql`UPDATE flightdeck_pg_messages SET deleted_at=now() WHERE id=${replyId}`;
+    expect((await read(replyId)).json).toEqual(missing.json);
+    // A deleted owning thread hides even a surviving active message; descendants do not resurrect it.
+    await sql`UPDATE flightdeck_pg_threads SET deleted_at=now() WHERE id=${root!.id}`;
+    expect((await read(sourceId)).json).toEqual(missing.json);
+    expect((await read(branchMessageId)).res.status).toBe(200);
+    await sql`UPDATE flightdeck_pg_channels SET archived_at=now() WHERE id=${channel!.id}`;
+    expect((await read(branchMessageId)).json).toEqual(missing.json);
+    await sql`DELETE FROM flightdeck_pg_workspace_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`;
+    expect((await read(branchMessageId)).res.status).toBe(403);
+  });
+
   test('restricted fresh record-sync resolves authors and assignees without directory access', async () => {
     const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1sidecarintegration');
     const [scope]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Sidecar','project') RETURNING id`;

@@ -1011,6 +1011,20 @@ export interface FlightDeckPgMessage {
   deleted_at: Date | null;
 }
 
+/** Wire response for the narrow authorized message reference lookup. Uses the
+ * same serialized message/thread fields as existing typed PG endpoints. */
+export interface FlightDeckPgMessageLookupResponse {
+  identity: FlightDeckPgIdentityFields;
+  channel_id: string;
+  thread_id: string | null;
+  message: FlightDeckPgMessageLookupWire<ReturnType<typeof import('./services/flightdeck-pg-api').serializeFlightDeckPgMessage>>;
+  thread: FlightDeckPgMessageLookupWire<ReturnType<typeof import('./services/flightdeck-pg-api').serializeFlightDeckPgThread>> | null;
+}
+
+type FlightDeckPgMessageLookupWire<T> = {
+  [K in keyof T]: T[K] extends Date ? string : T[K] extends Date | null ? string | null : T[K];
+};
+
 export interface FlightDeckPgMessageAttachment {
   storage_object_id: string;
   kind?: string;

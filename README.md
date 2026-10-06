@@ -75,3 +75,9 @@ record-sync clients retain their current behavior.
 [Personal attention v1](docs/contract/personal-attention-v1.md) documents the
 additive task/document attention metadata, persisted personalized view projections,
 existing-row backfill and independent user read/device checkpoint behavior.
+
+## Message reference lookup
+
+[Flight Deck message references](docs/contract/flightdeck-message-reference-lookup.md)
+documents the narrow authorized message/owning-thread lookup for uncached links,
+its error and branch semantics, and the separate runtime activation check.

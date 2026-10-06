@@ -1,3 +1,4 @@
+import { resolveFlightDeckPgMessageLookup } from '../services/flightdeck-pg-message-lookup';
 import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
 import { registerFeedReaderRoutes } from './feed-reader';
@@ -5287,6 +5288,47 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/messages',
     created: true,
     replayed: false,
   }, 201);
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/messages/:messageId', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const messageId = c.req.param('messageId');
+  if (!isUuid(messageId)) {
+    return validationError(c, identity, [{ path: 'messageId', code: 'invalid', message: 'messageId must be a UUID' }]);
+  }
+  const notFound = () => jsonError(c, 404, 'message_not_found', 'Flight Deck PG message not found', identity);
+  // An omitted app identity follows the workspace contract, as other typed reads do.
+  // An explicitly different app must never resolve a target in this workspace.
+  const appNpub = appNpubFromRequest(c, context.workspace.app_npub);
+  if (appNpub !== context.workspace.app_npub) return notFound();
+  const lookup = await resolveFlightDeckPgMessageLookup(context.workspace.id, messageId);
+  if (!lookup) return notFound();
+  const decision = await authorizeFlightDeckPgOperation({
+    actorNpub: auth.userNpub,
+    appNpub,
+    workspaceId: context.workspace.id,
+    permission: 'channel.read',
+    resource: { type: 'channel', channelId: lookup.message.channel_id },
+  });
+  // Do not reveal the channel, routing context, title or body of a denied ID.
+  if (!decision.allowed) return notFound();
+  if (lookup.thread && context.actor.kind !== 'human' && !(await isFlightDeckPgThreadParticipant({
+    workspaceId: context.workspace.id,
+    threadId: lookup.thread.id,
+    actorId: context.actor.id,
+    actorNpub: auth.userNpub,
+  }))) return notFound();
+  return c.json({
+    identity,
+    channel_id: lookup.message.channel_id,
+    thread_id: lookup.message.thread_id,
+    message: serializeFlightDeckPgMessage(lookup.message),
+    thread: lookup.thread ? serializeFlightDeckPgThread(lookup.thread) : null,
+  });
 });
 
 flightDeckPgRouter.patch('/workspaces/:workspaceId/messages/:messageId', async (c) => {

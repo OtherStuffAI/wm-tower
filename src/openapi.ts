@@ -4894,6 +4894,33 @@ export function buildOpenApiDocument(origin: string) {
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/messages/{messageId}': {
+        get: {
+          tags: ['Flight Deck PG'],
+          summary: 'Resolve one authorized message reference and its owning thread',
+          description: 'Narrow read without workspace bootstrap. Requires active workspace membership, matching app identity and channel.read. Non-human thread readers must participate, matching thread GET. Returns existing serialized message and thread fields; thread is null for a threadless message. Source-message and reply IDs resolve the current owning canonical thread, never a client merge alias or an arbitrary inherited branch. Missing, deleted, foreign-workspace, inaccessible-channel and denied-app targets share 404 message_not_found without routing/body disclosure. Existing thread GET is unchanged.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'messageId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'x-flightdeck-pg-app-npub', in: 'header', required: false, schema: { type: 'string' } },
+            { name: 'app_npub', in: 'query', required: false, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': { description: 'Authorized routing and message data', content: { 'application/json': { schema: {
+              type: 'object', required: ['identity', 'channel_id', 'thread_id', 'message', 'thread'],
+              properties: {
+                identity: { type: 'object', required: ['tower_service_npub', 'workspace_service_npub', 'workspace_owner_npub', 'workspace_id', 'app_npub'], properties: { tower_service_npub: { type: 'string', nullable: true }, workspace_service_npub: { type: 'string', nullable: true }, workspace_owner_npub: { type: 'string', nullable: true }, workspace_id: { type: 'string', format: 'uuid', nullable: true }, app_npub: { type: 'string' } } },
+                channel_id: { type: 'string', format: 'uuid' },
+                thread_id: { type: 'string', format: 'uuid', nullable: true },
+                message: { type: 'object', description: 'Existing serialized PG message, including creator identity and thread_source_message_id.' },
+                thread: { type: 'object', nullable: true, description: 'Existing serialized PG owning thread; null only for threadless messages.' },
+              },
+            } } } },
+            '400': { description: 'Invalid message UUID' },
+            '401': { description: 'NIP-98 authentication required' },
+            '403': { description: 'Active workspace membership required' },
+            '404': { description: 'Workspace missing or message target unavailable; no denied target disclosure' },
+          },
+        },
         patch: {
           tags: ['Flight Deck PG'],
           summary: 'Revise an existing message as its author',

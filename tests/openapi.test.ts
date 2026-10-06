@@ -56,6 +56,12 @@ describe('OpenAPI docs', () => {
     expect(body.paths['/api/v4/workspaces/{workspaceOwnerNpub}/apps/{appNpub}/db/{collection}/rows']).toBeDefined();
     expect(body.paths['/api/v4/workspaces/{workspaceOwnerNpub}/apps/{appNpub}/db/{collection}/rows/{rowId}']).toBeDefined();
     expect(body.paths['/api/v4/user/workspace-key-mappings']).toBeDefined();
+    const messageLookup = body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/messages/{messageId}'];
+    expect(messageLookup.get.responses['200'].content['application/json'].schema.required)
+      .toEqual(['identity', 'channel_id', 'thread_id', 'message', 'thread']);
+    expect(messageLookup.get.responses['404']).toBeDefined();
+    expect(messageLookup.patch).toBeDefined();
+    expect(messageLookup.delete).toBeDefined();
     expect(body.paths['/api/v4/flightdeck-pg/service'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.service_metadata']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.workspace_descriptor']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/me'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.me']);
