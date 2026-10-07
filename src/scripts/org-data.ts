@@ -31,6 +31,14 @@ export async function requestOrgData(
 		)
 	)
 		throw new Error("Unsupported typed org-data operation");
+	if (
+		method === "POST" &&
+		/^napplets\/(bundles|installations\/)/.test(input.path) &&
+		(input.body as any)?.trusted_code_acknowledged !== true
+	)
+		throw new Error(
+			"Trusted code acknowledgement required: review declared data/capabilities and iframe self-navigation exfiltration risk, then set trusted_code_acknowledged: true",
+		);
 	const broker = env.WINGMAN_BROKER_URL || env.WINGMAN_URL;
 	if (!broker || !env.SESSION_ID || !env.WINGMAN_CAPABILITY)
 		throw new Error(
@@ -39,7 +47,11 @@ export async function requestOrgData(
 	const url = `${base.origin}/api/v4/flightdeck-pg/workspaces/${input.workspace}/org-data/${input.path}`;
 	const body =
 		input.body === undefined ? undefined : JSON.stringify(input.body);
-	if (body && Buffer.byteLength(body) > 600000)
+	if (
+		body &&
+		Buffer.byteLength(body) >
+			(input.path === "napplets/bundles" ? 6 * 524288 + 16384 : 131072)
+	)
 		throw new Error("Body too large");
 	const signed = await fetchImpl(
 		`${broker.replace(/\/$/, "")}/api/mcp/capabilities/nip98`,
@@ -78,12 +90,10 @@ export async function requestOrgData(
 		},
 		body,
 	});
-	const payload = await response
-		.json()
-		.catch(() => ({
-			code: "non_json_response",
-			content_type: response.headers.get("content-type"),
-		}));
+	const payload = await response.json().catch(() => ({
+		code: "non_json_response",
+		content_type: response.headers.get("content-type"),
+	}));
 	if (!response.ok)
 		throw Object.assign(
 			new Error(`Tower rejected org-data operation (${response.status})`),

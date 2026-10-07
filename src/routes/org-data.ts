@@ -4,7 +4,11 @@ import {
 	buildFlightDeckPgIdentity,
 	resolveFlightDeckPgRequestContext,
 } from "../services/flightdeck-pg-api";
-import { orgOperation, OrgDataError } from "../services/org-data";
+import {
+	orgOperation,
+	OrgDataError,
+	NAPPLET_REQUEST_BYTES,
+} from "../services/org-data";
 export function registerOrgDataRoutes(router: Hono) {
 	const base = "/workspaces/:workspaceId/org-data";
 	const handle = (operation: string) => async (c: Context) => {
@@ -32,7 +36,7 @@ export function registerOrgDataRoutes(router: Hono) {
 				const raw = await c.req.text();
 				if (
 					Buffer.byteLength(raw) >
-					(operation === "nappletPublish" ? 600000 : 131072)
+					(operation === "nappletPublish" ? NAPPLET_REQUEST_BYTES : 131072)
 				)
 					throw new OrgDataError(400, "request_too_large");
 				if (raw)

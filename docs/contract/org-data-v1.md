@@ -34,8 +34,8 @@ for record operations. Hiding frontend actions is only a convenience.
 
 `GET /permissions` lists direct actor grants. `POST /permissions` takes
 `actor_id`, `permissions` and `expected_permissions`; the latter is a comparison
-against current direct grants, with 409 on drift. Only a **human** holding
-`workspace.manage` may use these routes. They never add membership, modify
+against current direct grants, with 409 on drift. Any actor holding resolved `workspace.manage`, including an explicitly delegated
+agent manager, may use these routes. They never add membership, modify
 ordinary workspace/group authority or let an agent self-escalate. Group grants
 remain subject to the normal workspace administration boundary. A targeted
 payload-free invalidation reaches an actor whose direct read permission was
@@ -73,8 +73,9 @@ referenced record cannot be deleted (`409 record_referenced`). Failed changes
 roll back records, audit and invalidations together.
 
 References validate existing readable target records in the same workspace.
-Actor/Nostr references require an existing workspace member, and both identities
-must match when supplied together. Workspace references support the current
+Actor/Nostr references require an existing workspace member, and people actor_ref/nostr_ref identity fields
+must match when supplied together. Ordinary text fields with these names have
+no identity or manager semantics. Workspace references support the current
 visible workspace only. References never grant membership or access. A read
 redacts references to a restricted target type or removed member to null.
 
@@ -93,14 +94,20 @@ ordinary readers cannot inspect historical values.
 ## Static bundle storage and installation
 
 `POST /napplets/bundles` accepts `key`, positive integer `version`, `title`,
-`bridge_version:1`, `capabilities` and UTF-8 `html` (up to 512 KiB). Scripts and
+`bridge_version:1`, `capabilities`, `trusted_code_acknowledged:true` and UTF-8
+`html` (up to 512 KiB). The bounded serialized JSON request maximum is 3,162,112
+bytes (six bytes per HTML byte plus 16 KiB metadata), accepting worst-case JSON
+escaping. Larger requests return `request_too_large`; oversized HTML returns
+`invalid_bundle`. Scripts and
 styles must be inline. Tower computes SHA-256 and stores an immutable version
 in `flightdeck_pg_napplet_bundles`; reusing a version returns 409. No separate
 server, DB credentials, private key, arbitrary remote URL or table join exists
 in this path. `GET /napplets/bundles` lists version metadata.
 
 `POST /napplets/installations/:bundleKey` takes `version` and
-`expected_revision` (0 for first install). It binds the workspace installation
+`expected_revision` (0 for first install), and `trusted_code_acknowledged:true`.
+Missing or false acknowledgement returns `trusted_code_acknowledgement_required`
+on both publication and installation. It binds the workspace installation
 to that exact stored version and advances the installation revision. The
 catalogue's Static napplets section can publish, install and launch a bundle.
 Installed launchers are also available through Toolbox after the authorised
@@ -110,16 +117,43 @@ Capabilities are the closed set `org_data.read`, `org_data.write`,
 `org_data.schema`, `profile.open`, `dm.open`. They restrict the host bridge and
 never grant Tower permissions. The host always prepends its own CSP before the
 published HTML and loads it in an opaque-origin `allow-scripts` sandbox.
-Connections, forms, objects, frames and external assets are denied; image data
+Resource connections, forms, objects, frames and external assets are denied; image data
 URLs can represent self-contained artwork. Publisher HTML never gets signing
-state or the parent DOM/storage.
+state or the parent DOM/storage. **This is trusted privileged JavaScript, not
+network-isolated code.** Browser proof confirms iframe self-navigation can send
+permitted record values to external HTTP endpoints despite the exact resource
+CSP. Publish/install grants must be restricted to trusted code reviewers; the
+acknowledgement confirms review of declared capabilities, permitted data and this
+residual navigation/exfiltration risk. Snapshot/catalogue expose published version
+metadata to authorised installers so the UI can disclose it before installing.
+
+## Delegated manager bootstrap
+
+An already authorised workspace manager can delegate to Rick through the existing
+`POST /api/v4/flightdeck-pg/workspaces/:workspaceId/groups/:groupId/members`
+route with `actor_id` or `member_npub`, selecting the workspace Admins group.
+Admins already carries `workspace.manage`, `workspace.read` and org-data grants.
+This is broad explicit manager delegation, so use it only for intended managers;
+ordinary editors receive narrower org-data grants instead. Group membership uses
+the same authority resolver as standard workspace administration. Rick can then use `/permissions`
+to grant/revoke dedicated org-data permissions with expected-grants CAS.
+Alternatively an existing manager grants only read/write/schema to an editor.
+Record/schema agents cannot grant permissions or grant themselves manager access.
+Even a delegated agent manager cannot add missing schema/publication/install (or
+other org-data) authority to itself. The server rejects self-targeted elevation
+with `self_permission_escalation`; harmless self-revocation remains allowed.
+An existing authorised manager must grant any additional agent authority.
+No raw Pete key, Tier2 bypass, identity-type exception or direct DB mutation is
+needed. A session still needs a broker capability scoped to the exact typed API.
 
 ## Agent usage
 
 `bun src/scripts/org-data.ts --tower <URL> --workspace <UUID> --app-npub <NPUB>
 --path snapshot` uses the session's `WINGMAN_BROKER_URL`/`WINGMAN_URL`,
 `SESSION_ID` and `WINGMAN_CAPABILITY`. Add `--method POST|PATCH|DELETE` and
-`--body-file <JSON>` for a permitted mutation. The client requests NIP-98 from
+`--body-file <JSON>` for a permitted mutation. Publication/install JSON must explicitly contain
+`trusted_code_acknowledged:true` after reviewing code, capabilities, data and
+navigation risk; the CLI refuses to sign requests missing this acknowledgement. The client requests NIP-98 from
 `/api/mcp/capabilities/nip98` with the exact target, method and SHA-256 body hash;
 redirects are denied. It accepts no private key and cannot expand its broker
 scope. Tower independently checks every grant. A capability denial requires a

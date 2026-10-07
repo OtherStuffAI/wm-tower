@@ -335,6 +335,7 @@ describe.skipIf(!port || port === 5432)(
 		});
 		test("immutable static bundle publish/install stores version, digest, capabilities and CAS", async () => {
 			const b = {
+				trusted_code_acknowledged: true,
 				key: "demo",
 				title: "Demo",
 				version: 1,
@@ -358,11 +359,13 @@ describe.skipIf(!port || port === 5432)(
 			await orgOperation(manager, "nappletInstall", "demo", undefined, {
 				version: 1,
 				expected_revision: 0,
+				trusted_code_acknowledged: true,
 			});
 			await expect(
 				orgOperation(manager, "nappletInstall", "demo", undefined, {
 					version: 1,
 					expected_revision: 0,
+					trusted_code_acknowledged: true,
 				}),
 			).rejects.toMatchObject({ code: "revision_conflict" });
 			const snapshot = await orgOperation(viewer, "snapshot");
@@ -370,14 +373,14 @@ describe.skipIf(!port || port === 5432)(
 			expect(snapshot.installations[0].revision).toBe(1);
 		});
 
-		test("human managers grant editor/viewer capabilities with CAS; agents cannot self-escalate", async () => {
+		test("workspace managers grant editor/viewer capabilities with CAS; agents cannot self-escalate", async () => {
 			await expect(
 				orgOperation(agent, "grantPermissions", undefined, undefined, {
 					actor_id: agent.actorId,
 					permissions: ["org_data.schema"],
 					expected_permissions: [],
 				}),
-			).rejects.toMatchObject({ code: "human_workspace_manager_required" });
+			).rejects.toMatchObject({ code: "workspace_manager_required" });
 			const members = await orgOperation(manager, "permissions");
 			const target = members.members.find(
 				(m: any) => m.id === outsider.actorId,
@@ -469,6 +472,164 @@ describe.skipIf(!port || port === 5432)(
 				}),
 			).rejects.toMatchObject({ code: "invalid_reference" });
 		});
+		test("ordinary custom text fields named manager, actor and nostr create/update without identity rules", async () => {
+			await orgOperation(manager, "createType", undefined, undefined, {
+				key: "custom_text",
+				label: "Custom",
+				fields: ["manager", "actor", "nostr"].map((key) => ({
+					key,
+					label: key,
+					type: "text",
+				})),
+				access: { read: "members", write: "members" },
+			});
+			const record = (
+				await orgOperation(editor, "create", "custom_text", undefined, {
+					values: { manager: "ordinary", actor: "not-a-uuid", nostr: "text" },
+				})
+			).record;
+			const updated = (
+				await orgOperation(editor, "update", "custom_text", record.id, {
+					expected_revision: 1,
+					values: {
+						manager: record.id,
+						actor: "another text",
+						nostr: "ordinary text",
+					},
+				})
+			).record;
+			expect(updated.revision).toBe(2);
+			expect(updated.values.manager).toBe(record.id);
+		});
+		test("explicit delegated agent workspace manager grants/revokes; ordinary agent cannot grant", async () => {
+			await expect(
+				orgOperation(agent, "grantPermissions", undefined, undefined, {
+					actor_id: agent.actorId,
+					permissions: ["org_data.schema"],
+					expected_permissions: [],
+				}),
+			).rejects.toMatchObject({ status: 403 });
+			await grant(agent, "workspace.manage");
+			const own = (await orgOperation(agent, "permissions")).members.find(
+				(m: any) => m.id === agent.actorId,
+			).permissions;
+			for (const missing of [
+				"org_data.schema",
+				"napplet.publish",
+				"napplet.install",
+			]) {
+				await expect(
+					orgOperation(agent, "grantPermissions", undefined, undefined, {
+						actor_id: agent.actorId,
+						permissions: [...own, missing],
+						expected_permissions: own,
+					}),
+				).rejects.toMatchObject({
+					status: 403,
+					code: "self_permission_escalation",
+				});
+			}
+			// A delegated manager may reduce its own grants without elevating itself.
+			await orgOperation(agent, "grantPermissions", undefined, undefined, {
+				actor_id: agent.actorId,
+				permissions: ["org_data.read"],
+				expected_permissions: own,
+			});
+			expect((await orgOperation(agent, "catalogue")).capabilities.write).toBe(
+				false,
+			);
+			await orgOperation(manager, "grantPermissions", undefined, undefined, {
+				actor_id: agent.actorId,
+				permissions: own,
+				expected_permissions: ["org_data.read"],
+			});
+
+			const before = (await orgOperation(agent, "permissions")).members.find(
+				(m: any) => m.id === viewer.actorId,
+			).permissions;
+			await orgOperation(agent, "grantPermissions", undefined, undefined, {
+				actor_id: viewer.actorId,
+				permissions: [...before, "org_data.write"],
+				expected_permissions: before,
+			});
+			expect((await orgOperation(viewer, "catalogue")).capabilities.write).toBe(
+				true,
+			);
+			await orgOperation(agent, "grantPermissions", undefined, undefined, {
+				actor_id: viewer.actorId,
+				permissions: before,
+				expected_permissions: [...before, "org_data.write"],
+			});
+			expect((await orgOperation(viewer, "catalogue")).capabilities.write).toBe(
+				false,
+			);
+			await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${agent.workspaceId} AND principal_actor_id=${agent.actorId} AND permission='workspace.manage'`;
+		});
+		test("signed publication accepts escaped HTML boundary and rejects overflow/absent trust", async () => {
+			const publish = async (body: any, suffix = "") => {
+				const url = `http://tower.test/api/v4/flightdeck-pg/workspaces/${manager.workspaceId}/org-data/napplets/bundles`;
+				const raw = JSON.stringify(body) + suffix;
+				const event = finalizeEvent(
+					{
+						kind: 27235,
+						created_at: Math.floor(Date.now() / 1000),
+						tags: [
+							["u", url],
+							["method", "POST"],
+							["payload", createHash("sha256").update(raw).digest("hex")],
+						],
+						content: "",
+					},
+					keys[0]!,
+				);
+				return app.request(url, {
+					method: "POST",
+					headers: {
+						Authorization:
+							"Nostr " + Buffer.from(JSON.stringify(event)).toString("base64"),
+						"x-flightdeck-pg-app-npub": "org-app",
+						"content-type": "application/json",
+					},
+					body: raw,
+				});
+			};
+			const body = {
+				key: "escaped",
+				version: 1,
+				title: "Escaped",
+				bridge_version: 1,
+				capabilities: ["org_data.read"],
+				trusted_code_acknowledged: true,
+				html: "<p>" + "\u0001".repeat(524279) + '"\n</p>',
+			};
+			expect(Buffer.byteLength(body.html)).toBe(524288);
+			expect((await publish(body)).status).toBe(200);
+			expect(
+				(await publish({ ...body, key: "too_big", html: body.html + "x" }))
+					.status,
+			).toBe(400);
+			const capped = await publish({ ...body, key: "cap" }, " ".repeat(20000));
+			expect(capped.status).toBe(400);
+			expect((await capped.json()).error.code).toBe("request_too_large");
+			const untrusted = await publish({
+				...body,
+				key: "untrusted",
+				trusted_code_acknowledged: false,
+			});
+			expect(untrusted.status).toBe(400);
+			expect((await untrusted.json()).error.code).toBe(
+				"trusted_code_acknowledgement_required",
+			);
+			await expect(
+				orgOperation(manager, "nappletInstall", "escaped", undefined, {
+					version: 1,
+					expected_revision: 0,
+				}),
+			).rejects.toMatchObject({
+				code: "trusted_code_acknowledgement_required",
+			});
+		});
+
 		test("signed typed HTTP routes enforce app, workspace and membership scopes", async () => {
 			const request = async (
 				index: number,

@@ -63,8 +63,10 @@ export const orgDataSchemas = {
 			"bridge_version",
 			"capabilities",
 			"html",
+			"trusted_code_acknowledged",
 		],
 		properties: {
+			trusted_code_acknowledged: { const: true },
 			key: { type: "string" },
 			version: revision,
 			title: { type: "string", maxLength: 200 },
@@ -85,14 +87,15 @@ export const orgDataSchemas = {
 			html: {
 				type: "string",
 				description:
-					"Immutable UTF-8 static HTML, maximum 512 KiB. Host enforces CSP and opaque-origin sandbox.",
+					"Immutable UTF-8 static HTML, maximum 512 KiB. Trusted privileged code. Resource CSP does not prevent iframe self-navigation or data exfiltration. Serialized request maximum 3162112 bytes.",
 			},
 		},
 	},
 	NappletInstall: {
 		type: "object",
-		required: ["version", "expected_revision"],
+		required: ["version", "expected_revision", "trusted_code_acknowledged"],
 		properties: {
+			trusted_code_acknowledged: { const: true },
 			version: revision,
 			expected_revision: { type: "integer", minimum: 0 },
 		},
@@ -187,11 +190,11 @@ export const orgDataPaths = Object.fromEntries([
 	route("/permissions", {
 		get: [
 			"Read direct org-data grants for workspace members",
-			"workspace.manage (human only)",
+			"workspace.manage",
 		],
 		post: [
 			"Replace direct org-data grants with expected_permissions compare-and-set",
-			"workspace.manage (human only)",
+			"workspace.manage",
 		],
 	}),
 	route("/history", {

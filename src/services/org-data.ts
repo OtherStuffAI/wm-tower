@@ -218,7 +218,12 @@ export async function orgOperation(
 		};
 		const installations =
 			await sql`SELECT i.key,i.version,i.revision,b.title,b.bridge_version,b.capabilities,b.sha256,b.html FROM flightdeck_pg_napplet_installations i JOIN flightdeck_pg_napplet_bundles b USING(workspace_id,key,version) WHERE i.workspace_id=${ctx.workspaceId} ORDER BY i.key`;
+		const bundles =
+			permissions["napplet.install"] || permissions["napplet.publish"]
+				? await sql`SELECT key,version,title,bridge_version,capabilities,sha256 FROM flightdeck_pg_napplet_bundles WHERE workspace_id=${ctx.workspaceId} ORDER BY key,version`
+				: [];
 		const catalogue = () => ({
+			bundles,
 			installations,
 			types: types
 				.filter((t) => orgAllowed(ctx, t, "read"))
@@ -277,7 +282,11 @@ export async function orgOperation(
 					)),
 				);
 			const people = safe.filter((r: any) => r.type_key === "people");
-			const actorIds = people.map((r: any) => r.values.actor).filter(Boolean);
+			const actorIds = types
+				.find((t) => t.key === "people")
+				?.fields.some((f) => f.key === "actor" && f.type === "actor_ref")
+				? people.map((r: any) => r.values.actor).filter(Boolean)
+				: [];
 			const members = actorIds.length
 				? await sql`SELECT a.id,a.npub FROM flightdeck_pg_actors a JOIN flightdeck_pg_workspace_memberships m ON m.actor_id=a.id WHERE m.workspace_id=${ctx.workspaceId} AND a.id IN ${sql(actorIds)}`
 				: [];
@@ -446,9 +455,28 @@ export async function orgOperation(
 		validateOrgValues(type, body.values);
 		if (key === "holidays" && body.values.start_date > body.values.end_date)
 			throw new OrgDataError(400, "invalid_date_range");
-		if (body.values.manager && body.values.manager === id)
+		if (
+			key === "people" &&
+			type.fields.some(
+				(f) =>
+					f.key === "manager" &&
+					f.type === "record_ref" &&
+					f.target_type === "people",
+			) &&
+			body.values.manager &&
+			body.values.manager === id
+		)
 			throw new OrgDataError(400, "manager_cycle");
-		if (key === "people" && body.values.manager) {
+		if (
+			key === "people" &&
+			type.fields.some(
+				(f) =>
+					f.key === "manager" &&
+					f.type === "record_ref" &&
+					f.target_type === "people",
+			) &&
+			body.values.manager
+		) {
 			let next = body.values.manager;
 			const seen = new Set([id]);
 			while (next) {
@@ -484,7 +512,13 @@ export async function orgOperation(
 			if (f.type === "workspace_ref") exists = v === ctx.workspaceId;
 			if (!exists) throw new OrgDataError(400, "invalid_reference");
 		}
-		if (body.values.actor && body.values.nostr) {
+		if (
+			key === "people" &&
+			type.fields.some((f) => f.key === "actor" && f.type === "actor_ref") &&
+			type.fields.some((f) => f.key === "nostr" && f.type === "nostr_ref") &&
+			body.values.actor &&
+			body.values.nostr
+		) {
 			const [actor] =
 				await sql`SELECT npub FROM flightdeck_pg_actors WHERE id=${body.values.actor}`;
 			if (actor?.npub !== body.values.nostr)
@@ -559,6 +593,7 @@ export const nappletCapabilities = [
 	"profile.open",
 	"dm.open",
 ];
+export const NAPPLET_REQUEST_BYTES = 6 * 524288 + 16384;
 export function validateNappletBundle(body: any) {
 	if (
 		!body ||
@@ -600,6 +635,8 @@ async function nappletOperation(
 	if (op === "nappletPublish") {
 		if (!ctx.permissions?.["napplet.publish"])
 			throw new OrgDataError(403, "napplet_publish_required");
+		if (body?.trusted_code_acknowledged !== true)
+			throw new OrgDataError(400, "trusted_code_acknowledgement_required");
 		const b = validateNappletBundle(body);
 		const [old] =
 			await sql`SELECT sha256 FROM flightdeck_pg_napplet_bundles WHERE workspace_id=${ctx.workspaceId} AND key=${b.key} AND version=${b.version}`;
@@ -617,6 +654,8 @@ async function nappletOperation(
 	if (op === "nappletInstall") {
 		if (!ctx.permissions?.["napplet.install"])
 			throw new OrgDataError(403, "napplet_install_required");
+		if (body?.trusted_code_acknowledged !== true)
+			throw new OrgDataError(400, "trusted_code_acknowledgement_required");
 		if (
 			!key ||
 			!keyPattern.test(key) ||
@@ -653,10 +692,8 @@ async function orgPermissions(
 	sql: any,
 	audit: any,
 ) {
-	const [self] =
-		await sql`SELECT kind FROM flightdeck_pg_actors WHERE id=${ctx.actorId}`;
-	if (!ctx.permissions?.["workspace.manage"] || self?.kind !== "human")
-		throw new OrgDataError(403, "human_workspace_manager_required");
+	if (!ctx.permissions?.["workspace.manage"])
+		throw new OrgDataError(403, "workspace_manager_required");
 	if (op === "permissions") {
 		const members =
 			await sql`SELECT a.id,a.display_name,a.npub,a.kind FROM flightdeck_pg_actors a JOIN flightdeck_pg_workspace_memberships m ON m.actor_id=a.id WHERE m.workspace_id=${ctx.workspaceId} ORDER BY a.id`;
@@ -686,6 +723,15 @@ async function orgPermissions(
 		JSON.stringify(old)
 	)
 		throw new OrgDataError(409, "permission_conflict");
+	if (
+		body.actor_id === ctx.actorId &&
+		body.permissions.some((p: string) => !ctx.permissions?.[p])
+	) {
+		const [self] =
+			await sql`SELECT kind FROM flightdeck_pg_actors WHERE id=${ctx.actorId}`;
+		if (self?.kind !== "human")
+			throw new OrgDataError(403, "self_permission_escalation");
+	}
 	await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${ctx.workspaceId} AND principal_type='actor' AND principal_actor_id=${body.actor_id} AND resource_type='workspace' AND revoked_at IS NULL AND permission IN ${sql(orgPermissionsList)}`;
 	for (const p of body.permissions)
 		await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,permission,created_by_actor_id) VALUES(${ctx.workspaceId},'actor',${body.actor_id},'workspace',${p},${ctx.actorId})`;

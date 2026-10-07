@@ -51,3 +51,23 @@ test("agent CLI uses session broker and exact typed request/body hash, without k
 		),
 	).rejects.toThrow("Unsupported");
 });
+
+test("agent CLI refuses unacknowledged trusted code before asking broker to sign", async () => {
+	const fetchImpl = async () => {
+		throw new Error("must not sign");
+	};
+	await expect(
+		requestOrgData(
+			{
+				tower: "http://localhost:3100",
+				workspace: "11111111-1111-4111-8111-111111111111",
+				appNpub: "app",
+				path: "napplets/bundles",
+				method: "POST",
+				body: { html: "demo" },
+			},
+			{},
+			fetchImpl as any,
+		),
+	).rejects.toThrow("Trusted code acknowledgement required");
+});
