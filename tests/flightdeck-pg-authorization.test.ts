@@ -1,3 +1,4 @@
+import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../src/services/flightdeck-pg-message-activity';
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
@@ -834,5 +835,68 @@ describe('Flight Deck PG authorization service', () => {
     );
     expect(entityWriter.allowed).toBe(true);
     if (entityWriter.allowed) expect(entityWriter.permission).toBe('file.write');
+  });
+});
+
+describe('Message activity aggregation', () => {
+  test('requires an explicit supported range', () => {
+    for (const range of [undefined, '', '1d', 'ALL', '7d ']) expect(parseMessageActivityRange(range)).toBeNull();
+    for (const range of ['7d', '30d', 'all']) expect(parseMessageActivityRange(range)).toBe(range);
+  });
+
+  test('concurrent ACL revocation and deletion cannot change an established snapshot', async () => {
+    const f = await seedAuthorizationFixture('message-activity-snapshot');
+    await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id,created_at)
+      VALUES(${f.workspaceId},${f.scopes.primary},${f.channels.primary},'snapshot',${f.actors.direct.id},${f.actors.direct.id},now()-interval '1 hour')`;
+    const input = { workspaceId: f.workspaceId, actorId: f.actors.direct.id, groupIds: [], range: '7d' as const };
+    await sql.begin('isolation level repeatable read read only', async tx => {
+      const db = tx as unknown as typeof sql;
+      const before = await readFlightDeckPgMessageActivity(input, db);
+      await sql.begin(async writer => {
+        await writer`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${f.workspaceId} AND resource_channel_id=${f.channels.primary}`;
+        await writer`UPDATE flightdeck_pg_messages SET deleted_at=now() WHERE workspace_id=${f.workspaceId}`;
+      });
+      expect(await readFlightDeckPgMessageActivity(input, db)).toEqual(before);
+      expect(before.channels[0].count).toBe(1);
+    });
+    await sql.begin('isolation level repeatable read read only', async tx => {
+      expect((await readFlightDeckPgMessageActivity(input, tx as unknown as typeof sql)).channels).toEqual([]);
+    });
+  });
+
+  test('canonical replies, boundaries, ACLs, empty channels and snapshot consistency', async () => {
+    const f = await seedAuthorizationFixture('message-activity');
+    await sql.begin('isolation level repeatable read', async tx => {
+      const db = tx as unknown as typeof sql;
+      const [clock] = await tx`SELECT date_trunc('milliseconds', transaction_timestamp()) AS now`;
+      const now = clock.now as Date;
+      const from = new Date(now.getTime() - 7 * 86400000);
+      const [thread] = await tx`INSERT INTO flightdeck_pg_threads (workspace_id, scope_id, channel_id, title, created_by_actor_id, updated_by_actor_id)
+        VALUES (${f.workspaceId}, ${f.scopes.primary}, ${f.channels.primary}, 'reply', ${f.actors.direct.id}, ${f.actors.direct.id}) RETURNING id`;
+      for (const [at, deleted, reply] of [
+        [from, false, false], [new Date(from.getTime()-1), false, false],
+        [new Date(now.getTime()-1), false, true], [now, false, false],
+        [new Date(now.getTime()+1), false, false], [from, true, false],
+      ] as const) {
+        await tx`INSERT INTO flightdeck_pg_messages (workspace_id, scope_id, channel_id, thread_id, body, created_by_actor_id, updated_by_actor_id, created_at, deleted_at)
+          VALUES (${f.workspaceId}, ${f.scopes.primary}, ${f.channels.primary}, ${reply ? thread.id : null}, 'synthetic', ${f.actors.direct.id}, ${f.actors.direct.id}, ${at}, ${deleted ? now : null})`;
+      }
+      const input = { workspaceId: f.workspaceId, actorId: f.actors.direct.id, groupIds: [], range: '7d' as const };
+      const activity = await readFlightDeckPgMessageActivity(input, db);
+      expect(activity).toEqual({ workspace_id: f.workspaceId, range: '7d', from: from.toISOString(), to: now.toISOString(), as_of: now.toISOString(), complete: true,
+        channels: [{ channel_id: f.channels.primary, scope_id: f.scopes.primary, count: 2 }] });
+      expect((await readFlightDeckPgMessageActivity({ ...input, range: 'all' }, db)).channels[0].count).toBe(3);
+      expect((await readFlightDeckPgMessageActivity({ ...input, range: '30d' }, db)).channels[0].count).toBe(3);
+      expect((await readFlightDeckPgMessageActivity({ ...input, actorId: f.actors.workspaceOnly.id }, db)).channels).toEqual([]);
+      // Multiple matching direct/group grants do not multiply canonical rows.
+      expect((await readFlightDeckPgMessageActivity({ ...input, groupIds: [f.groups.parent] }, db)).channels[0].count).toBe(2);
+      await tx`UPDATE flightdeck_pg_messages SET deleted_at = ${now} WHERE workspace_id = ${f.workspaceId}`;
+      expect((await readFlightDeckPgMessageActivity(input, db)).channels[0].count).toBe(0);
+      await tx`UPDATE flightdeck_pg_channels SET archived_at = ${now} WHERE id = ${f.channels.primary}`;
+      expect((await readFlightDeckPgMessageActivity(input, db)).channels).toEqual([]);
+      await tx`UPDATE flightdeck_pg_channels SET archived_at = NULL WHERE id = ${f.channels.primary}`;
+      await tx`UPDATE flightdeck_pg_scopes SET archived_at = ${now} WHERE id = ${f.scopes.primary}`;
+      expect((await readFlightDeckPgMessageActivity(input, db)).channels).toEqual([]);
+    });
   });
 });

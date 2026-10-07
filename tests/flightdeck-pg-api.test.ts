@@ -390,6 +390,34 @@ afterAll(async () => {
 });
 
 describe('Flight Deck PG API routes', () => {
+  test('message activity authenticates workspace/app and rejects invalid ranges', async () => {
+    const { workspaceId, ownerId } = await seedWorkspace('npub1messageactivityapi');
+    const base = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/message-activity`;
+    expect((await app.request(`${base}?range=7d`)).status).toBe(401);
+    expect((await requestJson(`${base}?range=7d`, 'GET', inviteeSecret)).res.status).toBe(403);
+    expect((await requestJson(`${base}?range=7d`, 'GET', ownerSecret, undefined, { 'x-flightdeck-pg-app-npub': 'wrong' })).res.status).toBe(403);
+    for (const suffix of ['', '?range=1d', '?range=ALL']) {
+      expect((await requestJson(base + suffix, 'GET', ownerSecret)).res.status).toBe(400);
+    }
+    const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Activity','project') RETURNING id`;
+    const [channel] = await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope.id},'Activity') RETURNING id`;
+    const read = () => requestJson(`${base}?range=all`, 'GET', ownerSecret);
+    expect((await read()).json.channels).toEqual([]);
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${ownerId},'channel',${channel.id},'channel.read')`;
+    const result = await read();
+    expect(result.res.status).toBe(200);
+    expect(result.res.headers.get('cache-control')).toBe('no-store');
+    expect(result.json).toMatchObject({ workspace_id: workspaceId, identity: { workspace_id: workspaceId }, range: 'all', from: null, complete: true,
+      channels: [{ channel_id: channel.id, scope_id: scope.id, count: 0 }] });
+    expect(result.json.as_of).toBe(result.json.to);
+    expect(Object.keys(result.json).sort()).toEqual(['identity','workspace_id','range','from','to','as_of','complete','channels'].sort());
+    // The same member in another workspace cannot see this workspace's channel.
+    const other = await seedWorkspace('npub1messageactivityother');
+    const foreign = await requestJson(`/api/v4/flightdeck-pg/workspaces/${other.workspaceId}/message-activity?range=all`, 'GET', ownerSecret);
+    expect(foreign.json.channels).toEqual([]);
+  });
+
   test('message reference lookup routes cold IDs narrowly and hides denied or deleted targets', async () => {
     const { workspaceId, ownerId, groupMemberId } = await seedWorkspace('npub1messagelookuptest');
     const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind)

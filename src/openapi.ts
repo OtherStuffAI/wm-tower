@@ -4786,6 +4786,37 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/message-activity': {
+        get: {
+          tags: ['Flight Deck PG'], summary: 'Read complete authorized message activity', security: [{ nip98: [] }],
+          description: 'Read-only consistent snapshot of canonical nondeleted messages in active channels and scopes authorized by channel.read. Includes replies once in their actual channel and authorized zero-count channels. No inherited transcripts, labels, content, pagination or caps. UTC interval [from, as_of), created_at; all has null from. See docs/contract/flightdeck-message-activity.md.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'range', in: 'query', required: true, schema: { type: 'string', enum: ['7d', '30d', 'all'] } },
+            { name: 'x-flightdeck-pg-app-npub', in: 'header', required: false, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': { description: 'Complete authorized snapshot', content: { 'application/json': { schema: {
+              type: 'object', additionalProperties: false,
+              required: ['identity', 'workspace_id', 'range', 'from', 'to', 'as_of', 'complete', 'channels'],
+              properties: {
+                identity: { type: 'object', required: ['tower_service_npub', 'workspace_service_npub', 'workspace_owner_npub', 'workspace_id', 'app_npub'], properties: {
+                  tower_service_npub: { type: 'string' }, workspace_service_npub: { type: 'string' }, workspace_owner_npub: { type: 'string' }, workspace_id: { type: 'string', format: 'uuid' }, app_npub: { type: 'string' },
+                } },
+                workspace_id: { type: 'string', format: 'uuid' }, range: { type: 'string', enum: ['7d', '30d', 'all'] },
+                from: { type: 'string', format: 'date-time', nullable: true }, to: { type: 'string', format: 'date-time' }, as_of: { type: 'string', format: 'date-time' },
+                complete: { type: 'boolean', enum: [true] }, channels: { type: 'array', items: {
+                  type: 'object', additionalProperties: false, required: ['channel_id', 'scope_id', 'count'], properties: {
+                    channel_id: { type: 'string', format: 'uuid' }, scope_id: { type: 'string', format: 'uuid' }, count: { type: 'integer', minimum: 0, maximum: 9007199254740991 },
+                  },
+                } },
+              },
+            } } } },
+            '400': { description: 'Missing or unsupported range' }, '401': { description: 'NIP-98 authentication required' },
+            '403': { description: 'Workspace membership or app identity denied' }, '404': { description: 'Workspace not found' },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/messages': {
         get: {
           tags: ['Flight Deck PG'],

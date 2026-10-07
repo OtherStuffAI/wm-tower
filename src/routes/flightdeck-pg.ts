@@ -1,3 +1,4 @@
+import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
 import { resolveFlightDeckPgMessageLookup } from '../services/flightdeck-pg-message-lookup';
 import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
@@ -892,9 +893,10 @@ function storageAuthorizationError(
 async function requireFlightDeckPgContext(
   c: Context,
   actorNpub: string,
+  sql: DbClient = getDb(),
 ): Promise<FlightDeckPgContextResult> {
   const workspaceId = c.req.param('workspaceId') ?? '';
-  const context = await resolveFlightDeckPgRequestContext({ workspaceId, actorNpub });
+  const context = await resolveFlightDeckPgRequestContext({ workspaceId, actorNpub }, sql);
   const identity = buildFlightDeckPgIdentity(context.workspace, context.workspace?.app_npub ?? appNpubFromRequest(c));
   if (!context.workspace) {
     return { response: jsonError(c, 404, 'workspace_not_found', 'Flight Deck PG workspace not found', identity) };
@@ -4942,6 +4944,28 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/threads/:threadId/archive', a
     thread: serializeFlightDeckPgThread(payload.thread),
     audit: { event_id: payload.auditId, operation: payload.operation, actor_npub: auth.userNpub },
     outbox: payload.outbox,
+  });
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/message-activity', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  return getDb().begin('isolation level repeatable read read only', async (tx) => {
+    const sql = asDbClient(tx);
+    const result = await requireFlightDeckPgContext(c, auth.userNpub, sql);
+    if ('response' in result) return result.response;
+    const { context, identity } = result;
+    const requestedApp = c.req.header('x-flightdeck-pg-app-npub') || c.req.query('app_npub');
+    if (requestedApp && requestedApp !== context.workspace.app_npub) {
+      return jsonError(c, 403, 'workspace_app_mismatch', 'Workspace app identity does not match', identity);
+    }
+    const range = parseMessageActivityRange(c.req.query('range'));
+    if (!range) return validationError(c, identity, [{ path: 'query.range', code: 'invalid', message: 'range must be 7d, 30d, or all' }]);
+    const activity = await readFlightDeckPgMessageActivity({
+      workspaceId: context.workspace.id, actorId: context.actor.id, groupIds: context.groupIds, range,
+    }, sql);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ identity, ...activity });
   });
 });
 

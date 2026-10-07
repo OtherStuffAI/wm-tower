@@ -2990,3 +2990,16 @@ export interface FlightDeckRecordCheckpoint {
   checkpoint_revision: string;
   last_active_at: string;
 }
+
+/** Complete authorized canonical message counts at one server read snapshot. */
+export type FlightDeckPgMessageActivityRange = '7d' | '30d' | 'all';
+export interface FlightDeckPgMessageActivityResponse {
+  identity: FlightDeckPgIdentityFields;
+  workspace_id: string;
+  range: FlightDeckPgMessageActivityRange;
+  from: string | null;
+  to: string;
+  as_of: string;
+  complete: true;
+  channels: Array<{ channel_id: string; scope_id: string; count: number }>;
+}
