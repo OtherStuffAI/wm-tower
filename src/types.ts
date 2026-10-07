@@ -3016,3 +3016,17 @@ export interface FlightDeckPgMessageActivityResponse {
   complete: true;
   channels: Array<{ channel_id: string; scope_id: string; count: number }>;
 }
+
+/** Authorized status contains byte authority only, never message body/attachment names. */
+export interface FlightDeckPgMessageAttachmentBlossomStatus {
+  identity: FlightDeckPgIdentityFields;
+  message_id: string;
+  can_publish: boolean;
+  changed: boolean;
+  attachment: Omit<FlightDeckPgBlossomPublicationStatus, 'version_id' | 'version_number'> & { link_id: string };
+}
+export interface FlightDeckPgMessageAttachmentBlossomConsent {
+  public: true;
+  expected_link_id: string;
+  expected_sha256: string;
+}

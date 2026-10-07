@@ -247,6 +247,7 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_audio_notes',
       'flightdeck_pg_audit_events',
       'flightdeck_pg_autopilot_connections',
+      'flightdeck_pg_blossom_message_publications',
       'flightdeck_pg_blossom_publications',
       'flightdeck_pg_channels',
       'flightdeck_pg_context_components',

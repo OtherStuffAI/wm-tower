@@ -1,5 +1,6 @@
 import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
-import { BlossomPublicationError, fileBlossomPublications, mutateBlossomPublication } from '../services/blossom-publications';
+import { blossomPublicOrigin } from '../services/blossom-origin';
+import { messageAttachmentSource, messageAttachmentBlossom, mutateMessageAttachmentBlossom, BlossomPublicationError, fileBlossomPublications, mutateBlossomPublication } from '../services/blossom-publications';
 import { resolveFlightDeckPgMessageLookup } from '../services/flightdeck-pg-message-lookup';
 import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
@@ -11276,8 +11277,63 @@ flightDeckPgRouter.on(['GET', 'PUT', 'DELETE'], [
     const publisherAccess = await authorizeFlightDeckPgStorageAttach({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, entityType: 'file', channelId: file.channel_id });
     return c.json({ identity, changed, can_publish: publisherAccess.allowed, ...await fileBlossomPublications({
       workspaceId: context.workspace.id, fileId, actorId: context.actor.id,
-      origin: getEffectiveRequestUrl(c.req.raw).origin,
+      origin: blossomPublicOrigin(c.req.raw),
     }) });
+  } catch (error) {
+    if (error instanceof BlossomPublicationError) return jsonError(c, error.status, error.code, error.message, identity);
+    throw error;
+  }
+});
+
+flightDeckPgRouter.on(['GET', 'PUT', 'DELETE'], '/workspaces/:workspaceId/messages/:messageId/attachments/:storageObjectId/blossom', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const messageId = c.req.param('messageId'), storageObjectId = c.req.param('storageObjectId');
+  if (!isUuid(messageId) || !isUuid(storageObjectId)) return jsonError(c, 400, 'invalid_id', 'Message and storage object ids must be UUIDs', identity);
+  if (appNpubFromRequest(c, context.workspace.app_npub) !== context.workspace.app_npub)
+    return jsonError(c, 404, 'attachment_not_found', 'Message attachment not found', identity);
+  const input = { workspaceId: context.workspace.id, messageId, storageObjectId, actorId: context.actor.id,
+    workspaceOwnerNpub: context.workspace.workspace_owner_npub };
+  const source = await messageAttachmentSource(input);
+  if (!source) return jsonError(c, 404, 'attachment_not_found', 'Message attachment is missing or removed', identity);
+  const accessInput = { actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id,
+    entityType: 'message' as const, channelId: source.channel_id };
+  const read = await authorizeFlightDeckPgStorageRead(accessInput);
+  if (!read.allowed) return storageAuthorizationError(c, read, identity, 'channel.read');
+  if (source.thread_id && context.actor.kind !== 'human' && !await isFlightDeckPgThreadParticipant({
+    workspaceId: context.workspace.id, threadId: source.thread_id, actorId: context.actor.id, actorNpub: auth.userNpub }))
+    return jsonError(c, 404, 'attachment_not_found', 'Message attachment not found', identity);
+  const write = await authorizeFlightDeckPgStorageAttach(accessInput);
+  const mutation = c.req.method !== 'GET';
+  if (mutation && !write.allowed) return storageAuthorizationError(c, write, identity, 'channel.write');
+  const body = c.req.method === 'PUT' ? await readJsonBody(c) : null;
+  if (c.req.method === 'PUT' && (!body || body.public !== true || !isUuid(String(body.expected_link_id ?? '')) || !/^[0-9a-f]{64}$/.test(String(body.expected_sha256 ?? ''))))
+    return jsonError(c, 400, 'public_consent_required', 'Explicit public consent and the observed attachment link and SHA-256 are required', identity);
+  try {
+    let changed = false;
+    if (mutation) changed = await getDb().begin(async tx => {
+      const sql = asDbClient(tx);
+      // Serialize with edits/deletion before resolving current source authority.
+      await sql`SELECT id FROM flightdeck_pg_messages WHERE workspace_id=${input.workspaceId} AND id=${messageId} AND deleted_at IS NULL FOR UPDATE`;
+      const current = await messageAttachmentSource(input, sql);
+      if (!current || current.channel_id !== source.channel_id) throw new BlossomPublicationError('attachment_source_changed', 409, 'Attachment source changed; refresh status');
+      const allowed = await authorizeFlightDeckPgStorageAttach(accessInput, sql);
+      const readable = await authorizeFlightDeckPgStorageRead(accessInput, sql);
+      const participates = !current.thread_id || context.actor.kind === 'human' || await isFlightDeckPgThreadParticipant({ workspaceId: context.workspace.id, threadId: current.thread_id, actorId: context.actor.id, actorNpub: auth.userNpub }, sql);
+      if (!allowed.allowed || !readable.allowed || !participates) throw new BlossomPublicationError('attachment_source_changed', 409, 'Source authorization changed; refresh status');
+      const changed = await mutateMessageAttachmentBlossom({ ...input, publish: c.req.method === 'PUT',
+        expectedLinkId: body?.expected_link_id as string | undefined, expectedSha256: body?.expected_sha256 as string | undefined }, sql);
+      if (changed) await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id,
+        action: c.req.method === 'PUT' ? 'message.attachment.blossom.publish' : 'message.attachment.blossom.unpublish',
+        resourceType: 'message', resourceId: messageId, metadata: { storage_object_id: storageObjectId } }, sql);
+      return changed;
+    });
+    c.header('Cache-Control', 'no-store');
+    return c.json({ identity, changed, can_publish: write.allowed,
+      ...await messageAttachmentBlossom({ ...input, origin: blossomPublicOrigin(c.req.raw) }) });
   } catch (error) {
     if (error instanceof BlossomPublicationError) return jsonError(c, error.status, error.code, error.message, identity);
     throw error;

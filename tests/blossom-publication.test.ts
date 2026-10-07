@@ -18,11 +18,12 @@ let sql: ReturnType<typeof postgres>;
 let database: string;
 const createdPaths: string[] = [];
 const realS3 = process.env.BLOSSOM_PUBLICATION_REAL_S3 === '1';
+const originalPublicOrigin = config.directHttpsUrl;
 let workspaceId: string, channelId: string, scopeId: string;
 let actors: string[];
-function request(path: string, method = 'GET', who = 0) {
-  const event = finalizeEvent({ kind:27235, created_at:Math.floor(Date.now()/1000), tags:[['u',`http://localhost${path}`],['method',method],...(method==='PUT'?[['payload',hash('{}')]]:[])], content:'' }, keys[who]);
-  return app.request(path,{method,...(method==='PUT'?{body:'{}'}:{}),headers:{Authorization:`Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`}});
+function request(path: string, method = 'GET', who = 0, payload: unknown = {}) {
+  const event = finalizeEvent({ kind:27235, created_at:Math.floor(Date.now()/1000), tags:[['u',`http://localhost${path}`],['method',method],...(method==='PUT'?[['payload',hash(JSON.stringify(payload))]]:[])], content:'' }, keys[who]);
+  return app.request(path,{method,...(method==='PUT'?{body:JSON.stringify(payload)}:{}),headers:{Authorization:`Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`}});
 }
 async function file(bytes: Uint8Array, complete = true) {
   const storage = await prepareStorageObjectForAuthorizedOwner({ owner_npub:npubs[0], content_type:'audio/mpeg', file_name:'private-podcast-name.mp3' }, npubs[0]);
@@ -37,6 +38,7 @@ async function file(bytes: Uint8Array, complete = true) {
   return { storage, f, v, path:`/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${f.id}/versions/${v.id}/blossom`, status:`/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${f.id}/blossom`, sha:hash(bytes) };
 }
 beforeAll(async () => {
+  config.directHttpsUrl = 'http://localhost';
   const options={host:process.env.DB_HOST||'localhost',port:Number(process.env.DB_PORT||5432),username:process.env.DB_USER||'postgres',password:process.env.DB_PASSWORD||'postgres'};
   const admin=postgres({...options,database:'postgres'});
   database=`tower_publication_${randomUUID().replaceAll('-','')}`;
@@ -52,11 +54,12 @@ beforeAll(async () => {
   for(const [i,actor] of actors.entries()) await sql`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${workspaceId},${actor},${i===0?'owner':'member'})`;
   const [s]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Publication','project') RETURNING id`;scopeId=s.id;
   const [c]=await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scopeId},'Podcast') RETURNING id`;channelId=c.id;
-  for(const [i,actor] of actors.entries()) for(const permission of i===2?['file.read']:['file.read','file.write'])
+  for(const [i,actor] of actors.entries()) for(const permission of i===2?['file.read','channel.read']:['file.read','file.write','channel.read','channel.write'])
     await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
       VALUES(${workspaceId},'actor',${actor},'channel',${channelId},${permission})`;
 });
 afterAll(async()=>{
+  config.directHttpsUrl = originalPublicOrigin;
   if (realS3) {
     const bucket = new Bun.S3Client({endpoint:config.storage.s3Endpoint,region:config.storage.s3Region,accessKeyId:config.storage.s3AccessKey,secretAccessKey:config.storage.s3SecretKey,bucket:config.storage.s3Bucket});
     for (const path of createdPaths) await bucket.delete(path);
@@ -164,5 +167,129 @@ describe('explicit Blossom file publication',()=>{
     const changed=await request(a.path,'PUT');expect(changed.status).toBe(409);expect((await changed.json()).code).toBe('publication_hash_changed');
     await sql`UPDATE v4_storage_objects SET storage_path='missing-changed-bytes' WHERE id=${a.storage.id}`;
     expect((await request(a.path,'DELETE')).status).toBe(200);
+  });
+});
+
+async function attachment(bytes = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lwAAAABJRU5ErkJggg==','base64')), complete = true) {
+  const storage = await prepareStorageObjectForAuthorizedOwner({ owner_npub:npubs[0], content_type:'image/png', file_name:'secret-attachment-name.png' }, npubs[0]);
+  createdPaths.push(storage.storage_path);
+  await writeStorageObject(storage.id,bytes,npubs[0]);
+  if (complete) await completeStorageObject(storage.id,{},npubs[0]);
+  const [message] = await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,metadata,created_by_actor_id,updated_by_actor_id)
+    VALUES(${workspaceId},${scopeId},${channelId},'Secret private message',${sql.json({attachments:[{storage_object_id:storage.id,kind:'image',filename:'secret.png'}]})},${actors[0]},${actors[0]}) RETURNING *`;
+  const [link] = await sql`INSERT INTO flightdeck_pg_storage_links(workspace_id,scope_id,channel_id,entity_type,entity_id,storage_object_id,created_by_actor_id)
+    VALUES(${workspaceId},${scopeId},${channelId},'message',${message.id},${storage.id},${actors[0]}) RETURNING *`;
+  return { storage, message, link, bytes, sha:hash(bytes), path:`/api/v4/flightdeck-pg/workspaces/${workspaceId}/messages/${message.id}/attachments/${storage.id}/blossom`, consent:{public:true,expected_link_id:link.id,expected_sha256:hash(bytes)} };
+}
+
+describe('direct message attachment publication', () => {
+  test.skipIf(!process.env.BLOSSOM_PUBLICATION_CLI_ENTRY)('supported CLI publishes chat-only PNG through the real source route without creating a File', async () => {
+    const { runFlightDeckPgCli } = await import(process.env.BLOSSOM_PUBLICATION_CLI_ENTRY!);
+    const savedSession=process.env.SESSION_ID,savedCapability=process.env.WINGMAN_CAPABILITY;
+    delete process.env.SESSION_ID;delete process.env.WINGMAN_CAPABILITY;
+    try {
+      const a=await attachment();
+      const run=(action:string,extra:string[]=[])=>runFlightDeckPgCli(['attachment',action,a.storage.id,'--message',a.message.id,'--workspace',workspaceId,'--tower-url','http://localhost','--app-npub','npub1publicationapp','--key',Buffer.from(keys[0]).toString('hex'),'--json',...extra],{fetchImpl:(input:string,init:RequestInit)=>app.fetch(new Request(input,init))});
+      expect((await run('publish')).exitCode).toBe(1);
+      const result=await run('publish',['--public']);expect(result.exitCode).toBe(0);expect(JSON.parse(result.stdout).attachment.blossom_url).toBe(`http://localhost/${a.sha}`);
+      const get=await app.request('/'+a.sha);expect(hash(new Uint8Array(await get.arrayBuffer()))).toBe(a.sha);
+      expect((await run('blossom')).exitCode).toBe(0);expect((await run('unpublish')).exitCode).toBe(0);
+      expect((await app.request('/'+a.sha)).status).toBe(401);
+      expect(await sql`SELECT id FROM flightdeck_pg_files WHERE storage_object_id=${a.storage.id}`).toHaveLength(0);
+    } finally {
+      if(savedSession===undefined)delete process.env.SESSION_ID;else process.env.SESSION_ID=savedSession;
+      if(savedCapability===undefined)delete process.env.WINGMAN_CAPABILITY;else process.env.WINGMAN_CAPABILITY=savedCapability;
+    }
+  });
+  test('agents require actual owning-thread participation; deleted threads withdraw publication', async () => {
+    const a=await attachment(new Uint8Array([81,82,83]));
+    const [thread]=await sql`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id)
+      VALUES(${workspaceId},${scopeId},${channelId},'Private thread',${actors[0]},${actors[0]}) RETURNING id`;
+    await sql`UPDATE flightdeck_pg_messages SET thread_id=${thread.id} WHERE id=${a.message.id}`;
+    await sql`UPDATE flightdeck_pg_actors SET kind='agent' WHERE id=${actors[1]}`;
+    expect((await request(a.path,'GET',1)).status).toBe(404);expect((await request(a.path,'PUT',1,a.consent)).status).toBe(404);
+    await sql`UPDATE flightdeck_pg_messages SET metadata=${sql.json({mentions:[{npub:npubs[1]}]})} WHERE id=${a.message.id}`;
+    expect((await request(a.path,'PUT',1,a.consent)).status).toBe(200);expect((await app.request('/'+a.sha)).status).toBe(200);
+    await sql`UPDATE flightdeck_pg_messages SET metadata='{}' WHERE id=${a.message.id}`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);
+    await request(a.path,'PUT',0,a.consent);
+    await sql`UPDATE flightdeck_pg_threads SET deleted_at=NOW() WHERE id=${thread.id}`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);expect((await request(a.path)).status).toBe(404);
+    await sql`UPDATE flightdeck_pg_actors SET kind='human' WHERE id=${actors[1]}`;
+  });
+
+  test('explicit consent, source permission and exact bytes; storage count and source links remain unchanged', async () => {
+    const a=await attachment();
+    const [before]=await sql`SELECT COUNT(*)::integer AS count FROM v4_storage_objects`;
+    expect((await request(a.path,'PUT',0)).status).toBe(400);
+    expect((await request(a.path,'PUT',2,a.consent)).status).toBe(403);
+    expect((await request(a.path.replace(a.message.id,randomUUID()),'PUT',0,a.consent)).status).toBe(404);
+    const initial=await (await request(a.path)).json(); expect(initial.attachment.public).toBe(false);
+    const published=await request(a.path,'PUT',0,a.consent);expect(published.status).toBe(200);
+    const result=await published.json();expect(result.changed).toBe(true);
+    expect(result.attachment).toMatchObject({storage_object_id:a.storage.id,link_id:a.link.id,sha256_hex:a.sha,public:true,published_by_you:true});
+    expect(JSON.stringify(result)).not.toContain('Secret'); expect(JSON.stringify(result)).not.toContain('secret');
+    expect((await (await request(a.path,'PUT',0,a.consent)).json()).changed).toBe(false);
+    const get=await app.request('/'+a.sha);expect(get.status).toBe(200);expect(hash(new Uint8Array(await get.arrayBuffer()))).toBe(a.sha);
+    expect(get.headers.get('content-disposition')).not.toContain('secret');
+    const head=await app.request('/'+a.sha,{method:'HEAD'});expect(head.status).toBe(200);expect(await head.text()).toBe('');
+    const range=await app.request('/'+a.sha,{headers:{Range:'bytes=1-3'}});expect(range.status).toBe(206);expect([...new Uint8Array(await range.arrayBuffer())]).toEqual([...a.bytes.slice(1,4)]);
+    const [after]=await sql`SELECT COUNT(*)::integer AS count FROM v4_storage_objects`;expect(after).toEqual(before);
+    const [link]=await sql`SELECT * FROM flightdeck_pg_storage_links WHERE id=${a.link.id}`;expect(link).toEqual(a.link);
+    const [object]=await sql`SELECT is_public FROM v4_storage_objects WHERE id=${a.storage.id}`;expect(object.is_public).toBe(false);
+    const files=await sql`SELECT id FROM flightdeck_pg_files WHERE storage_object_id=${a.storage.id}`;expect(files).toHaveLength(0);
+    expect((await app.request(`/api/v4/storage/${a.storage.id}`)).status).not.toBe(200);
+    await request(a.path,'DELETE');expect((await (await request(a.path,'DELETE')).json()).changed).toBe(false);
+    expect((await app.request('/'+a.sha)).status).toBe(401);
+  });
+  test('independent actors and File duplicates; permission revocation removes attachment public authority', async () => {
+    const a=await attachment(new Uint8Array([51,52,53])), duplicate=await file(a.bytes);
+    await request(a.path,'PUT',0,a.consent);await request(a.path,'PUT',1,a.consent);
+    expect((await (await request(a.path)).json()).attachment.publication_count).toBe(2);
+    await request(duplicate.path,'PUT'); await request(a.path,'DELETE');await request(a.path,'DELETE',1);
+    expect((await app.request('/'+a.sha)).status).toBe(200);
+    await request(duplicate.path,'DELETE');expect((await app.request('/'+a.sha)).status).toBe(401);
+    await request(a.path,'PUT',1,a.consent);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=NOW() WHERE principal_actor_id=${actors[1]} AND permission='channel.write'`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);
+    expect((await request(a.path,'PUT',1,a.consent)).status).toBe(403);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE principal_actor_id=${actors[1]} AND permission='channel.write'`;
+    await request(a.path,'DELETE',1);
+  });
+  test('removed, reattached and deleted sources never reactivate an old link lifetime', async () => {
+    const a=await attachment(new Uint8Array([54,55]));await request(a.path,'PUT',0,a.consent);
+    await sql`UPDATE flightdeck_pg_storage_links SET deleted_at=NOW() WHERE id=${a.link.id}`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);expect((await request(a.path)).status).toBe(404);
+    const [next]=await sql`INSERT INTO flightdeck_pg_storage_links(workspace_id,scope_id,channel_id,entity_type,entity_id,storage_object_id)
+      VALUES(${workspaceId},${scopeId},${channelId},'message',${a.message.id},${a.storage.id}) RETURNING id`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);
+    expect((await request(a.path,'PUT',0,a.consent)).status).toBe(409);
+    await request(a.path,'PUT',0,{...a.consent,expected_link_id:next.id});
+    await sql`UPDATE flightdeck_pg_messages SET deleted_at=NOW() WHERE id=${a.message.id}`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);expect((await request(a.path,'PUT',0,{...a.consent,expected_link_id:next.id})).status).toBe(404);
+  });
+  test('foreign owner, incomplete, missing and changed bytes cannot publish; unpublish tolerates missing bytes', async () => {
+    const a=await attachment(new Uint8Array([56,57]),false);
+    expect((await request(a.path,'PUT',0,a.consent)).status).toBe(409);
+    await sql`UPDATE v4_storage_objects SET owner_npub=${npubs[1]} WHERE id=${a.storage.id}`;
+    expect((await request(a.path,'PUT',0,a.consent)).status).toBe(404);
+    await sql`UPDATE v4_storage_objects SET owner_npub=${npubs[0]},completed_at=NOW() WHERE id=${a.storage.id}`;
+    expect((await request(a.path,'PUT',0,a.consent)).status).toBe(200);
+    const b=await attachment(new Uint8Array([58,59]));
+    await sql`UPDATE v4_storage_objects SET storage_path=${b.storage.storage_path} WHERE id=${a.storage.id}`;
+    expect((await app.request('/'+a.sha)).status).toBe(401);
+    expect((await request(a.path,'PUT',0,{...a.consent,expected_sha256:b.sha})).status).toBe(409);
+    await sql`UPDATE v4_storage_objects SET storage_path='missing-message-publication-bytes' WHERE id=${a.storage.id}`;
+    expect((await request(a.path,'PUT',0,a.consent)).status).toBe(409);
+    expect((await request(a.path,'DELETE')).status).toBe(200);
+  });
+  test('configured public origin survives internal proxy/FIPS origins while local fixtures retain HTTP', async () => {
+    const { blossomPublicOrigin }=await import('../src/services/blossom-origin');
+    config.directHttpsUrl='https://tower.example.test';
+    expect(blossomPublicOrigin(new Request('http://internal-proxy/path'))).toBe('https://tower.example.test');
+    expect(blossomPublicOrigin(new Request('http://private.fips/path'))).toBe('https://tower.example.test');
+    config.directHttpsUrl='http://localhost';
+    expect(blossomPublicOrigin(new Request('http://localhost/path'))).toBe('http://localhost');
+    expect(buildOpenApiDocument('http://localhost').paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/messages/{messageId}/attachments/{storageObjectId}/blossom'].put).toBeDefined();
   });
 });

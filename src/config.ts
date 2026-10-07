@@ -31,6 +31,7 @@ export const config = {
   directHttpsUrl: requiredEnv('SUPERBASED_DIRECT_HTTPS_URL'),
   adminNpub: requiredNpubEnv('ADMIN_NPUB'),
   storage: {
+    blossomPublicOrigin: String(process.env.BLOSSOM_PUBLIC_ORIGIN || '').trim(),
     s3Endpoint: (process.env.STORAGE_S3_ENDPOINT || 'http://127.0.0.1:9000').trim(),
     s3PublicEndpoint: requiredEnv('STORAGE_S3_ENDPOINT_PUBLIC'),
     s3Region: (process.env.STORAGE_S3_REGION || 'us-east-1').trim(),

@@ -106,3 +106,35 @@ not a promise of global revocation or recall of downloaded copies. Anonymous
 responses use a hash filename and never enumerate records, versions or private
 metadata. Normal private storage/download APIs continue enforcing existing ACLs.
 This slice adds no replication, remote destinations or Blossom upload endpoint.
+
+## Direct chat attachment publication
+
+GET/PUT/DELETE `/api/v4/flightdeck-pg/workspaces/:workspaceId/messages/:messageId/attachments/:storageObjectId/blossom`
+operate on the existing message attachment. Status requires channel.read;
+mutation also requires channel.write, membership and, for agents, owning-thread
+participation. The source must be a live message and its exact active storage
+link with consistent channel/scope and workspace-owned storage. This does not
+create a File, copy/upload bytes, change storage ACLs or mutate the source link.
+
+PUT requires explicit `{public:true, expected_link_id, expected_sha256}` observed
+from GET. Status contains `message_id`, `can_publish`, `changed` and `attachment`
+with `storage_object_id`, `link_id`, verified `sha256_hex`, `available`, `public`,
+`published_by_you`, `publication_count`, `blossom_url`. It contains no message
+body, filename or attachment metadata. Public hash responses also hide names.
+The separate publication table pins each actor reference to a storage-link
+lifetime. Repeats return changed=false; DELETE removes only the calling actor's
+reference. File-version and duplicate-byte publications stay independent.
+
+Removing a source link, deleting the source message/thread, or losing source
+write permission makes that attachment reference ineligible for anonymous
+retrieval. A new link never revives old consent. Incomplete/unavailable bytes
+return 409; stale link/hash consent and changed previously published immutable
+bytes also return 409. Unpublish does not require bytes to remain readable.
+Storage-link uniqueness remains unchanged and is still the attachment lifecycle
+invariant. Existing file-version publishing retains its API and behavior.
+
+Publication responses use Tower's configured `SUPERBASED_DIRECT_HTTPS_URL`
+public origin, including requests arriving through an internal proxy or `.fips`
+endpoint. Local fixtures retain HTTP. `BLOSSOM_PUBLIC_ORIGIN` can optionally
+specify a distinct public HTTPS origin.
+It does not change authentication/transport routing or enable network fallback.
