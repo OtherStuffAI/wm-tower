@@ -103,6 +103,11 @@ export type FlightDeckPgGroupEdgeMutationResult =
 
 // Maps each permission to the grant anchor checked by authorization.
 const permissionResourceTypes: Record<FlightDeckPgPermission, FlightDeckPgGrantResourceType> = {
+  'org_data.read': 'workspace',
+  'org_data.write': 'workspace',
+  'org_data.schema': 'workspace',
+  'napplet.publish': 'workspace',
+  'napplet.install': 'workspace',
   'workspace.read': 'workspace',
   'workspace.manage': 'workspace',
   'workspace.invite': 'workspace',

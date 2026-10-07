@@ -1069,6 +1069,11 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(`
     INSERT INTO flightdeck_pg_permission_definitions (permission, resource_type, description)
     VALUES
+      ('org_data.read', 'workspace', 'org_data.read workspace capability'),
+      ('org_data.write', 'workspace', 'org_data.write workspace capability'),
+      ('org_data.schema', 'workspace', 'org_data.schema workspace capability'),
+      ('napplet.publish', 'workspace', 'napplet.publish workspace capability'),
+      ('napplet.install', 'workspace', 'napplet.install workspace capability'),
       ('workspace.read', 'workspace', 'Read workspace metadata and current actor membership'),
       ('workspace.manage', 'workspace', 'Manage workspace settings and administrative access'),
       ('workspace.invite', 'workspace', 'Invite actors into a workspace'),
@@ -4298,6 +4303,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(learningResearchV1Sql);
   await seedResearchGraph(sql);
   await seedAssessmentCards(sql);
+  await sql.unsafe(readFileSync(new URL('./org-data-v1.sql', import.meta.url), 'utf8'));
   await sql.unsafe(readFileSync(new URL('./feed-reader-v1.sql', import.meta.url), 'utf8'));
   await sql.unsafe(readFileSync(new URL('./context-tree-v1.sql', import.meta.url), 'utf8'));
   await sql.unsafe(readFileSync(new URL('./context-tree-sync-v1.sql', import.meta.url), 'utf8'));

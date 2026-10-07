@@ -63,9 +63,9 @@ export function inferFlightDeckPgAccessLevel(permissions: readonly FlightDeckPgP
 }
 
 const groupWorkspacePermissions: Record<DefaultGroupName, FlightDeckPgPermission[]> = {
-  Admins: ['workspace.read', 'workspace.manage', 'workspace.invite', 'event_subscription.manage', 'scope.create'],
+  Admins: ['org_data.read','org_data.write','org_data.schema','napplet.publish','napplet.install', 'workspace.read', 'workspace.manage', 'workspace.invite', 'event_subscription.manage', 'scope.create'],
   Agents: ['workspace.read'],
-  People: ['workspace.read'],
+  People: ['workspace.read', 'org_data.read'],
   Workspace: ['workspace.read'],
 };
 

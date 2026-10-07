@@ -627,6 +627,12 @@ export type FlightDeckPgAgentIdentityRotationResponse = {
 export type FlightDeckPgGroupKind = 'system' | 'workspace' | 'scope' | 'channel' | 'dm' | 'agent' | 'app' | 'custom';
 
 export const flightDeckPgPermissions = [
+  'org_data.read',
+  'org_data.write',
+  'org_data.schema',
+  'napplet.publish',
+  'napplet.install',
+
   'workspace.read',
   'workspace.manage',
   'workspace.invite',

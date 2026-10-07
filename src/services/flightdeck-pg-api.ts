@@ -1799,6 +1799,7 @@ export function decodeFlightDeckPgEventCursor(raw: string | null | undefined): F
 function buildFlightDeckPgEventRefetchRoute(event: FlightDeckPgOutboxEventRow) {
   const workspaceId = encodeURIComponent(event.workspace_id);
   const entityId = event.entity_id ? encodeURIComponent(event.entity_id) : null;
+  if (event.entity_type === 'org_data') return `/api/v4/flightdeck-pg/workspaces/${workspaceId}/org-data/snapshot`;
   if (['context_component', 'context_reference'].includes(event.entity_type) && event.scope_id) {
     const base = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/scopes/${encodeURIComponent(event.scope_id)}/context/components`;
     return event.entity_type === 'context_reference' && event.payload?.component_id
@@ -6960,6 +6961,9 @@ export async function listVisibleFlightDeckPgEvents(
           AND e.payload->>'reader_actor_id' = ${input.actorId}
         )
         OR (
+          e.entity_type = 'org_data' AND (e.payload->>'target_actor_id' = ${input.actorId} OR EXISTS (SELECT 1 FROM flightdeck_pg_permission_grants pg WHERE pg.workspace_id=e.workspace_id AND pg.resource_type='workspace' AND pg.permission='org_data.read' AND pg.revoked_at IS NULL AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId}) OR (pg.principal_type='group' AND pg.principal_group_id IN ${sql(groupIds)}))))
+        )
+        OR (
           e.entity_type = 'resource_view_state'
           AND e.payload->>'viewer_actor_id' = ${input.actorId}
         )
@@ -7092,7 +7096,7 @@ export async function listVisibleFlightDeckPgEvents(
         )
         OR (
           e.channel_id IS NULL
-          AND e.entity_type NOT IN ('feed_subscription','feed_item_state','context_component','context_reference')
+          AND e.entity_type NOT IN ('org_data','feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
         )
       )

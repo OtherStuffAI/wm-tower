@@ -1,3 +1,4 @@
+import { registerOrgDataRoutes } from './org-data';
 import { getWorkspaceStorageUsage } from '../services/workspace-storage-usage';
 import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
 import { blossomPublicOrigin } from '../services/blossom-origin';
@@ -354,6 +355,7 @@ import type {
 } from '../types';
 
 export const flightDeckPgRouter = new Hono();
+registerOrgDataRoutes(flightDeckPgRouter);
 registerFeedReaderRoutes(flightDeckPgRouter);
 registerContextTreeRoutes(flightDeckPgRouter);
 registerScopeAccessRoutes(flightDeckPgRouter);
