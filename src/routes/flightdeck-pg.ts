@@ -1,3 +1,4 @@
+import { getWorkspaceStorageUsage } from '../services/workspace-storage-usage';
 import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
 import { blossomPublicOrigin } from '../services/blossom-origin';
 import { messageAttachmentSource, messageAttachmentBlossom, mutateMessageAttachmentBlossom, BlossomPublicationError, fileBlossomPublications, mutateBlossomPublication } from '../services/blossom-publications';
@@ -1660,6 +1661,24 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId', async (c) => {
     deleted: true,
     revoked_member_npubs: deletion.revokedMemberNpubs,
   });
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/storage-usage', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  // Workspace-wide counts include private scopes: require management authority,
+  // even on a cache hit. Never authorize by owner npub supplied by the client.
+  const denied = await requireFlightDeckPgWorkspaceManage(c, auth.userNpub, context, identity);
+  if (denied) return denied;
+  c.header('Cache-Control', 'private, no-store');
+  try {
+    return c.json({ identity, ...await getWorkspaceStorageUsage(context.workspace.id) });
+  } catch {
+    return jsonError(c, 503, 'storage_usage_unavailable', 'Usage collection is temporarily unavailable. Try again shortly.', identity);
+  }
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/me', async (c) => {

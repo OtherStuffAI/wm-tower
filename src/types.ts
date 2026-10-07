@@ -3030,3 +3030,22 @@ export interface FlightDeckPgMessageAttachmentBlossomConsent {
   expected_link_id: string;
   expected_sha256: string;
 }
+
+/** Stored-data counters, independent of billing and transfer traffic. */
+export interface WorkspaceStorageUsageCategory {
+  id: string;
+  label: string;
+  bytes: number | null;
+  status: 'measured' | 'partial' | 'unavailable';
+  measurement: 'registered_bytes' | 'logical_estimate' | 'unavailable';
+  reason: string;
+}
+export interface WorkspaceStorageUsage {
+  workspace_id: string;
+  collected_at: string;
+  cache_ttl_seconds: number;
+  total_bytes: number | null;
+  coverage: 'partial';
+  total_description: string;
+  categories: WorkspaceStorageUsageCategory[];
+}

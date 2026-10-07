@@ -4482,6 +4482,30 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/storage-usage': {
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }],
+          summary: 'Workspace stored-byte coverage snapshot',
+          description: 'Requires current membership and workspace.manage on every request. UUID-scoped referenced object bytes and logical serialized-row database estimates, cached for 60 seconds with bounded collection. All requested stores included; unavailable bytes are null. Partial subtotal is not billing, bandwidth, whole-server disk or complete workspace storage.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: {
+            '200': { description: 'Partial usage coverage', content: { 'application/json': { schema: {
+              type: 'object', required: ['workspace_id', 'collected_at', 'categories', 'total_bytes', 'coverage', 'total_description', 'cache_ttl_seconds'],
+              properties: {
+                workspace_id: { type: 'string', format: 'uuid' }, collected_at: { type: 'string', format: 'date-time' },
+                cache_ttl_seconds: { type: 'integer' }, total_bytes: { type: 'integer', nullable: true, minimum: 0 },
+                coverage: { type: 'string', enum: ['partial'] }, total_description: { type: 'string' },
+                categories: { type: 'array', items: { type: 'object', required: ['id', 'label', 'bytes', 'status', 'measurement', 'reason'], properties: {
+                  id: { type: 'string' }, label: { type: 'string' }, bytes: { type: 'integer', nullable: true, minimum: 0 },
+                  status: { type: 'string', enum: ['measured', 'partial', 'unavailable'] }, measurement: { type: 'string', enum: ['registered_bytes', 'logical_estimate', 'unavailable'] }, reason: { type: 'string' },
+                } } },
+              },
+            } } } },
+            '401': { description: 'Invalid NIP-98 authentication' }, '403': { description: 'Membership or workspace.manage required' },
+            '404': { description: 'Workspace not found' }, '503': { description: 'Collector busy or unavailable' },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me': {
         get: {
           tags: ['Flight Deck PG'],
