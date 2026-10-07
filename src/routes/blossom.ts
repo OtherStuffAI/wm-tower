@@ -1,3 +1,4 @@
+import { hasBlossomPublication } from '../services/blossom-publications';
 import { Hono } from 'hono';
 import { nip19, verifyEvent } from 'nostr-tools';
 import { getEffectiveRequestUrl, verifyNip98Auth } from '../auth';
@@ -60,7 +61,7 @@ blossomRouter.on(['GET', 'HEAD'], '/:blob', async (c, next) => {
   for (const row of candidates) {
     const accessible = actor
       ? await canAccessStorageObject(row.id, actor) ?? await resolveReadableFlightDeckPgBlossomObject({ actorNpub: actor, storageObjectId: row.id })
-      : await canAccessStorageObject(row.id, null);
+      : await canAccessStorageObject(row.id, null) ?? (await hasBlossomPublication(row.id, hash) ? row : null);
     if (!accessible || !await hasActiveStorageReference(row.id)) continue;
     const verified = await verifyStorageIdentity(row);
     if (!verified || verified.sha256_hex !== hash) continue;
@@ -75,7 +76,7 @@ blossomRouter.on(['GET', 'HEAD'], '/:blob', async (c, next) => {
       'X-Content-Type-Options': 'nosniff',
       // User supplied HTML/SVG must not run in Tower's authenticated origin.
       'Content-Security-Policy': "sandbox; default-src 'none'",
-      'Content-Disposition': `inline; filename="${(row.file_name || 'file.bin').replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
+      'Content-Disposition': `inline; filename="${(actor ? row.file_name || 'file.bin' : hash).replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
     });
     const range = c.req.method === 'GET' && (!c.req.header('if-range') || c.req.header('if-range') === headers.get('etag'))
       ? parseBlobRange(c.req.header('range') || null, size) : null;

@@ -1,4 +1,5 @@
 import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
+import { BlossomPublicationError, fileBlossomPublications, mutateBlossomPublication } from '../services/blossom-publications';
 import { resolveFlightDeckPgMessageLookup } from '../services/flightdeck-pg-message-lookup';
 import { registerScopeAccessRoutes } from './scope-access';
 import { registerContextTreeRoutes } from './context-tree';
@@ -11233,4 +11234,52 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/tasks/:taskId/assignments/:a
     audit: { event_id: payload.auditId, operation: 'task_assignment.delete', actor_npub: auth.userNpub },
     outbox: payload.outbox,
   });
+});
+
+// Explicit public byte authority, independent of ordinary file/storage permissions.
+flightDeckPgRouter.on(['GET', 'PUT', 'DELETE'], [
+  '/workspaces/:workspaceId/files/:fileId/blossom',
+  '/workspaces/:workspaceId/files/:fileId/versions/:versionId/blossom',
+], async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const fileId = c.req.param('fileId') || '';
+  const versionId = c.req.param('versionId');
+  if (!isUuid(fileId) || (versionId && !isUuid(versionId)))
+    return jsonError(c, 400, 'invalid_id', 'File and version ids must be UUIDs', identity);
+  const file = await resolveFlightDeckPgFile(context.workspace.id, fileId);
+  if (!file) return jsonError(c, 404, 'file_not_found', 'File is missing or deleted', identity);
+  const mutation = c.req.method !== 'GET';
+  if (!mutation && versionId) return jsonError(c, 400, 'method_not_allowed', 'Use the file publication status route', identity);
+  if (mutation && !versionId) return jsonError(c, 400, 'version_required', 'Select an explicit file version', identity);
+  const access = await (mutation ? authorizeFlightDeckPgStorageAttach : authorizeFlightDeckPgStorageRead)({
+    actorNpub: auth.userNpub, appNpub: context.workspace.app_npub,
+    workspaceId: context.workspace.id, entityType: 'file', channelId: file.channel_id,
+  });
+  if (!access.allowed) return storageAuthorizationError(c, access, identity, mutation ? 'file.write or channel.write' : 'file.read or channel.read');
+  try {
+    let changed = false;
+    if (mutation) changed = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const changed = await mutateBlossomPublication({ workspaceId: context.workspace.id, fileId,
+        versionId: versionId!, actorId: context.actor.id, workspaceOwnerNpub: context.workspace.workspace_owner_npub,
+        publish: c.req.method === 'PUT' }, sql);
+      if (changed) await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id,
+        action: c.req.method === 'PUT' ? 'file.blossom.publish' : 'file.blossom.unpublish', resourceType: 'file',
+        resourceId: fileId, metadata: { version_id: versionId } }, sql);
+      return changed;
+    });
+    c.header('Cache-Control', 'no-store');
+    const publisherAccess = await authorizeFlightDeckPgStorageAttach({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, entityType: 'file', channelId: file.channel_id });
+    return c.json({ identity, changed, can_publish: publisherAccess.allowed, ...await fileBlossomPublications({
+      workspaceId: context.workspace.id, fileId, actorId: context.actor.id,
+      origin: getEffectiveRequestUrl(c.req.raw).origin,
+    }) });
+  } catch (error) {
+    if (error instanceof BlossomPublicationError) return jsonError(c, error.status, error.code, error.message, identity);
+    throw error;
+  }
 });

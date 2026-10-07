@@ -73,3 +73,36 @@ repository's Tower rebuild procedure, then run bounded backfill passes. For exam
 `https://tower.example/<64-lowercase-hex>` is stable while accessible; adding `.pdf`
 does not change content type or authorization. Use the returned `blossom_url`, rather
 than constructing URLs from an unverified legacy `sha256_hex` value.
+
+## Explicit file publication
+
+`GET /api/v4/flightdeck-pg/workspaces/:workspaceId/files/:fileId/blossom`
+returns retained versions with `available`, `published_by_you`, `publication_count`,
+`public`, verified `sha256_hex`, and a public `blossom_url` when accessible. It
+requires workspace membership and `file.read` or `channel.read`. `can_publish`
+reports current `file.write` or `channel.write` permission.
+
+`PUT /api/v4/flightdeck-pg/workspaces/:workspaceId/files/:fileId/versions/:versionId/blossom`
+explicitly publishes that selected version. `DELETE` at the same route removes
+only the caller's publication reference. Both require workspace membership and
+`file.write` or `channel.write`; read access, knowledge of a hash, and uploader
+identity alone do not confer publishing authority. Delegated keys resolve through
+existing Tower identity rules. The storage object must belong to the workspace
+owner. Publication changes are audited and idempotent (`changed: false` on repeat).
+
+Publication references are keyed by workspace, version and resolved actor. They
+pin the storage object and verified SHA-256; S3 bytes stay in place and `is_public`
+is never changed. A new file version is private until separately published.
+Deleting the file makes its publication references ineligible. Missing/deleted
+file or version returns 404; incomplete upload, absent/unverifiable bytes or a
+changed immutable publication hash returns 409. Invalid UUIDs return 400; absent
+or invalid authentication returns 401; insufficient permissions returns 403.
+Unpublishing remains possible when stored bytes are missing.
+
+Anonymous Blossom retrieval can use any active publication of that exact hash.
+Independent publications (including another actor's reference to the same version)
+and existing `is_public` objects survive one caller's unpublish. Unpublishing is
+not a promise of global revocation or recall of downloaded copies. Anonymous
+responses use a hash filename and never enumerate records, versions or private
+metadata. Normal private storage/download APIs continue enforcing existing ACLs.
+This slice adds no replication, remote destinations or Blossom upload endpoint.

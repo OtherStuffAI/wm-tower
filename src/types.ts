@@ -2991,6 +2991,19 @@ export interface FlightDeckRecordCheckpoint {
   last_active_at: string;
 }
 
+/** Actor-specific public reference to the exact bytes of a retained file version. */
+export interface FlightDeckPgBlossomPublicationStatus {
+  version_id: string;
+  version_number: number;
+  storage_object_id: string;
+  sha256_hex: string | null;
+  available: boolean;
+  published_by_you: boolean;
+  publication_count: number;
+  public: boolean;
+  blossom_url: string | null;
+}
+
 /** Complete authorized canonical message counts at one server read snapshot. */
 export type FlightDeckPgMessageActivityRange = '7d' | '30d' | 'all';
 export interface FlightDeckPgMessageActivityResponse {
