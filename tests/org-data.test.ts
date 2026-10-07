@@ -472,6 +472,25 @@ describe.skipIf(!port || port === 5432)(
 				}),
 			).rejects.toMatchObject({ code: "invalid_reference" });
 		});
+		test("workspace managers bootstrap grants without organisation-data read authority", async () => {
+			await grant(outsider, "workspace.read");
+			await grant(outsider, "workspace.manage");
+			await expect(orgOperation(outsider, "catalogue")).rejects.toMatchObject({ code: "org_data_read_required" });
+			const members = (await orgOperation(outsider, "permissions")).members;
+			const before = members.find((m: any) => m.id === viewer.actorId).permissions;
+			await orgOperation(outsider, "grantPermissions", undefined, undefined, {
+				actor_id: viewer.actorId,
+				permissions: [...before, "org_data.write"],
+				expected_permissions: before,
+			});
+			expect((await orgOperation(viewer, "catalogue")).capabilities.write).toBe(true);
+			await orgOperation(outsider, "grantPermissions", undefined, undefined, {
+				actor_id: viewer.actorId,
+				permissions: before,
+				expected_permissions: [...before, "org_data.write"],
+			});
+			await expect(orgOperation(outsider, "snapshot")).rejects.toMatchObject({ code: "org_data_read_required" });
+		});
 		test("ordinary custom text fields named manager, actor and nostr create/update without identity rules", async () => {
 			await orgOperation(manager, "createType", undefined, undefined, {
 				key: "custom_text",

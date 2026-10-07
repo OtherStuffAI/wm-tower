@@ -35,7 +35,9 @@ for record operations. Hiding frontend actions is only a convenience.
 `GET /permissions` lists direct actor grants. `POST /permissions` takes
 `actor_id`, `permissions` and `expected_permissions`; the latter is a comparison
 against current direct grants, with 409 on drift. Any actor holding resolved `workspace.manage`, including an explicitly delegated
-agent manager, may use these routes. They never add membership, modify
+agent manager, may use these routes with `workspace.read`, even before receiving
+organisation-data permissions. Managing grants does not expose organisation
+records and does not require `org_data.read`. They never add membership, modify
 ordinary workspace/group authority or let an agent self-escalate. Group grants
 remain subject to the normal workspace administration boundary. A targeted
 payload-free invalidation reaches an actor whose direct read permission was

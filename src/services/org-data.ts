@@ -203,10 +203,8 @@ export async function orgOperation(
 				)
 			).allowed;
 		ctx = { ...ctx, permissions };
-		if (!permissions["workspace.read"] || !permissions["org_data.read"])
+		if (!permissions["workspace.read"])
 			throw new OrgDataError(403, "org_data_read_required");
-		const types: OrgType[] =
-			await sql`SELECT * FROM flightdeck_pg_org_data_types WHERE workspace_id=${ctx.workspaceId} ORDER BY key`;
 		const audit = async (
 			operation: string,
 			target: string,
@@ -216,6 +214,12 @@ export async function orgOperation(
 			await sql`INSERT INTO flightdeck_pg_org_data_audit(workspace_id,actor_id,operation,target_id,before_value,after_value) VALUES(${ctx.workspaceId},${ctx.actorId},${operation},${target},${before ? sql.json(before) : null},${after ? sql.json(after) : null})`;
 			await sql`INSERT INTO flightdeck_pg_outbox_events(workspace_id,actor_id,event_type,entity_type,operation,payload) VALUES(${ctx.workspaceId},${ctx.actorId},'org_data.changed','org_data',${operation},'{}'::jsonb)`;
 		};
+		if (op === "permissions" || op === "grantPermissions")
+			return orgPermissions(ctx, op, body, sql, audit);
+		if (!permissions["org_data.read"])
+			throw new OrgDataError(403, "org_data_read_required");
+		const types: OrgType[] =
+			await sql`SELECT * FROM flightdeck_pg_org_data_types WHERE workspace_id=${ctx.workspaceId} ORDER BY key`;
 		const installations =
 			await sql`SELECT i.key,i.version,i.revision,b.title,b.bridge_version,b.capabilities,b.sha256,b.html FROM flightdeck_pg_napplet_installations i JOIN flightdeck_pg_napplet_bundles b USING(workspace_id,key,version) WHERE i.workspace_id=${ctx.workspaceId} ORDER BY i.key`;
 		const bundles =
@@ -243,8 +247,6 @@ export async function orgOperation(
 				install: permissions["napplet.install"],
 			},
 		});
-		if (op === "permissions" || op === "grantPermissions")
-			return orgPermissions(ctx, op, body, sql, audit);
 		if (op.startsWith("napplet"))
 			return nappletOperation(ctx, op, key, body, sql, audit);
 		if (op === "catalogue")
