@@ -113,6 +113,17 @@ describe.skipIf(!port || port===5432)('isolated personal order and lifecycle del
   expect(requests.some(r=>/bootstrap|messages|tasks|docs|files/.test(r))).toBe(false);
   expect((await db`SELECT count(*)::int n FROM flightdeck_pg_audit_events WHERE resource_id=${scope!.id} AND action='scope.delete'`)[0]!.n).toBe(1);
  });
+ test('simultaneous signed reorder and archive serialize without deadlock or server errors',async()=>{
+  const base=`/api/v4/flightdeck-pg/workspaces/${w}`;
+  for(let round=0;round<4;round++){
+   const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},${`Race ${round}`},'project') RETURNING id`;
+   for(const permission of ['scope.read','scope.manage'])await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_scope_id,permission) VALUES(${w},'actor',${a},'scope',${scope!.id},${permission})`;
+   const version=(await readScopeOrder(w,a,db)).row_version;
+   const [order,archive]=await Promise.all([req(`${base}/me/scope-order`,'PUT',0,{scope_ids:[scope!.id],expected_row_version:version,mutation_id:crypto.randomUUID()}),req(`${base}/scopes/${scope!.id}`,'DELETE')]);
+   expect([200,400]).toContain(order.status);expect(archive.status).toBe(200);
+   expect((await db`SELECT archived_at FROM flightdeck_pg_scopes WHERE id=${scope!.id}`)[0]!.archived_at).not.toBeNull();
+  }
+ });
  test('channel-only archive leaves its scope and sibling content untouched and rolls back tombstones atomically',async()=>{
   const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},'Channel-only','project') RETURNING *`;
   const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${w},${scope!.id},'Only channel') RETURNING *`;

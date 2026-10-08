@@ -2894,6 +2894,9 @@ export async function archiveFlightDeckPgScope(
   input: { workspaceId: string; scopeId: string },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgScopeRow | null> {
+  // Caller supplies the transaction; use the journal clock before resource
+  // locks, matching preference writes and both archive routes.
+  await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR UPDATE`;
   const [scope] = await sql<FlightDeckPgScopeRow[]>`
     UPDATE flightdeck_pg_scopes
     SET archived_at = NOW(),
@@ -3127,6 +3130,9 @@ export async function archiveFlightDeckPgChannel(
   input: { workspaceId: string; channelId: string },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgChannelRow | null> {
+  // Caller supplies the transaction; use the journal clock before resource
+  // locks, matching preference writes and both archive routes.
+  await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR UPDATE`;
   const [channel] = await sql<FlightDeckPgChannelRow[]>`
     UPDATE flightdeck_pg_channels
     SET archived_at = NOW(),
