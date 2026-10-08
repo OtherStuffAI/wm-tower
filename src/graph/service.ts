@@ -294,7 +294,18 @@ export async function resolveGraphRequestContext(
     }
     const app = await getWorkspaceApp(workspaceOwnerNpub, sourceAppNpub);
     if (!app) {
-      return { status: 403, body: { error: 'source_app_npub is not registered for this workspace', code: 'graph_source_app_forbidden' } };
+      // Typed-only workspaces deliberately have no legacy workspace_apps row.
+      // Their exact owner/app namespace is registered by the PG workspace itself.
+      const [typedApp] = await getDb()<{ registered: boolean }[]>`
+        SELECT TRUE AS registered
+        FROM flightdeck_pg_workspaces
+        WHERE workspace_owner_npub = ${workspaceOwnerNpub}
+          AND app_npub = ${sourceAppNpub}
+        LIMIT 1
+      `;
+      if (!typedApp?.registered) {
+        return { status: 403, body: { error: 'source_app_npub is not registered for this workspace', code: 'graph_source_app_forbidden' } };
+      }
     }
   }
 

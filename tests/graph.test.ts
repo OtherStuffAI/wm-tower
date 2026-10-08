@@ -349,6 +349,29 @@ describe('Graph memory API', () => {
     expect(body.code).toBe('graph_source_app_forbidden');
   });
 
+  test('typed-only workspace app registration permits its exact namespace, not another owner or app', async () => {
+    await sql`
+      INSERT INTO flightdeck_pg_workspaces (tower_service_npub, workspace_service_npub, workspace_owner_npub, app_npub, name)
+      VALUES (${OWNER}, ${AGENT}, ${OWNER}, ${OTHER_AGENT}, 'Typed graph workspace')
+    `;
+    try {
+      const [legacy] = await sql`SELECT 1 FROM workspace_apps WHERE workspace_owner_npub = ${OWNER} AND app_npub = ${OTHER_AGENT}`;
+      expect(legacy).toBeUndefined();
+      for (const [owner, sourceApp, expected] of [
+        [OWNER, OTHER_AGENT, 200],
+        [MEMBER, OTHER_AGENT, 403],
+        [OWNER, OUTSIDER, 403],
+      ] as const) {
+        const path = `/api/v4/graph/search?q=typed-namespace-probe&workspace_owner_npub=${owner}&source_app_npub=${sourceApp}&owner_npub=${AGENT}`;
+        const res = await app.request(path, { headers: { Authorization: authHeader(path, 'GET', owner === MEMBER ? memberSecret : ownerSecret) } });
+        expect(res.status).toBe(expected);
+        if (expected === 403) expect((await res.json()).code).toBe('graph_source_app_forbidden');
+      }
+    } finally {
+      await sql`DELETE FROM flightdeck_pg_workspaces WHERE workspace_service_npub = ${AGENT} AND app_npub = ${OTHER_AGENT}`;
+    }
+  });
+
   test('native graph import idempotently upserts nodes and edges for an agent', async () => {
     const payload = {
       visibility: 'agent',
