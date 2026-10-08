@@ -5,6 +5,7 @@ import { finalizeEvent, getPublicKey, nip19 } from 'nostr-tools';
 import { registerRecordClient, acknowledgeRecordCheckpoint } from '../src/services/flightdeck-record-checkpoints';
 import { setDb } from '../src/db';
 import { createApp } from '../src/server';
+import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { readFileSync } from 'node:fs';
 import { splitSqlStatements } from '../src/schema/sql-statements';
 import { readFlightDeckRecordPage } from '../src/services/flightdeck-record-delta';
@@ -31,7 +32,7 @@ describe.skipIf(!port || port===5432)('isolated personal order and lifecycle del
   const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${w},${s},'Channel') RETURNING id`;c=channel!.id;
   await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_scope_id,permission) VALUES(${w},'actor',${a},'scope',${s},'scope.read')`;
   await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${c},'channel.read')`;
-  setDb(db);app=createApp();
+  setDb(db);await ensureRuntimeSchema();app=createApp();
  });
  afterAll(async()=>{await db?.end();const admin=postgres({...conn,database:'postgres'});await admin.unsafe(`DROP DATABASE IF EXISTS ${name}`);await admin.end();});
  async function synced(actorId=a){let p=await readFlightDeckRecordPage({workspaceId:w,actorId},db);while(p.has_more)p=await readFlightDeckRecordPage({workspaceId:w,actorId,cursor:p.next_cursor},db);return p.next_cursor;}
