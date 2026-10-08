@@ -50,6 +50,16 @@ describe.skipIf(!port || port===5432)('isolated personal order and lifecycle del
   const events=await listVisibleFlightDeckPgEvents({workspaceId:w,actorId:b,groupIds:[],afterRowVersion:0,limit:100,includeWorkspaceEvents:true},db);expect(events.some(e=>e.entity_type==='scope_order')).toBe(false);
   const audience=await listVisibleFlightDeckPgEventsForAudience({workspaceId:w,afterRowVersion:0,limit:100,audience:[{actorId:a,npub:'viewer',groupIds:[],includeWorkspaceEvents:true}]},db);expect(audience.events.some(({event})=>event.entity_type==='scope_order')).toBe(false);
  });
+ test('the same actor has independent workspace preferences and foreign targets cannot cross the partition',async()=>{
+  const [other]=await db`INSERT INTO flightdeck_pg_workspaces(tower_service_npub,workspace_service_npub,workspace_owner_npub,app_npub,name) VALUES('tower','service-other','owner','app','Other isolated workspace') RETURNING id`;
+  await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${other!.id},${a},'member')`;
+  expect((await readScopeOrder(other!.id,a,db)).scope_ids).toEqual([]);
+  await expect(writeScopeOrder(other!.id,a,{scope_ids:[s],expected_row_version:0,mutation_id:crypto.randomUUID()},db)).rejects.toMatchObject({status:400});
+  const [clock]=await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${other!.id}`;
+  await writeScopeOrder(other!.id,a,{scope_ids:[],expected_row_version:0,mutation_id:crypto.randomUUID()},db);
+  expect((await readScopeOrder(w,a,db)).scope_ids).toEqual([s]);
+  expect((await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${other!.id}`)[0]!.epoch).toBe(clock!.epoch);
+ });
  test('scope archive is atomic, cursor/epoch stays valid for connected and offline clients, stored content unchanged',async()=>{
   const [message]=await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id) VALUES(${w},${s},${c},'Retained fixture',${a},${a}) RETURNING *`;
   const connected=await synced(),offline=await synced(),hidden=await synced(b);
