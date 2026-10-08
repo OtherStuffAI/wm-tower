@@ -72,7 +72,7 @@ test('every advertised family has all-mutation trigger and complete canonical fi
     expect(Number(trigger!.tgtype)&(4|8|16)).toBe(4|8|16);
     const columns=await db`SELECT column_name FROM information_schema.columns WHERE table_name=${`flightdeck_pg_${table}`}`;
     const context=JSON.parse(readFileSync(new URL('./fixtures/context-record-delta-v1.json',import.meta.url),'utf8'));
-    const fixture=family.startsWith('context_') ? {row:context[family==='context_component'?'components':'references'][0]} : fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
+    const fixture=family==='scope_order' ? {row:{workspace_id:workspaceId,actor_id:actorId,scope_ids:[],row_version:0,updated_at:null}} : family.startsWith('context_') ? {row:context[family==='context_component'?'components':'references'][0]} : fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
     expect(Object.keys(fixture.row).sort()).toEqual(columns.map(c=>c.column_name).sort());
   }
 });
@@ -357,13 +357,15 @@ test('move produces old-ownership deletion followed by canonical destination ups
 });
 
 
-test('scope metadata is incremental while archive and group membership force reset',async()=>{
+test('scope metadata and archive are incremental while restoration and group membership reset',async()=>{
   const cursor=await synced();
   await db`UPDATE flightdeck_pg_scopes SET description='renamed metadata' WHERE id=${scopeId}`;
   const changed=await page(cursor);expect(changed.changes).toHaveLength(1);expect(changed.changes[0]!.family).toBe('scope');
   await db`UPDATE flightdeck_pg_scopes SET archived_at=now() WHERE id=${scopeId}`;
-  await expect(page(changed.next_cursor)).rejects.toMatchObject({status:409});
+  const archived=await page(changed.next_cursor);
+  expect(archived.mode).toBe('delta');expect(archived.changes.some(c=>c.family==='scope'&&c.operation==='delete')).toBe(true);
   await db`UPDATE flightdeck_pg_scopes SET archived_at=NULL WHERE id=${scopeId}`;
+  await expect(page(archived.next_cursor)).rejects.toMatchObject({status:409});
   const current=await synced();
   await db`UPDATE flightdeck_pg_group_memberships SET created_by_actor_id=${actorId} WHERE workspace_id=${workspaceId} AND actor_id=${actorId}`;
   await expect(page(current)).rejects.toMatchObject({status:409});

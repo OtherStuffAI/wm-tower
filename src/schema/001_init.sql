@@ -3315,7 +3315,7 @@ CREATE INDEX IF NOT EXISTS idx_fd_pg_workspace_agents_order
 -- flightdeck_record_delta_v1
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_context(r JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
  SELECT jsonb_build_object('scope_id',r->'scope_id','channel_id',r->'channel_id',
- 'owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
+ 'actor_id',r->'actor_id','owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
  'resource_type',r->'resource_type','resource_id',r->'resource_id',
  'task_id',r->'task_id','doc_id',r->'doc_id','thread_id',r->'thread_id')
 $$;
@@ -3388,7 +3388,8 @@ LANGUAGE plpgsql AS $$ DECLARE r JSONB; w UUID; BEGIN
  IF TG_OP='UPDATE' AND to_jsonb(OLD) IS NOT DISTINCT FROM to_jsonb(NEW) THEN RETURN NEW; END IF;
  r:=CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
  IF TG_OP='UPDATE' AND TG_TABLE_NAME IN ('flightdeck_pg_scopes','flightdeck_pg_channels')
- AND (to_jsonb(OLD)->'archived_at') IS NOT DISTINCT FROM (r->'archived_at')
+ AND ((to_jsonb(OLD)->'archived_at') IS NOT DISTINCT FROM (r->'archived_at')
+ OR (to_jsonb(OLD)->>'archived_at' IS NULL AND r->>'archived_at' IS NOT NULL))
  AND (to_jsonb(OLD)->'scope_id') IS NOT DISTINCT FROM (r->'scope_id')
  AND (to_jsonb(OLD)->'owner_actor_id') IS NOT DISTINCT FROM (r->'owner_actor_id')
  AND (to_jsonb(OLD)->'owner_group_id') IS NOT DISTINCT FROM (r->'owner_group_id')
@@ -3616,7 +3617,7 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_drive_proofs (
 -- Include reader authority in the bounded journal authorization projection.
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_context(r JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
  SELECT jsonb_build_object('scope_id',r->'scope_id','channel_id',r->'channel_id',
- 'owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
+ 'actor_id',r->'actor_id','owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
  'resource_type',r->'resource_type','resource_id',r->'resource_id',
  'task_id',r->'task_id','doc_id',r->'doc_id','thread_id',r->'thread_id')
 $$;
@@ -4100,3 +4101,27 @@ FROM flightdeck_pg_groups g JOIN flightdeck_pg_workspaces w ON w.id=g.workspace_
 CROSS JOIN (VALUES ('Admins','org_data.read'),('Admins','org_data.write'),('Admins','org_data.schema'),('Admins','napplet.publish'),('Admins','napplet.install'),('People','org_data.read')) p(group_name,permission)
 WHERE g.name=p.group_name AND NOT EXISTS (SELECT 1 FROM flightdeck_pg_permission_grants old WHERE old.workspace_id=g.workspace_id AND old.principal_group_id=g.id AND old.resource_type='workspace' AND old.permission=p.permission)
 ON CONFLICT DO NOTHING;
+
+-- Personal navigation preferences; no shared scope position or authority epoch.
+CREATE TABLE IF NOT EXISTS flightdeck_pg_scope_orders (
+ workspace_id UUID NOT NULL, actor_id UUID NOT NULL, scope_ids UUID[] NOT NULL DEFAULT '{}',
+ row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,actor_id),
+ FOREIGN KEY(workspace_id,actor_id) REFERENCES flightdeck_pg_workspace_memberships(workspace_id,actor_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS flightdeck_pg_scope_order_mutations (
+ workspace_id UUID NOT NULL, actor_id UUID NOT NULL, mutation_id UUID NOT NULL,
+ request_hash TEXT NOT NULL, acknowledgement JSONB NOT NULL,
+ PRIMARY KEY(workspace_id,actor_id,mutation_id),
+ FOREIGN KEY(workspace_id,actor_id) REFERENCES flightdeck_pg_workspace_memberships(workspace_id,actor_id) ON DELETE CASCADE
+);
+CREATE OR REPLACE FUNCTION flightdeck_pg_scope_order_capture() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE r JSONB; BEGIN
+ r := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+ r := r || jsonb_build_object('id',r->>'actor_id');
+ PERFORM flightdeck_pg_record_emit((r->>'workspace_id')::uuid,'scope_order',r,CASE WHEN TG_OP='DELETE' THEN 'delete' ELSE 'upsert' END);
+ RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DROP TRIGGER IF EXISTS fd_record_scope_order ON flightdeck_pg_scope_orders;
+CREATE TRIGGER fd_record_scope_order AFTER INSERT OR UPDATE OR DELETE ON flightdeck_pg_scope_orders FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_scope_order_capture();

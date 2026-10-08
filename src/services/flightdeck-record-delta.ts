@@ -87,6 +87,22 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
     }
     async function visible(e: Entry): Promise<boolean> {
       const r = e.row;
+      if (e.family === 'scope_order') return r.actor_id === input.actorId;
+      // A lifecycle tombstone carries identifiers only. Current grants still
+      // authorize delivery after archival; revoked grants/membership use epochs.
+      if (e.operation === 'delete' && ['scope','channel'].includes(e.family)) {
+        effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
+        const groups = effectiveGroups.length ? effectiveGroups : ['00000000-0000-0000-0000-000000000000'];
+        const [allowed] = await sql`SELECT 1 FROM flightdeck_pg_permission_grants g
+          WHERE g.workspace_id=${input.workspaceId} AND g.revoked_at IS NULL
+          AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId}) OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groups)}))
+          AND (( ${e.family}='channel' AND g.resource_type='channel' AND g.resource_channel_id::text=${e.id}
+              AND g.permission IN ('channel.read','task.read','doc.read','file.read','audio_note.read'))
+            OR (${e.family}='scope' AND ((g.resource_type='scope' AND g.resource_scope_id::text=${e.id}
+              AND g.permission IN ('scope.read','scope.manage','context.edit')) OR (g.resource_type='channel' AND g.permission='channel.read'
+              AND EXISTS(SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=g.workspace_id AND c.id=g.resource_channel_id AND c.scope_id::text=${e.id}))))) LIMIT 1`;
+        return !!allowed;
+      }
       if (e.family === 'feed_subscription' || e.family === 'feed_item_state') return r.reader_actor_id === input.actorId;
       if (e.family === 'daily_note' || e.family === 'personal_wapp') return r.owner_actor_id === input.actorId;
       if (e.family === 'autopilot_connection' || e.family === 'workspace_agent') {

@@ -3055,3 +3055,6 @@ export interface WorkspaceStorageUsage {
   total_description: string;
   categories: WorkspaceStorageUsageCategory[];
 }
+
+/** Personal navigation order; revision and mutation identity are actor/workspace scoped. */
+export type FlightDeckPgScopeOrder = { id: string; workspace_id: string; actor_id: string; scope_ids: string[]; row_version: number; updated_at: Date | null };

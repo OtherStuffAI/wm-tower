@@ -2900,6 +2900,7 @@ export async function archiveFlightDeckPgScope(
         updated_at = NOW()
     WHERE workspace_id = ${input.workspaceId}
       AND id = ${input.scopeId}
+      AND kind <> 'dm'
       AND archived_at IS NULL
     RETURNING *
   `;
@@ -3132,6 +3133,7 @@ export async function archiveFlightDeckPgChannel(
         updated_at = NOW()
     WHERE workspace_id = ${input.workspaceId}
       AND id = ${input.channelId}
+      AND kind NOT IN ('dm','system') AND COALESCE(metadata->>'system_key','') = ''
       AND archived_at IS NULL
     RETURNING *
   `;
@@ -6957,6 +6959,14 @@ export async function listVisibleFlightDeckPgEvents(
       AND (${input.throughRowVersion ?? null}::integer IS NULL OR e.row_version <= ${input.throughRowVersion ?? null})
       AND (
         (
+          e.entity_type = 'scope' AND e.operation='archived' AND EXISTS (
+          SELECT 1 FROM flightdeck_pg_permission_grants g WHERE g.workspace_id=e.workspace_id AND g.revoked_at IS NULL
+          AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId}) OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groupIds)}))
+          AND ((g.resource_type='scope' AND g.resource_scope_id=e.scope_id AND g.permission IN ('scope.read','scope.manage','context.edit')) OR (g.resource_type='channel' AND g.permission='channel.read' AND EXISTS (SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=g.workspace_id AND c.id=g.resource_channel_id AND c.scope_id=e.scope_id))))
+        ) OR (
+          e.entity_type = 'scope_order' AND e.actor_id = ${input.actorId}
+        )
+        OR (
           e.entity_type IN ('feed_subscription', 'feed_item_state')
           AND e.payload->>'reader_actor_id' = ${input.actorId}
         )
@@ -7096,7 +7106,7 @@ export async function listVisibleFlightDeckPgEvents(
         )
         OR (
           e.channel_id IS NULL
-          AND e.entity_type NOT IN ('org_data','feed_subscription','feed_item_state','context_component','context_reference')
+          AND e.entity_type NOT IN ('scope','scope_order','org_data','feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
         )
       )
@@ -7201,8 +7211,8 @@ export async function listVisibleFlightDeckPgEventsForAudience(
       includeWorkspaceEvents: member.includeWorkspaceEvents,
     }, sql);
     for (const event of events) {
-      // Managed agent audiences never delegate personal feed preferences/flags.
-      if (event.entity_type === 'feed_subscription' || event.entity_type === 'feed_item_state') continue;
+      // Managed audiences never delegate personal navigation or feed preferences.
+      if (['scope_order', 'feed_subscription', 'feed_item_state'].includes(event.entity_type)) continue;
       const existing = visibleByEvent.get(event.id) ?? { event, npubs: new Set<string>() };
       existing.npubs.add(member.npub);
       visibleByEvent.set(event.id, existing);
@@ -8171,7 +8181,7 @@ export async function createFlightDeckPgChannelOutboxEvent(
     actorId: string | null;
     eventType: string;
     entityId: string;
-    operation: 'updated';
+    operation: 'updated' | 'archived';
     payload?: Record<string, unknown>;
   },
   sql: DbClient = getDb(),

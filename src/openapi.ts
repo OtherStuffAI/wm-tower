@@ -4232,6 +4232,10 @@ export function buildOpenApiDocument(origin: string) {
       },
 
       ...feedReaderPaths,
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me/scope-order': {
+        get: { tags: ['Flight Deck PG'], summary: 'Read the authenticated actor’s personal scope order', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Actor/workspace scope_order, empty at revision 0 before first save' }, '403': { description: 'Workspace membership required' } } },
+        put: { tags: ['Flight Deck PG'], summary: 'Save personal order with CAS and idempotent mutation', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['scope_ids','expected_row_version','mutation_id'], properties: { scope_ids: { type: 'array', maxItems: 1000, uniqueItems: true, items: { type: 'string', format: 'uuid' } }, expected_row_version: { type: 'integer', minimum: 0 }, mutation_id: { type: 'string', format: 'uuid' } } } } } }, responses: { '200': { description: 'Personal scope_order; no shared positions or authority epoch change' }, '400': { description: 'Invalid, archived or protected target' }, '403': { description: 'Membership or target read permission required' }, '409': { description: 'Revision conflict or mutation ID reuse' } } },
+      },
       ...contextTreePaths,
       ...orgDataPaths,
       ...drivePaths,

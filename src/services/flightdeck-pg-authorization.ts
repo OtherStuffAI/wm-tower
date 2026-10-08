@@ -344,6 +344,7 @@ async function resourceExists(
   workspaceId: string,
   resource: FlightDeckPgAuthorizationResource,
   sql: DbClient,
+  archivedLifecycle = false,
 ): Promise<boolean> {
   if (resource.type === 'workspace') return true;
   if (resource.type === 'scope') {
@@ -352,7 +353,7 @@ async function resourceExists(
       FROM flightdeck_pg_scopes
       WHERE workspace_id = ${workspaceId}
         AND id = ${resource.scopeId}
-        AND archived_at IS NULL
+        AND (archived_at IS NULL OR ${archivedLifecycle})
       LIMIT 1
     `;
     return Boolean(scope);
@@ -362,7 +363,7 @@ async function resourceExists(
     FROM flightdeck_pg_channels
     WHERE workspace_id = ${workspaceId}
       AND id = ${resource.channelId}
-      AND archived_at IS NULL
+      AND (archived_at IS NULL OR ${archivedLifecycle})
     LIMIT 1
   `;
   return Boolean(channel);
@@ -503,6 +504,7 @@ async function findGroupPermissionGrant(
 export async function authorizeFlightDeckPgOperation(
   input: FlightDeckPgAuthorizationInput,
   sql: DbClient = getDb(),
+  options: { archivedLifecycle?: boolean } = {},
 ): Promise<FlightDeckPgAuthorizationDecision> {
   const actorNpub = String(input.actorNpub || '').trim();
   if (!actorNpub) return denied('missing-actor-npub', 'auth-error');
@@ -538,7 +540,7 @@ export async function authorizeFlightDeckPgOperation(
     });
   }
 
-  const exists = await resourceExists(workspace.id, input.resource, sql);
+  const exists = await resourceExists(workspace.id, input.resource, sql, options.archivedLifecycle === true && ['scope.manage','channel.manage'].includes(input.permission));
   if (!exists) {
     return denied('resource-not-found', 'validation-error', {
       actorId: actor.id,

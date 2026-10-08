@@ -1,3 +1,4 @@
+import { readScopeOrder, writeScopeOrder } from '../services/scope-order';
 import { registerOrgDataRoutes } from './org-data';
 import { getWorkspaceStorageUsage } from '../services/workspace-storage-usage';
 import { readFlightDeckPgMessageActivity, parseMessageActivityRange } from '../services/flightdeck-pg-message-activity';
@@ -1758,6 +1759,18 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/me', async (c) => {
       channels: channels.map(serializeFlightDeckPgChannel),
     },
   });
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/me/scope-order', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  return c.json({ identity: result.identity, scope_order: await readScopeOrder(result.context.workspace.id, result.context.actor.id) });
+});
+flightDeckPgRouter.put('/workspaces/:workspaceId/me/scope-order', async (c) => {
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  try { return c.json({ identity: result.identity, scope_order: await writeScopeOrder(result.context.workspace.id, result.context.actor.id, await c.req.json()) }); }
+  catch (error) { if (error instanceof RecordSyncError) return jsonError(c, error.status, error.code, error.code, result.identity); if (error instanceof SyntaxError) return jsonError(c, 400, 'invalid_body', 'Invalid JSON', result.identity); throw error; }
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/me/autopilot-agents', async (c) => {
@@ -3846,11 +3859,18 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/scopes/:scopeId', async (c) 
     workspaceId: context.workspace.id,
     permission: 'scope.manage',
     resource: { type: 'scope', scopeId },
-  });
+  }, undefined, { archivedLifecycle: true });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'scope.manage');
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${context.workspace.id} FOR UPDATE`;
+    const current = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub,
+      workspaceId: context.workspace.id, permission: 'scope.manage', resource: { type: 'scope', scopeId } }, sql, { archivedLifecycle: true });
+    if (!current.allowed) return { denied: current };
+    const [existing] = await sql`SELECT * FROM flightdeck_pg_scopes WHERE workspace_id=${context.workspace.id} AND id=${scopeId} FOR UPDATE`;
+    if (existing?.archived_at) return { scope: existing as any, auditId: null };
+
     const scope = await archiveFlightDeckPgScope({
       workspaceId: context.workspace.id,
       scopeId,
@@ -3863,9 +3883,11 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/scopes/:scopeId', async (c) 
       resourceType: 'scope',
       resourceId: scope.id,
     }, sql);
+    await sql`INSERT INTO flightdeck_pg_outbox_events(workspace_id,scope_id,actor_id,event_type,entity_type,entity_id,operation,payload) VALUES(${context.workspace.id},${scope.id},${context.actor.id},'scope.archived','scope',${scope.id},'archived','{}'::jsonb)`;
     return { scope, auditId };
   });
 
+  if (payload?.denied) return authorizationError(c, payload.denied, identity, 'scope.manage');
   if (!payload) return jsonError(c, 404, 'scope_not_found', 'Flight Deck PG scope not found', identity);
   return c.json({
     identity,
@@ -4253,11 +4275,18 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/channels/:channelId', async 
     workspaceId: context.workspace.id,
     permission: 'channel.manage',
     resource: { type: 'channel', channelId },
-  });
+  }, undefined, { archivedLifecycle: true });
   if (!decision.allowed) return authorizationError(c, decision, identity, 'channel.manage');
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${context.workspace.id} FOR UPDATE`;
+    const current = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub,
+      workspaceId: context.workspace.id, permission: 'channel.manage', resource: { type: 'channel', channelId } }, sql, { archivedLifecycle: true });
+    if (!current.allowed) return { denied: current };
+    const [existing] = await sql`SELECT * FROM flightdeck_pg_channels WHERE workspace_id=${context.workspace.id} AND id=${channelId} FOR UPDATE`;
+    if (existing?.archived_at) return { channel: existing as any, auditId: null };
+
     const channel = await archiveFlightDeckPgChannel({
       workspaceId: context.workspace.id,
       channelId,
@@ -4270,9 +4299,11 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/channels/:channelId', async 
       resourceType: 'channel',
       resourceId: channel.id,
     }, sql);
+    await createFlightDeckPgChannelOutboxEvent({workspaceId:context.workspace.id,scopeId:channel.scope_id,channelId:channel.id,actorId:context.actor.id,eventType:'channel.archived',entityId:channel.id,operation:'archived',payload:{}},sql);
     return { channel, auditId };
   });
 
+  if (payload?.denied) return authorizationError(c, payload.denied, identity, 'channel.manage');
   if (!payload) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
   return c.json({
     identity,

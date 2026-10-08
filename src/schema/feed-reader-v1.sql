@@ -1,7 +1,7 @@
 -- Include reader authority in the bounded journal authorization projection.
 CREATE OR REPLACE FUNCTION flightdeck_pg_record_context(r JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
  SELECT jsonb_build_object('scope_id',r->'scope_id','channel_id',r->'channel_id',
- 'owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
+ 'actor_id',r->'actor_id','owner_actor_id',r->'owner_actor_id','viewer_actor_id',r->'viewer_actor_id','reader_actor_id',r->'reader_actor_id',
  'resource_type',r->'resource_type','resource_id',r->'resource_id',
  'task_id',r->'task_id','doc_id',r->'doc_id','thread_id',r->'thread_id')
 $$;
