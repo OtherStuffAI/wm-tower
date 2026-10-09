@@ -1143,6 +1143,7 @@ adminRouter.post('/flightdeck-pg/workspaces', async (c) => {
   const appNpub = trimBodyString(body?.app_npub) || config.flightDeck.appNpub;
   const workspaceOwnerNpub = trimBodyString(body?.workspace_owner_npub) || authNpub;
   const result = await setupFlightDeckPgDevWorkspace({
+    hostedBilling: true,
     workspaceName,
     workspaceDescription: trimBodyString(body?.workspace_description) || null,
     appNpub,

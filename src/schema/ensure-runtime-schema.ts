@@ -1,3 +1,4 @@
+import { hostingBillingV1Sql } from './hosting-billing-v1';
 import { driveV1Sql } from './drive-v1';
 import { learningV1Sql } from './learning-v1';
 import { learningResearchV1Sql } from './learning-research-v1';
@@ -4310,4 +4311,6 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(readFileSync(new URL('./scope-order-v1.sql', import.meta.url), 'utf8'));
   await sql.unsafe(readFileSync(new URL('./blossom-publications.sql', import.meta.url), 'utf8'));
   await sql.unsafe(readFileSync(new URL('./blossom-message-publications.sql', import.meta.url), 'utf8'));
+  await sql.unsafe(hostingBillingV1Sql);
+
 }

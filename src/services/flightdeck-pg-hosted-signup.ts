@@ -7,7 +7,7 @@ import type { FlightDeckPgHostedSignupRequest } from '../types';
 import { serializeFlightDeckPgWorkspaceDescriptor } from './flightdeck-pg-api';
 import { generatedFlightDeckPgWorkspaceServiceNpub, setupFlightDeckPgDevWorkspace } from './flightdeck-pg-setup';
 
-export const HOSTED_SIGNUP_TERMS_VERSION = 'hosted-free-v1';
+export const HOSTED_SIGNUP_TERMS_VERSION = 'hosted-usd-v1';
 export const HOSTED_SIGNUP_ALLOWANCE_BYTES = 1_000_000_000;
 
 export class HostedSignupError extends Error {
@@ -109,6 +109,7 @@ export async function createHostedSignup(request: Request, rawBody: string) {
     if (recent >= config.flightDeck.hostedSignupHourlyLimit) throw new HostedSignupError('signup_rate_limited', 429);
     if (total >= config.flightDeck.hostedSignupMaxWorkspaces) throw new HostedSignupError('hosted_workspace_limit', 403);
     const setup = await setupFlightDeckPgDevWorkspace({
+      hostedBilling: true,
       creatorNpub: owner, workspaceOwnerNpub: owner,
       workspaceName: body.workspace_name,
       workspaceDescription: null,
@@ -140,6 +141,6 @@ export async function createHostedSignup(request: Request, rawBody: string) {
 
 export function hostedPolicy() {
   return { plan: 'hosted_free', allowance_bytes: HOSTED_SIGNUP_ALLOWANCE_BYTES,
-    terms_version: HOSTED_SIGNUP_TERMS_VERSION, billing_state: 'free_allowance',
+    terms_version: HOSTED_SIGNUP_TERMS_VERSION, billing_state: 'usd_prepaid', billing_version: 1, welcome_credit_usd: '5', promo_expiry_days: 30,
     payment_required: false } as const;
 }

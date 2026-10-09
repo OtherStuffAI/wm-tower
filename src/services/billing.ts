@@ -1,3 +1,4 @@
+import { hostingWriteBlock } from './hosting-billing';
 import { config } from '../config';
 import { getDb } from '../db';
 import type {
@@ -171,6 +172,9 @@ export function insufficientCreditsBody(account: WorkspaceCreditAccount, workspa
 }
 
 export async function getInsufficientCreditsBlock(workspaceOwnerNpub: string) {
+  const links = await getDb()`SELECT w.id FROM hosting_workspace_accounts l JOIN flightdeck_pg_workspaces w ON w.id=l.workspace_id WHERE w.workspace_service_npub=${workspaceOwnerNpub}`;
+  for (const link of links) { const block=await hostingWriteBlock(link.id); if(block) return block; }
+  if (links.length) return null;
   if (config.billing.mode === 'disabled') return null;
   let account = await refreshAccountState(workspaceOwnerNpub);
   if (!account) return null;
@@ -609,6 +613,8 @@ export async function runHourlyUsageAuditForWorkspace(workspaceOwnerNpub: string
   normalizedHour.setUTCMinutes(0, 0, 0);
 
   const sql = getDb();
+  const [usdLink] = await sql`SELECT 1 FROM hosting_workspace_accounts l JOIN flightdeck_pg_workspaces w ON w.id=l.workspace_id WHERE w.workspace_service_npub=${workspaceOwnerNpub} LIMIT 1`;
+  if (usdLink) return null;
   return sql.begin(async (tx) => {
     let account = await ensureWorkspaceCreditAccount(workspaceOwnerNpub, tx);
     if (!account) return null;

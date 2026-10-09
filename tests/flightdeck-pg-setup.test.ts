@@ -454,6 +454,9 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
     expect(second.res.status).toBe(200);
     expect(second.json.workspace_id).toBe(first.json.workspace_id);
     expect(second.json.viewer).toBe(ADMIN_NPUB);
+    const [billing] = await sql`SELECT a.* FROM hosting_workspace_accounts l JOIN hosting_accounts a ON a.id=l.account_id WHERE l.workspace_id=${first.json.workspace_id}`;
+    expect(billing!.promo_units).toBe('720000000000');
+    expect((await sql`SELECT * FROM hosting_ledger WHERE account_id=${billing!.id} AND kind='welcome'`).length).toBe(1);
     expect(second.json.descriptor_route).toBe(`/api/v4/flightdeck-pg/workspaces/${first.json.workspace_id}/descriptor`);
     expect(second.json.descriptor.type).toBe('wingman_workspace_locator');
     expect(second.json.descriptor.identity.workspace_id).toBe(first.json.workspace_id);

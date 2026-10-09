@@ -81,3 +81,7 @@ existing-row backfill and independent user read/device checkpoint behavior.
 [Flight Deck message references](docs/contract/flightdeck-message-reference-lookup.md)
 documents the narrow authorized message/owning-thread lookup for uncached links,
 its error and branch semantics, and the separate runtime activation check.
+
+## USD hosting billing
+
+[USD prepaid hosting v1](docs/contract/hosting-billing-usd-v1.md) describes customer/workspace linking, exact byte-hour charges, the durable Tower runtime runner, Stripe test-mode top-ups, and the explicit live rollout gate. Existing workspaces remain safely unlinked.

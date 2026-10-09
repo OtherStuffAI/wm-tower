@@ -1,3 +1,4 @@
+import { hostingPaths, hostingSchemas } from './hosting-openapi';
 import { orgDataPaths, orgDataSchemas } from './org-data-openapi';
 import { contextTreePaths, contextTreeSchemas } from './context-tree-openapi';
 import { feedReaderPaths, feedReaderSchemas, FEED_READER_SOURCE_BUILD } from './feed-reader-openapi';
@@ -2471,6 +2472,7 @@ export function buildOpenApiDocument(origin: string) {
 
       },
       schemas: {
+        ...hostingSchemas,
         ...feedReaderSchemas,
         ...contextTreeSchemas,
         ...orgDataSchemas,
@@ -4226,6 +4228,7 @@ export function buildOpenApiDocument(origin: string) {
     },
     security: [{ nip98: [] }],
     paths: {
+      ...hostingPaths,
       '/{sha256}': {
         get: { security: [{}, { nip98: [] }, { blossom: [] }], tags: ['Storage'], summary: 'Retrieve verified Blossom blob (BUD-01)', description: 'Root SHA-256 path accepts optional extension. Public objects are anonymous; private objects require BUD-11 get or NIP-98 authorization with existing storage ACLs. Range and If-Range are supported. No listing, upload or delete Blossom endpoints.', parameters: [{ name: 'sha256', in: 'path', required: true, schema: { type: 'string', pattern: '^[0-9a-f]{64}(\\.[a-zA-Z0-9]+)?$' } }, { name: 'Range', in: 'header', schema: { type: 'string' } }], responses: { '200': { description: 'Exact verified blob bytes' }, '206': { description: 'Single byte range' }, '401': { description: 'Missing or invalid authorization; anonymous negatives do not reveal private existence' }, '404': { description: 'Unavailable to authenticated caller' }, '416': { description: 'Unsatisfiable or unsupported range' } } },
         head: { security: [{}, { nip98: [] }, { blossom: [] }], tags: ['Storage'], summary: 'Retrieve Blossom headers without a body', parameters: [{ name: 'sha256', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Content-Type, Content-Length, ETag and Accept-Ranges' }, '401': { description: 'Authorization required or unavailable' }, '404': { description: 'Unavailable' } } },
@@ -4377,7 +4380,7 @@ export function buildOpenApiDocument(origin: string) {
           summary: 'Create a Hosted Flight Deck PG workspace with user and site signatures',
           description: 'Exact signature, retry, failure and policy contract: docs/hosted-flightdeck-pg-signup.md. Both NIP-98 events sign the exact POST URL and UTF-8 body SHA-256. The site event must also tag the verified user event ID. The site signer must be allowlisted. The owner is the direct user signer.',
           parameters: [{ name: 'x-flightdeck-site-attestation', in: 'header', required: true, schema: { type: 'string' }, description: 'Base64 UTF-8 JSON NIP-98 site event with user_event_id tag' }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['workspace_name', 'idempotency_key', 'terms_version'], additionalProperties: false, properties: { workspace_name: { type: 'string', minLength: 1, maxLength: 80 }, idempotency_key: { type: 'string', format: 'uuid' }, terms_version: { type: 'string', enum: ['hosted-free-v1'] } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['workspace_name', 'idempotency_key', 'terms_version'], additionalProperties: false, properties: { workspace_name: { type: 'string', minLength: 1, maxLength: 80 }, idempotency_key: { type: 'string', format: 'uuid' }, terms_version: { type: 'string', enum: ['hosted-usd-v1'] } } } } } },
           responses: {
             '201': { description: 'Created. Returns workspace_id, credential-free descriptor, policy and replayed=false.' },
             '200': { description: 'Idempotent retry with fresh signatures. Returns the same workspace and replayed=true.' },

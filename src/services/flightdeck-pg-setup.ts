@@ -1,3 +1,4 @@
+import { linkHostedAccount } from './hosting-billing';
 import { createHash } from 'crypto';
 import { nip19 } from 'nostr-tools';
 import { config } from '../config';
@@ -85,6 +86,7 @@ const groupChannelAccessLevels: Record<DefaultGroupName, FlightDeckPgAccessLevel
 
 export type FlightDeckPgSetupInput = {
   towerServiceNpub?: string;
+  hostedBilling?: boolean;
   workspaceServiceNpub?: string;
   workspaceOwnerNpub?: string;
   appNpub?: string;
@@ -252,7 +254,7 @@ async function ensureWorkspace(
       name = EXCLUDED.name,
       description = EXCLUDED.description,
       updated_at = NOW()
-    RETURNING id, tower_service_npub, workspace_service_npub, workspace_owner_npub, app_npub, name, slug, description, avatar_url, v4_workspace_id, created_by_actor_id, created_at, updated_at
+    RETURNING id, tower_service_npub, workspace_service_npub, workspace_owner_npub, app_npub, name, slug, description, avatar_url, v4_workspace_id, created_by_actor_id, created_at, updated_at, (xmax = 0) AS billing_new_workspace
   `;
   return workspace;
 }
@@ -522,6 +524,9 @@ export async function setupFlightDeckPgDevWorkspace(
   rawInput: FlightDeckPgSetupInput,
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgSetupResult> {
+  if (rawInput.hostedBilling && sql === getDb()) {
+    return getDb().begin(tx => setupFlightDeckPgDevWorkspace(rawInput, tx as unknown as DbClient));
+  }
   const appNpub = rawInput.appNpub || config.flightDeck.appNpub;
   const workspaceOwnerNpub = rawInput.workspaceOwnerNpub || rawInput.creatorNpub;
   const workspaceName = rawInput.workspaceName || 'Flight Deck PG Dev Workspace';
@@ -535,6 +540,11 @@ export async function setupFlightDeckPgDevWorkspace(
     sql,
   });
   const workspace = await ensureWorkspace(input, creator, sql);
+  // Hosted canonical creation enrolls new UUIDs only. Existing rows never acquire retroactive billing.
+  if (input.hostedBilling && (workspace as any).billing_new_workspace) {
+    const owner = await resolveOrCreateFlightDeckPgActor(workspace.workspace_owner_npub, 'human', { sql });
+    await linkHostedAccount(workspace.id, owner.id, sql);
+  }
   const creatorMembership = await ensureWorkspaceMember(sql, {
     workspaceId: workspace.id,
     actor: creator,

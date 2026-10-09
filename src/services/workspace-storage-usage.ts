@@ -41,6 +41,7 @@ export async function collectWorkspaceStorageUsage(workspaceId: string, db: Db =
   let tables: { table_name: string; has_object: boolean }[] = [];
   try {
     tables = await db.begin(async tx => {
+      await tx`SET TRANSACTION READ ONLY`;
       await tx`SELECT set_config('statement_timeout', '3000', true)`;
       return tx<{ table_name: string; has_object: boolean }[]>`
         SELECT c.table_name, bool_or(c.column_name = 'storage_object_id') AS has_object
@@ -60,6 +61,7 @@ export async function collectWorkspaceStorageUsage(workspaceId: string, db: Db =
   const identifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
   try {
     const bytes = await db.begin(async tx => {
+      await tx`SET TRANSACTION READ ONLY`;
       await tx`SELECT set_config('statement_timeout', '3000', true)`;
       const sums = tables.map(table => `SELECT COALESCE(SUM(octet_length(to_jsonb(r)::text)),0)::numeric AS bytes FROM public.${identifier(table.table_name)} r WHERE workspace_id = $1::uuid`);
       const [row] = await tx.unsafe(`SELECT SUM(bytes)::text AS bytes FROM (${sums.join(' UNION ALL ')}) measured`, [workspaceId]);
@@ -71,6 +73,7 @@ export async function collectWorkspaceStorageUsage(workspaceId: string, db: Db =
   if (refs.length) {
     try {
       const bytes = await db.begin(async tx => {
+        await tx`SET TRANSACTION READ ONLY`;
         await tx`SELECT set_config('statement_timeout', '3000', true)`;
         const selections = refs.map(table => `SELECT storage_object_id FROM public.${identifier(table.table_name)} WHERE workspace_id = $1::uuid`);
         const [row] = await tx.unsafe(`

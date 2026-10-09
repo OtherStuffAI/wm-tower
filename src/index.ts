@@ -1,3 +1,4 @@
+import { startHostingBillingRunner } from './services/hosting-billing';
 import { ensureServiceIdentity } from './service-identity';
 import { startFipsIngress } from './fips-ingress';
 
@@ -22,6 +23,8 @@ try {
   console.error('[coworker-be] DB connection failed:', err);
   process.exit(1);
 }
+
+startHostingBillingRunner();
 
 console.log(`[coworker-be] listening on :${config.port}`);
 console.log(`[coworker-be] service npub: ${identity.npub}`);

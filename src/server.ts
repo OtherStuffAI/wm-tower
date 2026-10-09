@@ -1,3 +1,6 @@
+import { requireNip98AuthResolved } from './auth';
+import { hostingBillingRouter } from './routes/hosting-billing';
+import { hostingWriteBlock, stripeAvailability } from './services/hosting-billing';
 import { blossomRouter } from './routes/blossom';
 import { driveRouter } from './routes/drive';
 import { Hono } from 'hono';
@@ -38,6 +41,7 @@ export function createApp() {
       service_npub: config.service.npub || null,
       build: getTowerBuildInfo(),
       sse_connections: sseHub.getClientCount(),
+      hosting_billing: { version: 1, runner: 'embedded_db_locked', stripe: stripeAvailability() },
       graph: {
         enabled: Boolean(config.graph?.enabled),
         allowed_npubs_configured: (config.graph?.allowedNpubs?.length || 0) > 0,
@@ -70,6 +74,21 @@ export function createApp() {
     return c.html(buildSuperbasedDashboardHtml(origin));
   });
 
+  // Shared exhaustion boundary applies to all UUID PG/Drive/WApp mutations. Reads, export and payments remain accessible.
+  const hostedWriteBoundary: import('hono').MiddlewareHandler = async (c, next) => {
+    if (!['GET','HEAD','OPTIONS'].includes(c.req.method)) {
+      if (!/^[0-9a-f-]{36}$/i.test(c.req.param('workspaceId')!)) return c.json({error:'Invalid workspace UUID'},400);
+      const auth = await requireNip98AuthResolved(c);
+      if (auth instanceof Response) return auth;
+      const block = await hostingWriteBlock(c.req.param('workspaceId')!);
+      if (block) return c.json(block, 402);
+    }
+    await next();
+  };
+  app.use('/api/v4/flightdeck-pg/workspaces/:workspaceId/*', hostedWriteBoundary);
+  app.use('/api/v4/flightdeck-pg/workspaces/:workspaceId', hostedWriteBoundary);
+  app.use('/api/v4/wapp-activity/workspaces/:workspaceId/*', hostedWriteBoundary);
+  app.route('/api/v4/hosting-billing', hostingBillingRouter);
   app.route('/api/v4/groups', groupsRouter);
   app.route('/api/v4/git/oidc', gitOidcRouter);
   // Legacy Git authority endpoints are retired. Forgejo owns all authorization.

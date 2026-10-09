@@ -19,12 +19,13 @@ const path = '/api/v4/flightdeck-pg/hosted/workspaces';
 const url = `http://localhost${path}`;
 const app = createApp();
 let sql: ReturnType<typeof postgres>;
+const oldService = config.service.npub;
 const oldSites = config.flightDeck.hostedSignupSiteNpubs;
 const oldHourly = config.flightDeck.hostedSignupHourlyLimit;
 const oldMax = config.flightDeck.hostedSignupMaxWorkspaces;
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
-const body = (name: string, key = crypto.randomUUID()) => JSON.stringify({ workspace_name: name, idempotency_key: key, terms_version: 'hosted-free-v1' });
+const body = (name: string, key = crypto.randomUUID()) => JSON.stringify({ workspace_name: name, idempotency_key: key, terms_version: 'hosted-usd-v1' });
 function sign(secret: Uint8Array, rawBody: string, extra: string[][] = [], target = url, method = 'POST', timestamp = Math.floor(Date.now() / 1000)) {
   return finalizeEvent({ kind: 27235, created_at: timestamp,
     tags: [['u', target], ['method', method], ['payload', hash(rawBody)], ...extra], content: crypto.randomUUID() }, secret);
@@ -51,11 +52,13 @@ beforeAll(async () => {
   const migration = readFileSync(new URL('../src/schema/001_init.sql', import.meta.url), 'utf8');
   for (const statement of splitSqlStatements(migration)) await sql.unsafe(statement);
   await ensureRuntimeSchema(sql);
+  config.service.npub = nip19.npubEncode(getPublicKey(new Uint8Array(32).fill(85)));
   config.flightDeck.hostedSignupSiteNpubs = [siteNpub];
   config.flightDeck.hostedSignupHourlyLimit = 20;
   config.flightDeck.hostedSignupMaxWorkspaces = 20;
 });
 afterAll(async () => {
+  config.service.npub = oldService;
   config.flightDeck.hostedSignupSiteNpubs = oldSites;
   config.flightDeck.hostedSignupHourlyLimit = oldHourly;
   config.flightDeck.hostedSignupMaxWorkspaces = oldMax;
@@ -69,12 +72,18 @@ describe('Hosted PG signup', () => {
     expect(first.status).toBe(201);
     expect(first.json.descriptor.identity.workspace_owner_npub).toBe(userNpub);
     expect(first.json.policy.allowance_bytes).toBe(1_000_000_000);
+    expect(first.json.policy.billing_state).toBe('usd_prepaid');
+    const [link] = await sql`SELECT a.* FROM hosting_workspace_accounts l JOIN hosting_accounts a ON a.id=l.account_id WHERE l.workspace_id=${first.json.workspace_id}`;
+    expect(link!.promo_units).toBe('720000000000');
+    const grants = await sql`SELECT * FROM hosting_ledger WHERE account_id=${link!.id} AND kind='welcome'`;
+    expect(grants.length).toBe(1);
     expect(JSON.stringify(first.json)).not.toContain('nsec');
     const membership = await sql`SELECT m.role FROM flightdeck_pg_workspace_memberships m JOIN flightdeck_pg_actors a ON a.id=m.actor_id WHERE m.workspace_id=${first.json.workspace_id} AND a.npub=${userNpub}`;
     expect(membership[0]?.role).toBe('owner');
     const retry = await send(raw);
     expect(retry.status).toBe(200);
     expect(retry.json.workspace_id).toBe(first.json.workspace_id);
+    expect((await sql`SELECT * FROM hosting_ledger WHERE account_id=${link!.id} AND kind='welcome'`).length).toBe(1);
     const replay = await send(raw, { user: first.user, site: first.site });
     expect(replay.json.code).toBe('signature_replayed');
     const listing = await app.request('/api/v4/flightdeck-pg/workspaces', { headers: { authorization: `Nostr ${encode(sign(userSecret, '', [], 'http://localhost/api/v4/flightdeck-pg/workspaces', 'GET'))}` } });

@@ -25,7 +25,7 @@ the explicitly stated coverage. The subtotal is null when no store was measured.
 Objects and logical database row estimates measure separate representations:
 object contents are counted only in objects; database rows include their reference
 metadata. This is a mixed covered subtotal including estimates, not total disk or
-billing usage. Shared objects count once *within* a workspace, so sums across
+billing usage by itself. USD v1 hosting may consume the two explicitly covered categories under [its versioned billing contract](hosting-billing-usd-v1.md). Shared objects count once *within* a workspace, so sums across
 workspaces are not a provider-wide physical total. Conflicting sizes for one path
 invalidate the object category. Invalid/unsafe integer counts invalidate that
 measurement rather than returning a fabricated zero.
