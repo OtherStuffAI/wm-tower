@@ -9,7 +9,7 @@ import { createApp } from '../src/server';
 import { splitSqlStatements } from '../src/schema/sql-statements';
 import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 
-const dbName = 'coworker_v4_test_hosted_signup';
+const dbName = `tower_hosted_signup_${process.pid}_${Date.now()}`;
 const userSecret = new Uint8Array(32).fill(81);
 const siteSecret = new Uint8Array(32).fill(82);
 const otherSecret = new Uint8Array(32).fill(83);
@@ -45,7 +45,7 @@ async function send(rawBody: string, options: { user?: any; site?: any; omitUser
 beforeAll(async () => {
   const options = { host: process.env.DB_HOST || 'localhost', port: Number(process.env.DB_PORT || 5432), username: process.env.DB_USER || 'postgres', password: process.env.DB_PASSWORD || 'postgres' };
   const admin = postgres({ ...options, database: 'postgres' });
-  try { await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`); await admin.unsafe(`CREATE DATABASE ${dbName}`); }
+  try { await admin.unsafe(`CREATE DATABASE ${dbName}`); }
   finally { await admin.end(); }
   sql = postgres({ ...options, database: dbName });
   setDb(sql);
@@ -73,8 +73,16 @@ describe('Hosted PG signup', () => {
     expect(first.json.descriptor.identity.workspace_owner_npub).toBe(userNpub);
     expect(first.json.policy.allowance_bytes).toBe(1_000_000_000);
     expect(first.json.policy.billing_state).toBe('usd_prepaid');
+    expect(first.json.policy.terms_version).toBe('hosted-usd-v1');
+    expect(first.json.policy.billing_version).toBe(1);
+    expect(first.json.policy.welcome_credit_usd).toBe('5');
+    expect(first.json.policy.promo_expiry_days).toBe(30);
     const [link] = await sql`SELECT a.* FROM hosting_workspace_accounts l JOIN hosting_accounts a ON a.id=l.account_id WHERE l.workspace_id=${first.json.workspace_id}`;
     expect(link!.promo_units).toBe('720000000000');
+    expect(link!.paid_units).toBe('0');
+    const [customer] = await sql`SELECT npub FROM flightdeck_pg_actors WHERE id=${link!.owner_actor_id}`;
+    expect(customer!.npub).toBe(userNpub);
+    expect(new Date(link!.promo_expires_at).getTime() - new Date(link!.created_at).getTime()).toBe(30 * 24 * 60 * 60 * 1000);
     const grants = await sql`SELECT * FROM hosting_ledger WHERE account_id=${link!.id} AND kind='welcome'`;
     expect(grants.length).toBe(1);
     expect(JSON.stringify(first.json)).not.toContain('nsec');
@@ -118,6 +126,10 @@ describe('Hosted PG signup', () => {
     const [a, b] = await Promise.all([send(raw), send(raw)]);
     expect([a.status, b.status].sort()).toEqual([200, 201]);
     expect(a.json.workspace_id).toBe(b.json.workspace_id);
+    const accounts = await sql`SELECT account_id FROM hosting_workspace_accounts WHERE workspace_id IN (${a.json.workspace_id}, (SELECT id FROM flightdeck_pg_workspaces WHERE name='Hosted Alpha' AND workspace_owner_npub=${userNpub}))`;
+    expect(accounts).toHaveLength(2);
+    expect(new Set(accounts.map((row) => row.account_id)).size).toBe(1);
+    expect((await sql`SELECT id FROM hosting_ledger WHERE account_id=${accounts[0]!.account_id} AND kind='welcome'`)).toHaveLength(1);
     expect((await send(body('concurrent alpha'))).json.code).toBe('workspace_name_taken');
     config.flightDeck.hostedSignupHourlyLimit = 2;
     expect((await send(body('Hourly Blocked'))).json.code).toBe('signup_rate_limited');
@@ -145,5 +157,49 @@ describe('Hosted PG signup', () => {
       await sql.unsafe('DROP TRIGGER reject_hosted_signup_audit ON flightdeck_pg_audit_events');
       await sql.unsafe('DROP FUNCTION reject_hosted_signup_audit()');
     }
+  });
+
+  test('missing or mismatched site proofs and an empty allowlist leave no signup or billing writes', async () => {
+    const snapshot = async () => (await sql`
+      SELECT
+        (SELECT count(*) FROM flightdeck_pg_workspaces) AS workspaces,
+        (SELECT count(*) FROM flightdeck_pg_hosted_signups) AS signups,
+        (SELECT count(*) FROM flightdeck_pg_audit_events) AS audits,
+        (SELECT count(*) FROM hosting_accounts) AS accounts,
+        (SELECT count(*) FROM hosting_workspace_accounts) AS links,
+        (SELECT count(*) FROM hosting_ledger) AS ledger
+    `)[0];
+    const before = await snapshot();
+    const raw = body('Must not provision');
+    expect((await send(raw, { omitSite: true })).json.code).toBe('site_attestation_required');
+    const user = sign(userSecret, raw);
+    for (const extra of [
+      [['payload', hash(raw)]],
+      [['user_event_id', user.id]],
+      [['u', url]],
+      [['method', 'POST']],
+    ]) {
+      const site = sign(siteSecret, raw, [['user_event_id', user.id], ...extra]);
+      expect((await send(raw, { user, site })).json.code).toBe('site_attestation_mismatch');
+    }
+    const future = Math.floor(Date.now() / 1000) + 90;
+    expect((await send(raw, { user, site: sign(siteSecret, raw, [['user_event_id', user.id]], url, 'POST', future) })).json.code).toBe('site_attestation_expired');
+    config.flightDeck.hostedSignupSiteNpubs = [];
+    try { expect((await send(raw)).json.code).toBe('site_not_allowed'); }
+    finally { config.flightDeck.hostedSignupSiteNpubs = [siteNpub]; }
+    expect(await snapshot()).toEqual(before);
+  });
+
+  test('reusing the original user proof with a fresh site proof cannot duplicate signup or welcome credit', async () => {
+    const raw = body('Original proof replay');
+    const first = await send(raw);
+    expect(first.status).toBe(201);
+    const replay = await send(raw, { user: first.user });
+    expect(replay.status).toBe(409);
+    expect(replay.json.code).toBe('signature_replayed');
+    const signups = await sql`SELECT workspace_id FROM flightdeck_pg_hosted_signups WHERE owner_npub=${userNpub} AND idempotency_key=${JSON.parse(raw).idempotency_key}`;
+    expect(signups).toHaveLength(1);
+    const welcome = await sql`SELECT h.id FROM hosting_ledger h JOIN hosting_workspace_accounts l ON l.account_id=h.account_id WHERE l.workspace_id=${first.json.workspace_id} AND h.kind='welcome'`;
+    expect(welcome).toHaveLength(1);
   });
 });
