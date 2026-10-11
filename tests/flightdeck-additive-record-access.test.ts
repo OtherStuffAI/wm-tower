@@ -6,7 +6,7 @@ import { splitSqlStatements } from '../src/schema/sql-statements';
 import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { readFlightDeckRecordPage } from '../src/services/flightdeck-record-delta';
 import { registerRecordClient, readRecordCheckpoint, acknowledgeRecordCheckpoint } from '../src/services/flightdeck-record-checkpoints';
-import { createFlightDeckPgChannel, createFlightDeckPgChannelGrants } from '../src/services/flightdeck-pg-api';
+import { createFlightDeckPgChannel, createFlightDeckPgChannelGrants, updateFlightDeckPgChannel, archiveFlightDeckPgChannel, createFlightDeckPgScope, updateFlightDeckPgScope, archiveFlightDeckPgScope, createFlightDeckPgGroup, addFlightDeckPgGroupMember, removeFlightDeckPgGroupMember } from '../src/services/flightdeck-pg-api';
 import { authorizeFlightDeckPgOperation } from '../src/services/flightdeck-pg-authorization';
 import type { FlightDeckPgPermission, FlightDeckRecordPage, FlightDeckRecordPageV2 } from '../src/types';
 
@@ -80,6 +80,79 @@ describe.skipIf(!port || port === 5432)('additive reader access on an isolated d
   }
   async function state(cursor:string) {
     const [row]=await db`SELECT state FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;return row!.state;
+  }
+
+  // Exercise the exact mutation services used by typed UI routes. The second
+  // settled device deliberately does not pull until the mutation has committed,
+  // modelling an offline cache reconnecting with its existing checkpoint.
+  for (const operation of ['channel rename','channel archive','scope create','scope rename','scope archive','group create','group member add','group member remove'] as const) {
+    test(`routine ${operation} preserves settled v1/v2 readers without unrelated replay`, async () => {
+      const f=await fixture();
+      const hidden=await channel(f,'Group-only history');
+      const history=await message(f,hidden.id,'Newly authorized history');
+      const group=await createFlightDeckPgGroup({workspaceId:f.workspaceId,name:'Access group',createdByActorId:f.actorId},db);
+      for(const permission of ['channel.read','channel.write']) await grant(f,hidden.id,group.id,permission,true);
+      if(operation==='group member remove') for(const actorId of [f.actorId,f.secondActorId])
+        await addFlightDeckPgGroupMember({workspaceId:f.workspaceId,groupId:group.id,actorId,createdByActorId:f.actorId},db);
+      const cursor=await settle(f), d=await device(f), checkpoint=await readRecordCheckpoint(d.input,db);
+      const [before]=await db`SELECT epoch,position::text,access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${f.workspaceId}`;
+      let expectedIds:string[]=[], expectedJournal=0;
+      await db.begin(async tx=>{
+        const sql=tx as unknown as typeof db;
+        if(operation==='channel rename') {await updateFlightDeckPgChannel({workspaceId:f.workspaceId,channelId:f.main.id,patch:{name:'Renamed'}},sql);expectedIds=[f.main.id];expectedJournal=1;}
+        if(operation==='channel archive') {await archiveFlightDeckPgChannel({workspaceId:f.workspaceId,channelId:f.main.id},sql);expectedIds=[f.main.id];expectedJournal=1;}
+        if(operation==='scope rename') {await updateFlightDeckPgScope({workspaceId:f.workspaceId,scopeId:f.scopeId,patch:{name:'Renamed scope'}},sql);expectedIds=[f.scopeId];expectedJournal=1;}
+        if(operation==='scope archive') {await archiveFlightDeckPgScope({workspaceId:f.workspaceId,scopeId:f.scopeId},sql);expectedIds=[f.scopeId,f.main.id];expectedJournal=3;}
+        if(operation==='scope create') {
+          const scope=await createFlightDeckPgScope({workspaceId:f.workspaceId,name:'New scope',kind:'project',createdByActorId:f.actorId},sql);
+          for(const permission of ['scope.read','scope.manage','channel.create']) await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_scope_id,permission) VALUES(${f.workspaceId},'actor',${f.actorId},'scope',${scope.id},${permission})`;
+          expectedIds=[scope.id];expectedJournal=1;
+        }
+        if(operation==='group create') await createFlightDeckPgGroup({workspaceId:f.workspaceId,name:'Empty group',createdByActorId:f.actorId},sql);
+        if(operation==='group member add') for(const actorId of [f.actorId,f.secondActorId])
+          await addFlightDeckPgGroupMember({workspaceId:f.workspaceId,groupId:group.id,actorId,createdByActorId:f.actorId},sql);
+        if(operation==='group member remove') for(const actorId of [f.actorId,f.secondActorId]) await removeFlightDeckPgGroupMember(f.workspaceId,group.id,actorId,sql);
+      });
+      const [after]=await db`SELECT epoch,position::text,access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${f.workspaceId}`;
+      const revisions={'channel rename':1,'channel archive':1,'scope create':4,'scope rename':1,'scope archive':3,'group create':0,'group member add':2,'group member remove':2};
+      expect(Number(BigInt(after!.access_revision)-BigInt(before!.access_revision))).toBe(revisions[operation]);
+      expect(after!.epoch).toBe(before!.epoch);expect(Number(BigInt(after!.position)-BigInt(before!.position))).toBe(expectedJournal);
+      const unchanged=await readRecordCheckpoint(d.input,db);
+      expect(unchanged.checkpoint_cursor).toBe(checkpoint.checkpoint_cursor);expect(unchanged.checkpoint_revision).toBe(checkpoint.checkpoint_revision);
+      if(operation==='group member add') expectedIds=[hidden.id,history];
+      const v1=await drain(f,cursor), v2pages:FlightDeckRecordPageV2[]=[];
+      for(let n=0;n<100;n++){const p=await d.read();v2pages.push(p);await d.commit(p);if(!p.has_more)break;}
+      for(const [index,pages] of [v1.pages,v2pages].entries()) {
+        const changes=pages.flatMap(p=>p.changes);
+        const readableIds=operation==='scope create'&&index===1?[]:expectedIds;
+        expect(changes.map(c=>c.id).sort()).toEqual([...readableIds].sort());
+        expect(pages.every(p=>p.mode==='delta'&&!p.snapshot_complete&&!p.partitions_complete.length)).toBe(true);
+        if(operation.endsWith('archive')) expect(changes.every(c=>c.operation==='delete')).toBe(true);
+        if(operation.endsWith('rename')) {
+          expect(changes[0]!.row!.name).toContain('Renamed');
+          // Scope/channel tables do not provide row_version: client consumers
+          // must use canonical journal versions rather than default local 1.
+          expect(changes[0]!.row!.row_version).toBeUndefined();
+        }
+        if(operation==='group member add') expect(pages.some(p=>p.catchup)).toBe(true);
+        if(operation==='group member remove') expect(pages.flatMap(p=>p.access_changes??[]).some(c=>c.status==='lost')).toBe(true);
+      }
+      if(operation.endsWith('archive')) {
+        const [retained]=await db`SELECT count(*)::int AS count FROM flightdeck_pg_messages WHERE workspace_id=${f.workspaceId}`;
+        expect(retained!.count).toBe(2); // Archive leaves stored content intact.
+        const [archived]=await db`SELECT archived_at FROM flightdeck_pg_channels WHERE id=${f.main.id}`;
+        expect(archived!.archived_at).not.toBeNull();
+      }
+      if(operation==='group member remove'||operation.endsWith('archive')) {
+        const channelId=operation==='group member remove'?hidden.id:f.main.id;
+        for(const permission of ['channel.read','channel.write']) {
+          const decision=await authorizeFlightDeckPgOperation({workspaceId:f.workspaceId,actorNpub:f.actors[0]!.npub,appNpub:'fixture-app',permission,resource:{type:'channel',channelId}},db);
+          expect(decision.allowed).toBe(false);
+        }
+      }
+      if(operation==='group member add'||operation==='group member remove'||operation==='group create') expect((await state(v1.cursor)).after).toBe(before!.position);
+      expect((await page(f,v1.cursor)).changes).toEqual([]);expect((await d.read()).changes).toEqual([]);
+    });
   }
 
   test('atomic create route services plus creator/initial grants preserve two settled readers and checkpoints',async()=>{
