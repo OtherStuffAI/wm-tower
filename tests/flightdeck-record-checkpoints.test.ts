@@ -224,7 +224,8 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
     const oldDb = postgres({ ...conn, database:upgradeDatabase });
     try {
       const source = readFileSync(new URL('../src/schema/001_init.sql', import.meta.url), 'utf8')
-        .replace(/-- flightdeck_record_checkpoints_v2[\s\S]*?-- end_flightdeck_record_checkpoints_v2/, '');
+        .replace(/-- flightdeck_record_checkpoints_v2[\s\S]*?-- end_flightdeck_record_checkpoints_v2/, '')
+        .replace(/-- additive_record_access_v1[\s\S]*?-- end_additive_record_access_v1/, '');
       for (const stmt of splitSqlStatements(source)) await oldDb.unsafe(stmt);
       const [actor] = await oldDb`INSERT INTO flightdeck_pg_actors(npub,kind) VALUES('npub1upgradefixture','human') RETURNING id`;
       const [workspace] = await oldDb`INSERT INTO flightdeck_pg_workspaces(tower_service_npub,workspace_service_npub,workspace_owner_npub,app_npub,name)
@@ -244,7 +245,8 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
       // Explicit injected connection; no shared runtime database is touched.
       await ensureRuntimeSchema(oldDb); await ensureRuntimeSchema(oldDb);
       const [after] = await oldDb`SELECT * FROM flightdeck_pg_record_cursors WHERE token=${legacy!.token}`;
-      expect(after).toEqual(legacy);
+      expect({...after,state:legacy!.state}).toEqual({...legacy,state:legacy!.state});
+      expect(after!.state.access).toBeArray();
       const [newClock] = await oldDb`SELECT epoch,journal_floor::text FROM flightdeck_pg_record_clock WHERE workspace_id=${workspace!.id}`;
       expect(newClock!.epoch).toBe(clock!.epoch); expect(newClock!.journal_floor).toBe('0');
       expect((await readFlightDeckRecordPage({workspaceId:workspace!.id,actorId:actor!.id,cursor:legacy!.token},oldDb)).next_cursor).toBe(legacy!.token);
@@ -392,13 +394,13 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
     const fresh = await register(); expect((await page(fresh.client_id, fresh.initial_cursor)).mode).toBe('snapshot');
   });
 
-  test('grant revocation and membership loss invalidate read/page/ack; new device snapshots current authority', async () => {
+  test('grant revocation retains read/checkpoint/ack continuity; membership loss denies all future requests', async () => {
     const a = await register(); const p = await page(a.client_id, a.initial_cursor, 1); await ack(a.client_id, p.next_cursor, '0');
     await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
-    await expect(page(a.client_id, p.next_cursor)).rejects.toMatchObject({ code:'reset_required' });
-    await expect(readRecordCheckpoint(input(a.client_id), db)).rejects.toMatchObject({ code:'reset_required' });
-    await expect(ack(a.client_id, p.next_cursor, '0')).rejects.toMatchObject({ code:'reset_required' });
-    await expect(registerRecordClient(input(a.client_id), db)).rejects.toMatchObject({ code:'reset_required' });
+    const filtered=await page(a.client_id,p.next_cursor);expect(filtered.changes.some(c=>c.family==='message')).toBe(false);
+    expect((await readRecordCheckpoint(input(a.client_id),db)).checkpoint_cursor).toBe(p.next_cursor);
+    expect((await ack(a.client_id,p.next_cursor,'0')).checkpoint_cursor).toBe(p.next_cursor);
+    expect((await registerRecordClient(input(a.client_id),db)).client_id).toBe(a.client_id);
     const b = await register(); const snapshot = await synced(b.client_id, b.initial_cursor);
     expect(snapshot.changes.some(c => c.family==='message')).toBe(false);
     await db`DELETE FROM flightdeck_pg_messages WHERE workspace_id=${workspaceId}`;

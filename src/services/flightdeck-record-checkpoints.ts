@@ -1,3 +1,4 @@
+import { recordAccess } from './flightdeck-record-access';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import { RecordSyncError, type RecordSyncState } from './flightdeck-record-sync-state';
@@ -9,6 +10,7 @@ export const RECORD_CLIENT_IDLE_DAYS = 90;
 export const RECORD_PAGE_TOKEN_LIMIT = 512;
 export const recordSyncDiscovery = {
   protocol_versions: [1, 2], device_checkpoints: true,
+  additive_access: true, targeted_catchup: true, retention_policy: 'retain_downloaded',
   client_id_format: 'uuid', max_clients_per_actor_workspace: RECORD_CLIENT_LIMIT,
   max_page_tokens_per_client: RECORD_PAGE_TOKEN_LIMIT, page_token_idle_days: 7,
   client_idle_days: RECORD_CLIENT_IDLE_DAYS,
@@ -23,6 +25,7 @@ export function validateRecordClientId(value: unknown): asserts value is string 
 }
 export function serializeRecordCheckpoint(client: any): FlightDeckRecordCheckpoint {
   return { protocol_version: 2, client_id: client.client_id, authority_epoch: client.epoch,
+    access_revision: String(client.access_revision), retention_policy: 'retain_downloaded',
     initial_cursor: client.initial_cursor, checkpoint_cursor: client.checkpoint_cursor,
     checkpoint_revision: String(client.revision), last_active_at: client.last_active_at.toISOString() };
 }
@@ -50,7 +53,7 @@ async function checkpointTransaction<T>(input: RecordClientInput, operation: (sq
       return await db.begin(async transaction => {
         const sql = transaction as unknown as Db;
         await sql`INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(${input.workspaceId}) ON CONFLICT DO NOTHING`;
-        const [clock] = await sql`SELECT epoch,position::text,journal_floor::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
+        const [clock] = await sql`SELECT epoch,position::text,journal_floor::text,access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
         await requireRecordMembership(input, sql);
         return operation(sql, clock);
       }) as T;
@@ -68,7 +71,7 @@ export async function registerRecordClient(input: RecordClientInput, db: Db = ge
       await requireRecordHistory(input.workspaceId, (client.checkpoint_state ?? client.initial_state) as RecordSyncState, clock, sql);
       const [renewed] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
         WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
-      return serializeRecordCheckpoint(renewed!);
+      return serializeRecordCheckpoint({...renewed!,access_revision:clock.access_revision});
     }
     // Only abandoned clients are reclaimable, never evict another active cache.
     await sql`DELETE FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
@@ -76,10 +79,11 @@ export async function registerRecordClient(input: RecordClientInput, db: Db = ge
     const [count] = await sql`SELECT count(*)::int AS n FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}`;
     if (count!.n >= RECORD_CLIENT_LIMIT) throw new RecordSyncError(409, 'client_capacity');
     const state: RecordSyncState = { mode: 'snapshot', boundary: clock.position, after: clock.position,
-      family: '', id: '', snapshotId: randomUUID() };
+      family: '', id: '', snapshotId: randomUUID(),
+      access: await recordAccess(input.workspaceId, input.actorId, sql), accessRevision: clock.access_revision, progress: '0' };
     const [client] = await sql`INSERT INTO flightdeck_pg_record_clients(workspace_id,actor_id,client_id,epoch,initial_state)
       VALUES(${input.workspaceId},${input.actorId},${input.clientId},${clock.epoch},${sql.json(state)}) RETURNING *,revision::text`;
-    return serializeRecordCheckpoint(client!);
+    return serializeRecordCheckpoint({...client!,access_revision:clock.access_revision});
   }, db);
 }
 export async function readRecordCheckpoint(input: RecordClientInput, db: Db = getDb()): Promise<FlightDeckRecordCheckpoint> {
@@ -88,7 +92,7 @@ export async function readRecordCheckpoint(input: RecordClientInput, db: Db = ge
     await requireRecordHistory(input.workspaceId, (current.checkpoint_state ?? current.initial_state) as RecordSyncState, clock, sql);
     const [client] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
       WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
-    return serializeRecordCheckpoint(client!);
+    return serializeRecordCheckpoint({...client!,access_revision:clock.access_revision});
   }, db);
 }
 /** Explicitly retire only this authenticated actor's cache; frees a capacity slot. */
@@ -101,6 +105,9 @@ export async function retireRecordClient(input: RecordClientInput, db: Db = getD
 /** Full snapshot keyset ordering followed by delta handover; never compare just after. */
 async function stateDoesNotRegress(next: RecordSyncState, committed: RecordSyncState, sql: Db): Promise<boolean> {
   if (next.boundary !== committed.boundary) return false;
+  // Equal journal positions may carry different historic catchup progress.
+  if (BigInt(next.progress ?? '0') < BigInt(committed.progress ?? '0')) return false;
+  if (BigInt(next.accessRevision ?? '0') < BigInt(committed.accessRevision ?? '0')) return false;
   if (committed.mode === 'delta') return next.mode === 'delta' && BigInt(next.after) >= BigInt(committed.after);
   if (next.mode === 'delta') return BigInt(next.after) >= BigInt(committed.boundary);
   if (next.snapshotId !== committed.snapshotId) return false;
@@ -117,7 +124,7 @@ export async function acknowledgeRecordCheckpoint(input: RecordClientInput & { c
       await requireRecordHistory(input.workspaceId, client.checkpoint_state as RecordSyncState, clock, sql);
       const [renewed] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
         WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
-      return serializeRecordCheckpoint(renewed!);
+      return serializeRecordCheckpoint({...renewed!,access_revision:clock.access_revision});
     }
     const [token] = await sql`SELECT state,base_revision::text FROM flightdeck_pg_record_page_tokens
       WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}
@@ -131,7 +138,7 @@ export async function acknowledgeRecordCheckpoint(input: RecordClientInput & { c
     const [saved] = await sql`UPDATE flightdeck_pg_record_clients SET checkpoint_cursor=${input.cursor},checkpoint_state=${sql.json(token.state)},
       revision=revision+1,last_active_at=clock_timestamp() WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}
       RETURNING *,revision::text`;
-    return serializeRecordCheckpoint(saved!);
+    return serializeRecordCheckpoint({...saved!,access_revision:clock.access_revision});
   }, db);
 }
 

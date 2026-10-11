@@ -2392,13 +2392,14 @@ const recordCheckpointResponses = {
   '200': { description: 'Device checkpoint; revision remains unchanged except after a successful acknowledgement.', content: { 'application/json': { schema: {
     type: 'object', required: ['protocol_version','client_id','authority_epoch','initial_cursor','checkpoint_cursor','checkpoint_revision','last_active_at'], properties: {
       protocol_version: { type: 'integer', enum: [2] }, client_id: { type: 'string', format: 'uuid' }, authority_epoch: { type: 'string', format: 'uuid' },
+      access_revision: { type: 'string', pattern: '^[0-9]+$' }, retention_policy: { type: 'string', enum: ['retain_downloaded'] },
       initial_cursor: { type: 'string', format: 'uuid' }, checkpoint_cursor: { type: 'string', format: 'uuid', nullable: true },
       checkpoint_revision: { type: 'string', pattern: '^[0-9]+$' }, last_active_at: { type: 'string', format: 'date-time' },
     },
   } } } },
   '400': { description: 'Invalid protocol, client ID, cursor, revision or body' },
   '401': { description: 'NIP-98 exact URL/method/payload authentication required' },
-  '403': { description: 'Membership required; hide workspace authoritative cache and preserve pending commands' },
+  '403': { description: 'Membership required; future requests denied. Retain downloads and pending intent in the same actor/workspace cache.' },
   '404': { description: 'Workspace not found' },
   '409': { description: 'reset_required, history_pruned, client_not_registered, client_expired, client_capacity, page_token_invalid, checkpoint_conflict or checkpoint_regression; see v2 contract for recovery' },
 };
@@ -4349,7 +4350,7 @@ export function buildOpenApiDocument(origin: string) {
               type: 'object',
               required: ['identity', 'service', 'capabilities', 'links'],
               properties: {
-                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], device_checkpoints true, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
+                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], device_checkpoints true, additive_access true, targeted_catchup true, retention_policy retain_downloaded, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
                 identity: { type: 'object' }, service: { type: 'object' }, capabilities: { type: 'array', items: { type: 'string' } }, links: { type: 'object' },
 
               },
@@ -5646,7 +5647,7 @@ export function buildOpenApiDocument(origin: string) {
         },
         get: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read the last explicitly committed device checkpoint',
-          description: 'Returns initial_cursor, checkpoint_cursor (null before first ack), checkpoint_revision (decimal string), client_id, authority_epoch and last_active_at. Never substitute this checkpoint for an older valid local cursor or use it with an empty cache.',
+          description: 'Returns initial_cursor, checkpoint_cursor (null before first ack), checkpoint_revision (decimal string), client_id, authority_epoch, last_active_at, access_revision and retention_policy. Channel/grant/group authority transitions do not invalidate this checkpoint. Never substitute this checkpoint for an older valid local cursor or use it with an empty cache.',
           parameters: recordCheckpointParameters,
           responses: recordCheckpointResponses,
         },
@@ -5654,7 +5655,7 @@ export function buildOpenApiDocument(origin: string) {
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/ack': {
         post: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Acknowledge an atomically materialised v2 page',
-          description: 'Only after local rows and cursor commit. Server-issued token bound to exact signer actor, workspace, client and epoch. CAS checks expected_revision and token issuance revision; full snapshot keyset/delta ordering prevents regression. Retry of current checkpoint cursor is idempotent even after page-token expiry. Conflicts do not advance state.',
+          description: 'Only after local rows and cursor commit. Server-issued token bound to exact signer actor, workspace, client and epoch. CAS checks expected_revision and token issuance revision; full snapshot keyset/delta ordering prevents regression. Retry of current checkpoint cursor is idempotent even after page-token expiry. Channel revocation does not prevent acknowledging prior materialization; workspace membership is still required. Ordinary and catchup progress cannot regress. Conflicts do not advance state.',
           parameters: recordCheckpointParameters,
           requestBody: { required: true, content: { 'application/json': { schema: {
             type: 'object', additionalProperties: false, required: ['cursor','expected_revision'], properties: {
@@ -5668,7 +5669,7 @@ export function buildOpenApiDocument(origin: string) {
         get: {
           summary: 'Bounded canonical record-family sync v1 or opt-in v2',
           tags: ['Flight Deck PG'], security: [{ nip98: [] }],
-          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes. Task/doc rows include server-owned attention policy positions; resource_view_state rows include persisted activity_version, attention_policy_version, attention_activity_version and attention_unread. Journal payloads stay pinned; neither delivery nor device acknowledgement advances viewed_activity_version. See docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Legacy sync remains unchanged. V2 requires registered client_id and explicit cursor; page delivery never acknowledges local commit. See docs/contract/record-device-checkpoints-v2.md.',
+          description: 'Independent viewer-bound cursor. Full stored PG rows and explicit deletes. Task/doc rows include server-owned attention policy positions; resource_view_state rows include persisted activity_version, attention_policy_version, attention_activity_version and attention_unread. Journal payloads stay pinned; neither delivery nor device acknowledgement advances viewed_activity_version. See docs/design/flightdeck-record-delta-v1.md and tests/fixtures/flightdeck-record-delta-v1.json. Authority changes preserve epochs/cursors. Reader-specific access_changes report granted/lost family partitions; retain_downloaded means absence and access loss never delete downloads. Newly readable historic partitions arrive as canonical changes through independently positioned catchup pages; ordinary journal position never rewinds. Catchup pages do not report snapshot/partition completeness. See docs/contract/additive-record-access-v1.md. Legacy sync remains unchanged. V2 requires registered client_id and explicit cursor; page delivery never acknowledges local commit. See docs/contract/record-device-checkpoints-v2.md.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1, 2] } },
@@ -5693,6 +5694,19 @@ export function buildOpenApiDocument(origin: string) {
                   mode: { type: 'string', enum: ['snapshot','delta'] },
                   next_cursor: { type: 'string', format: 'uuid' }, has_more: { type: 'boolean' },
                   snapshot_id: { type: 'string', nullable: true, format: 'uuid' }, snapshot_complete: { type: 'boolean' },
+                  access_revision: { type: 'string', pattern: '^[0-9]+$' },
+                  retention_policy: { type: 'string', enum: ['retain_downloaded'] },
+                  access_changes: { type: 'array', maxItems: 50, items: {
+                    type: 'object', required: ['family','resource_type','resource_id','status'], properties: {
+                      family: { type: 'string' }, resource_type: { type: 'string', enum: ['workspace','scope','channel'] },
+                      resource_id: { type: 'string', format: 'uuid' }, resource_kind: { type: 'string', enum: ['task','document','thread'] },
+                      status: { type: 'string', enum: ['granted','lost'] },
+                    },
+                  } },
+                  catchup: { type: 'object', nullable: true, required: ['family','resource_type','resource_id'], properties: {
+                    family: { type: 'string' }, resource_type: { type: 'string', enum: ['workspace','scope','channel'] },
+                    resource_id: { type: 'string', format: 'uuid' }, resource_kind: { type: 'string', enum: ['task','document','thread'] },
+                  } },
                   partitions_complete: { type: 'array', items: { type: 'string' } },
                   bounds: { type: 'object', properties: { max_rows: { type: 'integer', enum: [200] }, max_bytes: { type: 'integer', enum: [1048576] } } },
                   actors: { type: 'array', maxItems: 200, description: 'Optional for older producers. Deduplicated identities referenced only by visible upserts; changes plus actors <=200, entire page <=1048576 bytes. Does not grant directory access.', items: {
@@ -5714,8 +5728,8 @@ export function buildOpenApiDocument(origin: string) {
               } } },
             },
             '400': { description: 'Unsupported version or invalid input' },
-            '403': { description: 'Membership lost: hide workspace authoritative cache, preserve pending commands' },
-            '409': { description: 'V1 reset_required: discard authoritative generation, preserve pending commands, restart without cursor. V2 reset/expiry/history/token errors follow docs/contract/record-device-checkpoints-v2.md; replace the cache ID and snapshot when no valid local resume handle remains.' },
+            '403': { description: 'Membership lost: deny future requests; retain same-actor downloaded data and pending intent' },
+            '409': { description: 'V1 reset_required: preserve downloaded data and pending intent, repair using an authorized replacement cursor. V2 reset/expiry/history/token errors follow docs/contract/record-device-checkpoints-v2.md; replace the cache ID and snapshot when no valid local resume handle remains.' },
             '413': { description: 'record_too_large: cursor has not advanced' },
           },
         },

@@ -127,7 +127,7 @@ and actor sidecars must commit atomically with the local cursor. Pending command
 remain independently durable. See [v1 semantics](../design/flightdeck-record-delta-v1.md)
 for family visibility, canonical rows and resource bounds.
 
-Authority mutations retain their existing conservative workspace epoch reset.
+Authority mutations use [additive record access](additive-record-access-v1.md): channel/grant/group/membership changes preserve the workspace epoch and checkpoint. Newly readable existing history uses an independent targeted catchup position inside the page token; permission loss retains downloaded rows. Actual parent deletion emits explicit dependent tombstones.
 Page scans use repeatable-read snapshots, then take the workspace clock shared
 lock before the client row lock and token write. Concurrent clock/authority
 changes retry with fresh authority. Checkpoint operations take the clock shared
@@ -168,8 +168,8 @@ move to a newer position when history is unavailable.
 | --- | --- |
 | 400 `unsupported_protocol_version`, `invalid_client_id`, `cursor_required`, `invalid_cursor`, `invalid_limit`, `invalid_checkpoint_revision`, `invalid_body` | Correct negotiation or request. |
 | 401 | Restore signer authentication; IDs grant no access. |
-| 403 `workspace_membership_required` | Immediately hide/discard workspace authoritative cache; preserve pending commands. |
-| 409 `reset_required`, `history_pruned`, `client_expired`, `client_not_registered` | Discard the authoritative generation, preserve pending commands, register a fresh cache ID and snapshot. These responses include `reset:{discard_authoritative:true,preserve_pending:true}`. |
+| 403 `workspace_membership_required` | Deny future requests; retain downloaded rows read-only under the same actor/workspace identity and preserve pending commands. |
+| 409 `reset_required`, `history_pruned`, `client_expired`, `client_not_registered` | Preserve downloaded rows and pending commands; repair with an authorized replacement cursor/cache ID when needed. These responses include `reset:{discard_authoritative:false,preserve_pending:true,preserve_downloaded:true}`. |
 | 409 `page_token_invalid` | Unknown, foreign, expired or evicted temporary token. Keep pending commands; use a checkpoint only if it corresponds to the actual local records. If no valid local resume handle remains, replace the cache generation and ID and snapshot. Never jump forward to an acknowledged server position. |
 | 409 `checkpoint_conflict` | Read checkpoint, replay from local committed position with a fresh revision; do not alter rows based on checkpoint metadata alone. |
 | 409 `checkpoint_regression` | Continue replay from the local committed position until caught up; server state remains unchanged. |

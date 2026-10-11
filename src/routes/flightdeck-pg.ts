@@ -2197,7 +2197,7 @@ function recordSyncErrorResponse(c: Context, error: unknown, protocol: 1 | 2) {
   if (!(error instanceof RecordSyncError)) throw error;
   const discard = ['reset_required', 'history_pruned', 'client_expired', 'client_not_registered'].includes(error.code);
   return c.json({ error: error.code, protocol_version: protocol,
-    ...(discard ? { reset: { discard_authoritative: true, preserve_pending: true } } : {}) }, error.status);
+    ...(discard ? { reset: { discard_authoritative: false, preserve_pending: true, preserve_downloaded: true } } : {}) }, error.status);
 }
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {

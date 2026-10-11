@@ -32,6 +32,18 @@ function gitAuthorityV1Sql(): string {
 }
 
 export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
+  // Replace legacy authority resets BEFORE any startup grant/membership repairs.
+  // Pre-v2 installations are supported: the migration skips absent client tables.
+  const [recordSchema] = await sql`SELECT to_regclass('flightdeck_pg_record_clock') AS clock`;
+  if (recordSchema?.clock) {
+    await sql.begin(async tx => {
+      await tx.unsafe(`LOCK TABLE flightdeck_pg_permission_grants,flightdeck_pg_group_memberships,
+        flightdeck_pg_group_edges,flightdeck_pg_workspace_memberships,flightdeck_pg_actors,
+        flightdeck_pg_scopes,flightdeck_pg_channels,flightdeck_pg_workspaces IN SHARE ROW EXCLUSIVE MODE`);
+      await tx.unsafe(readFileSync(new URL('./additive-record-access-v1.sql', import.meta.url), 'utf8'));
+    });
+  }
+
   const retirementSchema = readFileSync(new URL('./001_init.sql', import.meta.url), 'utf8');
   await sql.unsafe(retirementSchema.split('-- forgejo_native_retirement_v1')[1]!.split('-- end_forgejo_native_retirement_v1')[0]!);
 
@@ -4261,8 +4273,16 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     ALTER TABLE flightdeck_pg_autopilot_connections
       ADD COLUMN IF NOT EXISTS fips_transport_npub TEXT;
   `);
-  await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
-  await sql.unsafe(recordDeltaSchema.split('-- flightdeck_record_checkpoints_v2')[1]!.split('-- end_flightdeck_record_checkpoints_v2')[0]!);
+  // Upgrade functions, cursor baselines and authority tracking atomically. This
+  // also prevents an old authority writer from committing between the baselines.
+  await sql.begin(async tx => {
+    await tx.unsafe(`LOCK TABLE flightdeck_pg_permission_grants,flightdeck_pg_group_memberships,
+      flightdeck_pg_group_edges,flightdeck_pg_workspace_memberships,flightdeck_pg_actors,
+      flightdeck_pg_scopes,flightdeck_pg_channels,flightdeck_pg_workspaces IN SHARE ROW EXCLUSIVE MODE`);
+    await tx.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
+    await tx.unsafe(recordDeltaSchema.split('-- flightdeck_record_checkpoints_v2')[1]!.split('-- end_flightdeck_record_checkpoints_v2')[0]!);
+    await tx.unsafe(readFileSync(new URL('./additive-record-access-v1.sql', import.meta.url), 'utf8'));
+  });
   await sql.unsafe(recordDeltaSchema.split('-- personal_attention_v1')[1]!.split('-- end_personal_attention_v1')[0]!);
   await sql.unsafe(recordDeltaSchema.split('-- task_single_assignee_v1')[1]!.split('-- end_task_single_assignee_v1')[0]!);
   await sql.unsafe(`

@@ -434,3 +434,29 @@ dependencies to prevent recursive image layering.
 cd /path/to/wingman-tower
 docker compose --env-file .env.prod -f docker-compose.prod.yml down
 ```
+
+## Additive record access activation
+
+Rebuild from the reviewed source commit with `./rebuild_deploy_docker.sh`. The
+script runs startup/runtime migrations and requires both ordinary HTTP and native
+FIPS health. Do not use `--down` for this additive upgrade. Preserve existing
+identities, database and storage volumes.
+
+After health passes, verify installed functions, authority trigger bindings,
+columns and migrated continuations using the read-only schema checker:
+
+```bash
+curl --noproxy '*' --fail --silent --show-error http://127.0.0.1:3100/health
+docker exec -i wingman-tower-postgres sh -c 'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < scripts/verify-additive-record-access.sql
+```
+
+The verifier rejects stale function bodies even when table/column names exist.
+Check the configured host port if it differs from 3100. For another backend,
+activate its reviewed source/runtime separately and run the verifier against that
+backend's database; local health does not prove remote activation. Use the stable
+bot capability broker to inspect authorized v1/v2 discovery/checkpoints. Ordinary
+channel/grant changes should preserve epoch/checkpoint state; targeted historic
+pages should contain only newly readable partitions. See
+[the client contract](contract/additive-record-access-v1.md). Browser retention
+and UI validation follow Tower-first activation; they are separate from schema
+health. Keep live smoke checks read-only or confined to a dedicated fixture.

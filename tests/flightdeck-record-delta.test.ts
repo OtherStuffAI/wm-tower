@@ -161,13 +161,13 @@ test('snapshot races converge through handover with bounded scanned pages',async
   }
   expect(rows.get(m.id).body).toBe('after');expect(rows.get(inserted.id).body).toBe('inserted during snapshot');
 });
-test('grant/revocation reset both delta and unfinished snapshot; actor-bound cursors',async()=>{
+test('grant/revocation preserve delta and unfinished snapshot while filtering current authority; actor-bound cursors',async()=>{
   const cursor=await synced(); const snap=await page(undefined,1);
   await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
-  for(const token of [cursor,snap.next_cursor]) await expect(page(token)).rejects.toMatchObject({status:409,code:'reset_required'});
+  for(const token of [cursor,snap.next_cursor]) expect((await page(token)).changes.some(c=>c.family==='message')).toBe(false);
   const denied=await page();expect(denied.changes.some(c=>c.family==='message')).toBe(false);
   await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
-  await expect(page(denied.next_cursor)).rejects.toMatchObject({status:409});
+  expect((await page(denied.next_cursor)).access_changes?.some(c=>c.status==='granted')).toBe(true);
   await expect(page('00000000-0000-4000-8000-000000000001')).rejects.toMatchObject({status:409});
   await expect(page('legacy-cursor')).rejects.toMatchObject({status:400});
 });
@@ -188,10 +188,10 @@ test('identical authority updates preserve epoch and delta continuation across e
   await db`DELETE FROM flightdeck_pg_group_edges WHERE workspace_id=${workspaceId} AND child_group_id=${g!.id}`;
 });
 
-test('real membership and group-edge mutations reset, including INSERT and DELETE',async()=>{
+test('membership roles and unrelated group/grant mutations preserve cursors, including INSERT and DELETE',async()=>{
   async function resets(mutate:()=>Promise<unknown>) {
     const cursor=await synced();await mutate();
-    await expect(page(cursor)).rejects.toMatchObject({status:409,code:'reset_required'});
+    expect((await page(cursor)).next_cursor).toBe(cursor);
   }
   await resets(()=>db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${workspaceId},'actor',${actorId},'channel',${channelId},'doc.write')`);
   await resets(()=>db`DELETE FROM flightdeck_pg_permission_grants WHERE workspace_id=${workspaceId} AND permission='doc.write'`);
@@ -239,7 +239,7 @@ test('quiet valid cursors renew beyond original expiry; expired and mismatched t
   }
 });
 
-test('concurrent quiet uses commit safely; reset during scan retries without renewing revoked cursor',async()=>{
+test('concurrent quiet uses commit safely; revocation during scan retries current authority',async()=>{
   const cursor=await synced();
   const responses=await Promise.all([page(cursor),page(cursor)]);
   expect(responses.map(p=>p.next_cursor)).toEqual([cursor,cursor]);
@@ -250,7 +250,7 @@ test('concurrent quiet uses commit safely; reset during scan retries without ren
   let paused=false;
   const gated=new Proxy(db,{get(target,key){
     if(key!=='begin') return Reflect.get(target,key);
-    return (options:any,callback:any)=>target.begin(options,async tx=>{
+    return (options:any,callback:any)=>{ if(typeof options==='function')return target.begin(options); return target.begin(options,async tx=>{
       const wrapped=new Proxy(tx as unknown as typeof db,{apply(sql,thisArg,args){
         if(!paused && Array.isArray(args[0]) && args[0].join('').includes('FOR SHARE')) {
           paused=true;entered();return gate.then(()=>Reflect.apply(sql,thisArg,args));
@@ -258,15 +258,16 @@ test('concurrent quiet uses commit safely; reset during scan retries without ren
         return Reflect.apply(sql,thisArg,args);
       }});
       return callback(wrapped);
-    });
+    });};
   }});
   const racing=readFlightDeckRecordPage({workspaceId,actorId,cursor},gated);
   await ready;
   await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
   release();
-  await expect(racing).rejects.toMatchObject({status:409,code:'reset_required'});
+  const filtered=await racing; expect(filtered.changes.some(c=>c.family==='message')).toBe(false);
+  expect(filtered.access_changes?.some(c=>c.status==='lost')).toBe(true);
   const [after]=await db`SELECT last_used_at FROM flightdeck_pg_record_cursors WHERE token=${cursor}`;
-  expect(after!.last_used_at.getTime()).toBe(before!.last_used_at.getTime());
+  expect(after!.last_used_at.getTime()).toBeGreaterThan(before!.last_used_at.getTime());
   await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
 });
 
@@ -325,7 +326,8 @@ test('dependent record hard deletions emit explicit tombstones',async()=>{
   const [token]=await db`INSERT INTO flightdeck_pg_record_cursors(workspace_id,actor_id,epoch,state) VALUES(${workspaceId},${actorId},${clock!.epoch},${db.json({mode:'delta',boundary:clock!.position,after:clock!.position,family:'',id:'',snapshotId:null})}) RETURNING token`;
   await db`DELETE FROM flightdeck_pg_task_comments WHERE id=${comment!.id}`;
   await db`DELETE FROM flightdeck_pg_tasks WHERE id=${task!.id}`;
-  await expect(page(token!.token)).rejects.toMatchObject({status:409,code:'reset_required'});
+  const removed=await page(token!.token);
+  expect(removed.changes.filter(c=>[task!.id,comment!.id].includes(c.id)).every(c=>c.operation==='delete')).toBe(true);
   const p=await page();expect(p.changes.some(c=>c.id===comment!.id||c.id===task!.id)).toBe(false);
 });
 
@@ -357,7 +359,7 @@ test('move produces old-ownership deletion followed by canonical destination ups
 });
 
 
-test('scope metadata and archive are incremental while restoration and group membership reset',async()=>{
+test('scope metadata/archive are incremental; restoration uses targeted history and group membership preserves cursors',async()=>{
   const cursor=await synced();
   await db`UPDATE flightdeck_pg_scopes SET description='renamed metadata' WHERE id=${scopeId}`;
   const changed=await page(cursor);expect(changed.changes).toHaveLength(1);expect(changed.changes[0]!.family).toBe('scope');
@@ -365,10 +367,12 @@ test('scope metadata and archive are incremental while restoration and group mem
   const archived=await page(changed.next_cursor);
   expect(archived.mode).toBe('delta');expect(archived.changes.some(c=>c.family==='scope'&&c.operation==='delete')).toBe(true);
   await db`UPDATE flightdeck_pg_scopes SET archived_at=NULL WHERE id=${scopeId}`;
-  await expect(page(archived.next_cursor)).rejects.toMatchObject({status:409});
+  let restored=await page(archived.next_cursor);
+  while(restored.has_more) restored=await page(restored.next_cursor);
+  expect(restored.mode).toBe('delta');
   const current=await synced();
   await db`UPDATE flightdeck_pg_group_memberships SET created_by_actor_id=${actorId} WHERE workspace_id=${workspaceId} AND actor_id=${actorId}`;
-  await expect(page(current)).rejects.toMatchObject({status:409});
+  expect((await page(current)).next_cursor).toBe(current);
 });
 
 test('a snapshot-racing deletion cannot survive handover',async()=>{
@@ -380,15 +384,20 @@ test('a snapshot-racing deletion cannot survive handover',async()=>{
 });
 
 
-test('parent soft deletion resets cached dependents and excludes orphan comments/assignments/view states',async()=>{
+test('parent soft deletion emits explicit dependent tombstones without resetting and excludes orphan rows',async()=>{
   const [task]=await db`INSERT INTO flightdeck_pg_tasks(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scopeId},${channelId},'parent',${actorId},${actorId}) RETURNING id`;
   const [comment]=await db`INSERT INTO flightdeck_pg_task_comments(workspace_id,scope_id,channel_id,task_id,body,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scopeId},${channelId},${task!.id},'dependent',${actorId},${actorId}) RETURNING id`;
   await db`INSERT INTO flightdeck_pg_task_assignments(workspace_id,scope_id,channel_id,task_id,actor_id,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scopeId},${channelId},${task!.id},${actorId},${actorId},${actorId})`;
   await db`INSERT INTO flightdeck_pg_resource_view_states(workspace_id,scope_id,channel_id,viewer_actor_id,resource_type,resource_id) VALUES(${workspaceId},${scopeId},${channelId},${actorId},'task',${task!.id})`;
   const cursor=await synced();await db`UPDATE flightdeck_pg_tasks SET deleted_at=now() WHERE id=${task!.id}`;
-  await expect(page(cursor)).rejects.toMatchObject({status:409});
+  const deletion=await page(cursor);expect(deletion.changes).toHaveLength(4);
+  expect(deletion.changes.every(c=>c.operation==='delete'&&c.row===null)).toBe(true);
+  expect(deletion.mode).toBe('delta');
   let p=await page();const rows=[];while(true){rows.push(...p.changes);if(!p.has_more)break;p=await page(p.next_cursor);}
   expect(rows.some(c=>c.id===comment!.id||c.row?.task_id===task!.id||c.row?.resource_id===task!.id)).toBe(false);
+  await db`UPDATE flightdeck_pg_tasks SET deleted_at=NULL WHERE id=${task!.id}`;
+  const restored=await page(deletion.next_cursor);expect(restored.changes).toHaveLength(4);
+  expect(restored.changes.every(c=>c.operation==='upsert')).toBe(true);
 });
 
 test('document-only grants include canonical document watermarks; parent deletion excludes both',async()=>{
@@ -399,7 +408,8 @@ test('document-only grants include canonical document watermarks; parent deletio
   let p=await page();const changes=[];while(true){changes.push(...p.changes);if(!p.has_more)break;p=await page(p.next_cursor);}
   expect(changes.some(c=>c.family==='resource_view_state'&&c.row!.resource_id===doc!.id)).toBe(true);
   await db`UPDATE flightdeck_pg_docs SET deleted_at=now() WHERE id=${doc!.id}`;
-  await expect(page(p.next_cursor)).rejects.toMatchObject({status:409});
+  const removed=await page(p.next_cursor);expect(removed.changes.map(c=>c.family).sort()).toEqual(['doc','resource_view_state']);
+  expect(removed.changes.every(c=>c.operation==='delete')).toBe(true);
   expect((await page()).changes.some(c=>c.row?.resource_id===doc!.id)).toBe(false);
   await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=NULL WHERE workspace_id=${workspaceId} AND permission='channel.read'`;
 });

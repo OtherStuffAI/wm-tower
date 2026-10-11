@@ -2897,8 +2897,22 @@ export interface FlightDeckRecordActor {
   display_name: string | null;
   kind: FlightDeckPgActorKind;
 }
+/** A reader-visible family partition; resource_kind disambiguates view watermarks. */
+export interface FlightDeckRecordAccessPartition {
+  family: string;
+  resource_type: 'workspace' | 'scope' | 'channel';
+  resource_id: string;
+  resource_kind?: string;
+}
+export interface FlightDeckRecordAccessChange extends FlightDeckRecordAccessPartition {
+  status: 'granted' | 'lost';
+}
 export interface FlightDeckRecordPage {
   protocol_version: 1;
+  access_revision?: string;
+  access_changes?: FlightDeckRecordAccessChange[];
+  catchup?: FlightDeckRecordAccessPartition | null;
+  retention_policy?: 'retain_downloaded';
   families: string[];
   mode: 'snapshot' | 'delta';
   changes: FlightDeckRecordChange[];
@@ -2993,6 +3007,8 @@ export interface FlightDeckRecordCheckpoint {
   protocol_version: 2;
   client_id: string;
   authority_epoch: string;
+  access_revision?: string;
+  retention_policy?: 'retain_downloaded';
   /** Bootstrap only; never silently substitute for a client's local cursor. */
   initial_cursor: string;
   checkpoint_cursor: string | null;

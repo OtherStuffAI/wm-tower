@@ -70,6 +70,12 @@ documents the Tower-only durable checkpoint extension, signed acknowledgements,
 retention policy and separate Flight Deck integration follow-up. Existing v1
 record-sync clients retain their current behavior.
 
+## Additive record access
+
+[Additive record access v1](docs/contract/additive-record-access-v1.md) preserves
+record cursors/checkpoints through channel and permission changes, catches up
+newly readable history by partition, and retains prior downloads after access loss.
+
 ## Personal attention
 
 [Personal attention v1](docs/contract/personal-attention-v1.md) documents the

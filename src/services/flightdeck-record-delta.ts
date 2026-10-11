@@ -1,3 +1,4 @@
+import { accessPartition, observeRecordAccess, drainAccessChanges } from './flightdeck-record-access';
 import { requireRecordClient, requireRecordHistory, validateRecordClientId } from './flightdeck-record-checkpoints';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
@@ -38,9 +39,9 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       WHERE m.workspace_id=${input.workspaceId} AND m.actor_id=${input.actorId}
     `;
     if (!viewer) throw new RecordSyncError(403, 'workspace_membership_required');
-    let [clock] = await sql`SELECT position::text, epoch, journal_floor::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
+    let [clock] = await sql`SELECT position::text, epoch, journal_floor::text, access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
     if (!clock) {
-      [clock] = await sql`INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(${input.workspaceId}) RETURNING position::text,epoch`;
+      [clock] = await sql`INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(${input.workspaceId}) RETURNING position::text,epoch,journal_floor::text,access_revision::text`;
     }
     let state: RecordSyncState;
     let client: Awaited<ReturnType<typeof requireRecordClient>> | undefined;
@@ -55,7 +56,6 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         if (!saved || saved.epoch !== clock!.epoch) throw new RecordSyncError(409, 'page_token_invalid');
         state = saved.state as RecordSyncState;
       }
-      await requireRecordHistory(input.workspaceId, state, clock, sql);
     } else if (input.cursor) {
       const [saved] = await sql`SELECT epoch,state FROM flightdeck_pg_record_cursors WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND COALESCE(last_used_at,created_at)>statement_timestamp()-interval '7 days'`;
       if (!saved || saved.epoch !== clock!.epoch) throw new RecordSyncError(409, 'reset_required');
@@ -63,16 +63,34 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
     } else {
       state = { mode: 'snapshot', boundary: clock!.position, after: clock!.position, family: '', id: '', snapshotId: randomUUID() };
     }
-    // Fetch at most limit+1 entries BEFORE permission filtering: hidden history cannot turn into an unbounded scan.
-    const entries: Entry[] = state.mode === 'snapshot'
-      ? await sql<Entry[]>`SELECT family,id,'upsert'::text AS operation,${state.boundary}::text AS position,bytes,context AS row
-        FROM flightdeck_pg_record_current
-        WHERE workspace_id=${input.workspaceId} AND (family,id)>(${state.family},${state.id})
-        ORDER BY family,id LIMIT ${limit + 1}`
-      : await sql<Entry[]>`SELECT family,id,operation,position::text,bytes,context AS row
-        FROM flightdeck_pg_record_journal
-        WHERE workspace_id=${input.workspaceId} AND position>${state.after}::bigint
-        ORDER BY flightdeck_pg_record_journal.position LIMIT ${limit + 1}`;
+    await requireRecordHistory(input.workspaceId, state, clock, sql);
+    const next = await observeRecordAccess(state, clock!.access_revision, input.workspaceId, input.actorId, sql);
+    const accessChanges = drainAccessChanges(next, limit);
+    const scanLimit = limit - accessChanges.length;
+    const catchup = next.catchups?.[0];
+    const partition = catchup ? accessPartition(catchup.key) : null;
+    const partitionFilter = !partition || partition.resource_type === 'workspace' ? sql`TRUE`
+      : partition.resource_type === 'channel'
+        ? sql`COALESCE(context->>'channel_id',CASE WHEN family='channel' THEN id END)=${partition.resource_id}`
+        : sql`COALESCE(context->>'scope_id',CASE WHEN family='scope' THEN id END)=${partition.resource_id}`;
+    // Catchup is a separate keyset with its own cutoff. It never rewinds after.
+    // Both paths bound scanned rows before current authorization filtering.
+    const entries: Entry[] = catchup
+      ? await sql<Entry[]>`SELECT family,id,'upsert'::text AS operation,position::text,bytes,context AS row
+        FROM flightdeck_pg_record_current WHERE workspace_id=${input.workspaceId}
+        AND family=${partition!.family} AND id>${catchup.id} AND position<=${catchup.cutoff}::bigint
+        AND ${partitionFilter}
+        AND (${partition!.resource_kind ?? null}::text IS NULL OR context->>'resource_type'=${partition!.resource_kind ?? null})
+        ORDER BY id LIMIT ${scanLimit + 1}`
+      : state.mode === 'snapshot'
+        ? await sql<Entry[]>`SELECT family,id,'upsert'::text AS operation,${state.boundary}::text AS position,bytes,context AS row
+          FROM flightdeck_pg_record_current
+          WHERE workspace_id=${input.workspaceId} AND (family,id)>(${state.family},${state.id})
+          ORDER BY family,id LIMIT ${scanLimit + 1}`
+        : await sql<Entry[]>`SELECT family,id,operation,position::text,bytes,context AS row
+          FROM flightdeck_pg_record_journal
+          WHERE workspace_id=${input.workspaceId} AND position>${state.after}::bigint
+          ORDER BY flightdeck_pg_record_journal.position LIMIT ${scanLimit + 1}`;
     const decisions = new Map<string, boolean>();
     let effectiveGroups: string[] | undefined;
     async function grant(permission: string, type: 'channel' | 'scope', id: string): Promise<boolean> {
@@ -89,7 +107,7 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       const r = e.row;
       if (e.family === 'scope_order') return r.actor_id === input.actorId;
       // A lifecycle tombstone carries identifiers only. Current grants still
-      // authorize delivery after archival; revoked grants/membership use epochs.
+      // authorize delivery after archival; revoked grants/membership are checked on every page.
       if (e.operation === 'delete' && ['scope','channel'].includes(e.family)) {
         effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
         const groups = effectiveGroups.length ? effectiveGroups : ['00000000-0000-0000-0000-000000000000'];
@@ -139,7 +157,7 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       const parentType = e.family === 'resource_view_state' ? r.resource_type
         : ['task_comment','task_assignment'].includes(e.family) ? 'task' : e.family === 'doc_comment' ? 'document' : e.family === 'message' && r.thread_id ? 'thread' : null;
       const parentId = e.family === 'resource_view_state' ? r.resource_id : parentType === 'task' ? r.task_id : parentType === 'thread' ? r.thread_id : r.doc_id;
-      if (parentType) {
+      if (parentType && e.operation !== 'delete') {
         const table = { task: 'flightdeck_pg_tasks', document: 'flightdeck_pg_docs', thread: 'flightdeck_pg_threads' }[parentType as 'task'];
         if (!table || !parentId) return false;
         const key = `parent:${parentType}:${parentId}`;
@@ -169,13 +187,14 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
     const response: FlightDeckRecordPage | FlightDeckRecordPageV2 = {
       ...(device ? { protocol_version: 2 as const, client_id: input.clientId!, checkpoint_revision: client!.revision }
         : { protocol_version: 1 as const }), families: Object.keys(recordFamilies), mode: state.mode, changes: [], actors: [],
-      next_cursor: nextToken, has_more: entries.length > limit, snapshot_id: state.snapshotId,
+      access_revision: clock!.access_revision, access_changes: accessChanges, catchup: partition,
+      retention_policy: 'retain_downloaded',
+      next_cursor: nextToken, has_more: entries.length > scanLimit, snapshot_id: state.snapshotId,
       snapshot_complete: false, partitions_complete: [], bounds: { max_rows: RECORD_MAX_ROWS, max_bytes: RECORD_MAX_BYTES },
     };
-    const next = { ...state };
     const actors = new Map<string, FlightDeckRecordActor>();
     let processed = 0;
-    for (const entry of entries.slice(0, limit)) {
+    for (const entry of entries.slice(0, scanLimit)) {
       if (await visible(entry)) {
         const change: FlightDeckRecordChange = { family: entry.family, id: entry.id, operation: entry.operation,
           version: entry.position, workspace_id: input.workspaceId, scope_id: entry.family === 'scope' ? entry.id : entry.row.scope_id ?? null,
@@ -184,11 +203,11 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         // Decide using stored byte size and authorization metadata BEFORE fetching canonical JSON.
         const envelopeBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
         if (entry.operation === 'upsert' && envelopeBytes + entry.bytes > RECORD_MAX_BYTES) {
-          if (!response.changes.length) throw new RecordSyncError(413, 'record_too_large');
+          if (!response.changes.length && !accessChanges.length) throw new RecordSyncError(413, 'record_too_large');
           response.has_more = true; break;
         }
         if (entry.operation === 'upsert') {
-          const [payload] = state.mode === 'snapshot'
+          const [payload] = catchup || state.mode === 'snapshot'
             ? await sql`SELECT row FROM flightdeck_pg_record_current WHERE workspace_id=${input.workspaceId} AND family=${entry.family} AND id=${entry.id}`
             : await sql`SELECT row FROM flightdeck_pg_record_journal WHERE workspace_id=${input.workspaceId} AND position=${entry.position}::bigint`;
           change.row = payload!.row;
@@ -204,8 +223,8 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
           'actor_id',id,'npub',npub,'display_name',display_name,'kind',kind)::text) AS bytes
           FROM flightdeck_pg_actors WHERE id IN ${sql(actorIds)}` : [];
         if (sizes.reduce((sum, actor) => sum + Number(actor.bytes) + 1, 0) > remaining
-          || response.changes.length + 1 + actors.size + sizes.length > RECORD_MAX_ROWS) {
-          if (!response.changes.length) throw new RecordSyncError(413, 'record_too_large');
+          || response.changes.length + 1 + actors.size + sizes.length + accessChanges.length > RECORD_MAX_ROWS) {
+          if (!response.changes.length && !accessChanges.length) throw new RecordSyncError(413, 'record_too_large');
           response.has_more = true; break;
         }
         const additions = sizes.length ? await sql<FlightDeckRecordActor[]>`
@@ -216,21 +235,25 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         response.changes.push(change);
       }
       processed++;
-      if (state.mode === 'snapshot') { next.family = entry.family; next.id = entry.id; }
+      if (catchup) catchup.id = entry.id;
+      else if (state.mode === 'snapshot') { next.family = entry.family; next.id = entry.id; }
       else next.after = entry.position;
     }
-    if (processed === entries.length && state.mode === 'snapshot') {
+    if (catchup && processed === entries.length) next.catchups!.shift();
+    if (!catchup && processed === entries.length && state.mode === 'snapshot') {
       response.snapshot_complete = true;
       response.partitions_complete = Object.keys(recordFamilies);
       // Always request the delta handover, including when snapshot scan was empty.
       response.has_more = true;
       next.mode = 'delta'; next.snapshotId = null; next.after = state.boundary;
     }
+    response.has_more ||= !!next.catchups?.length || !!next.accessChanges?.length || !!catchup;
+    next.progress = String(BigInt(state.progress ?? '0') + 1n);
     // Lock only after the bounded scan. A reset/write since our snapshot raises
     // 40001 and retries with fresh authority; a later reset waits for this commit.
     // Always take clock before cursor locks, matching record writer lock order.
+    await sql`SELECT epoch,access_revision FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
     if (device) {
-      await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
       client = await requireRecordClient(clientInput, clock!.epoch, sql, true);
       // Revalidate the temporary input after waiting for the client row lock.
       if (input.cursor !== client.initial_cursor && input.cursor !== client.checkpoint_cursor) {
@@ -243,14 +266,14 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId!}`;
       (response as FlightDeckRecordPageV2).checkpoint_revision = client.revision;
     } else if (input.cursor) {
-      await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
       const renewed = await sql`UPDATE flightdeck_pg_record_cursors SET last_used_at=clock_timestamp()
         WHERE token=${input.cursor} AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
           AND epoch=${clock!.epoch} AND COALESCE(last_used_at,created_at)>clock_timestamp()-interval '7 days'
         RETURNING token`;
       if (!renewed.length) throw new RecordSyncError(409, 'reset_required');
     }
-    if (!device && state.mode === 'delta' && entries.length === 0 && input.cursor) {
+    if (state.mode === 'delta' && entries.length === 0 && input.cursor && !catchup
+      && !accessChanges.length && !next.catchups?.length && !next.accessChanges?.length) {
       response.next_cursor = input.cursor;
       return response;
     }
