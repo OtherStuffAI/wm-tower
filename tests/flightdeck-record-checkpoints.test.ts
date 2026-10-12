@@ -328,6 +328,33 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
     return { connection, ready, release };
   }
 
+  test('signed bounded page/chunk routes negotiate explicitly and gate acknowledgement receipts', async()=>{
+    const a=await register();let cursor=a.initial_cursor;
+    const query=(value:string)=>`${base()}?protocol_version=2&client_id=${a.client_id}&cursor=${value}&extension=bounded_snapshot_v1&large_records=chunked_v1`;
+    for(let i=0;i<50;i++) {
+      const response=await request(query(cursor));expect(response.status).toBe(200);
+      const p=await response.json() as any;
+      expect(Buffer.byteLength(JSON.stringify(p))).toBeLessThanOrEqual(1048576);
+      expect((await request(`${base()}/clients/${a.client_id}/ack?protocol_version=2`,'POST',{cursor:p.next_cursor,expected_revision:p.checkpoint_revision})).status).toBe(200);
+      cursor=p.next_cursor;if(p.handover.complete)break;
+    }
+    const id=await message('signed chunk '.repeat(100000));
+    const response=await request(query(cursor));expect(response.status).toBe(200);const p=await response.json() as any,m=p.large_records[0];
+    const chunkUrl=`${base()}/clients/${a.client_id}/pages/${p.next_cursor}/large-records/${m.manifest_id}/chunks/0?protocol_version=2`;
+    const chunk=await request(chunkUrl);expect(chunk.status).toBe(200);expect(chunk.headers.get('content-type')).toBe('application/octet-stream');expect(chunk.headers.get('cache-control')).toBe('no-store');expect((await chunk.arrayBuffer()).byteLength).toBeLessThanOrEqual(262144);
+    expect((await request(chunkUrl,'GET',undefined,foreignSecret)).status).not.toBe(200);
+    const ackUrl=`${base()}/clients/${a.client_id}/ack?protocol_version=2`;
+    const missing=await request(ackUrl,'POST',{cursor:p.next_cursor,expected_revision:p.checkpoint_revision});expect(missing.status).toBe(409);expect((await missing.json() as any).error).toBe('large_record_receipt_required');
+    // Assemble and verify all bytes before receipt acknowledgement.
+    const parts:Buffer[]=[];
+    for(let index=0;index<m.chunk_count;index++)parts.push(Buffer.from(await (await request(chunkUrl.replace('/chunks/0?',`/chunks/${index}?`))).arrayBuffer()));
+    expect(createHash('sha256').update(Buffer.concat(parts)).digest('hex')).toBe(m.sha256);
+    const body={cursor:p.next_cursor,expected_revision:p.checkpoint_revision,large_record_receipts:[{manifest_id:m.manifest_id,sha256:m.sha256}]};
+    expect((await request(ackUrl,'POST',body)).status).toBe(200);expect((await request(ackUrl,'POST',body)).status).toBe(200);
+    expect((await request(`${base()}?protocol_version=1&extension=bounded_snapshot_v1`)).status).toBe(400);
+    await db`DELETE FROM flightdeck_pg_messages WHERE id=${id}`;await retireRecordClient(input(a.client_id),db);
+  });
+
   test('page reset race retries fresh authority and leaves checkpoint untouched', async () => {
     const a = await register(); const p = await page(a.client_id, a.initial_cursor, 1); await ack(a.client_id, p.next_cursor, '0');
     const paused = pauseAtClock();

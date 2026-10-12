@@ -2997,9 +2997,15 @@ export type FlightDeckPgScopeAccessRole = 'context_editor' | 'scope_manager';
 export type FlightDeckPgScopeAccessMutation = { principal_type: 'actor' | 'group'; principal_id: string; expected_revision: string; lease_token: string } & ({role: FlightDeckPgScopeAccessRole} | {revoke: true});
 
 /** Explicitly opted-in device/cache protocol; v1 wire shape remains unchanged. */
+export type FlightDeckLargeRecordManifest = {
+  manifest_id: string; family: string; id: string; version: string;
+  sha256: string; total_bytes: number; chunk_bytes: 262144; chunk_count: number;
+}
 export interface FlightDeckRecordPageV2 extends Omit<FlightDeckRecordPage, 'protocol_version'> {
   protocol_version: 2;
   client_id: string;
+  handover?: { target_position: string | null; through_position: string; complete: boolean; authority_epoch: string; access_revision: string };
+  large_records?: FlightDeckLargeRecordManifest[];
   /** Revision observed when this immutable page token was issued. */
   checkpoint_revision: string;
 }

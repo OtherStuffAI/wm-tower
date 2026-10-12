@@ -4350,7 +4350,7 @@ export function buildOpenApiDocument(origin: string) {
               type: 'object',
               required: ['identity', 'service', 'capabilities', 'links'],
               properties: {
-                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], device_checkpoints true, additive_access true, targeted_catchup true, retention_policy retain_downloaded, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
+                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], extensions [bounded_snapshot_v1,chunked_v1], device_checkpoints true, additive_access true, targeted_catchup true, retention_policy retain_downloaded, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
                 identity: { type: 'object' }, service: { type: 'object' }, capabilities: { type: 'array', items: { type: 'string' } }, links: { type: 'object' },
 
               },
@@ -5660,9 +5660,21 @@ export function buildOpenApiDocument(origin: string) {
           requestBody: { required: true, content: { 'application/json': { schema: {
             type: 'object', additionalProperties: false, required: ['cursor','expected_revision'], properties: {
               cursor: { type: 'string', format: 'uuid' }, expected_revision: { type: 'string', pattern: '^(0|[1-9][0-9]{0,18})$' },
+              large_record_receipts: {type:'array',items:{type:'object',additionalProperties:false,required:['manifest_id','sha256'],properties:{manifest_id:{type:'string',format:'uuid'},sha256:{type:'string',pattern:'^[0-9a-f]{64}$'}}}},
             },
           } } } },
           responses: recordCheckpointResponses,
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/pages/{cursor}/large-records/{manifestId}/chunks/{index}': {
+        get: {
+          tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Read an authenticated version-pinned large-record chunk',
+          description:'Only manifests negotiated with v2 bounded_snapshot_v1 and chunked_v1. Raw UTF-8 envelope bytes, at most 262144 bytes. Verify SHA256 and total length, then parse {change,actors} and commit atomically before acknowledging with manifest receipts. Current membership, partition access, epoch, client/token expiry and pinned source/profile digest are checked each read. Changes require discarding assembly and retrying prior durable cursor. See docs/contract/bounded-record-snapshots-v1.md.',
+          parameters:[...recordCheckpointParameters,
+            {name:'cursor',in:'path',required:true,schema:{type:'string',format:'uuid'}},
+            {name:'manifestId',in:'path',required:true,schema:{type:'string',format:'uuid'}},
+            {name:'index',in:'path',required:true,schema:{type:'integer',minimum:0}}],
+          responses:{'200':{description:'<=256 KiB raw bytes; no-store',content:{'application/octet-stream':{schema:{type:'string',format:'binary'}}}},'400':{description:'Invalid chunk'},'403':{description:'Current membership/access denied'},'409':{description:'Invalid/expired page, changed source/profile, or reset required'}},
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync': {
@@ -5673,6 +5685,8 @@ export function buildOpenApiDocument(origin: string) {
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'protocol_version', in: 'query', required: true, schema: { type: 'integer', enum: [1, 2] } },
+            { name:'extension',in:'query',schema:{type:'string',enum:['bounded_snapshot_v1']},description:'V2 only. Finite committed handover target; must repeat on dependent pages.' },
+            { name:'large_records',in:'query',schema:{type:'string',enum:['chunked_v1']},description:'Requires bounded_snapshot_v1; oversized rows/actors use pinned chunk manifests and receipt acknowledgements.' },
             { name: 'client_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Required for v2; canonical lowercase nonzero UUID for this local cache.' },
             { name: 'cursor', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Required for v2. Exact local committed position; never defaults to a server checkpoint.' },
             { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 200 } },
@@ -5690,6 +5704,8 @@ export function buildOpenApiDocument(origin: string) {
                   protocol_version: { type: 'integer', enum: [1, 2] },
                   client_id: { type: 'string', format: 'uuid', description: 'V2 only' },
                   checkpoint_revision: { type: 'string', pattern: '^[0-9]+$', description: 'V2 only: issuance revision for CAS acknowledgement' },
+                  handover:{type:'object',description:'Negotiated bounded_snapshot_v1 only; complete certifies drained current-authority catchups and journal prefix through a target fixed under content writes; authority gains may extend repair target when access_revision changes. Not frozen historical state.',required:['target_position','through_position','complete','authority_epoch','access_revision'],properties:{target_position:{type:'string',nullable:true},through_position:{type:'string'},complete:{type:'boolean'},authority_epoch:{type:'string',format:'uuid'},access_revision:{type:'string'}}},
+                  large_records:{type:'array',maxItems:1,description:'Negotiated chunked_v1 only. Standalone manifest replaces exactly one canonical change; changes/actors empty.',items:{type:'object',required:['manifest_id','family','id','version','sha256','total_bytes','chunk_bytes','chunk_count'],properties:{manifest_id:{type:'string',format:'uuid'},family:{type:'string'},id:{type:'string'},version:{type:'string'},sha256:{type:'string',pattern:'^[0-9a-f]{64}$'},total_bytes:{type:'integer'},chunk_bytes:{type:'integer',enum:[262144]},chunk_count:{type:'integer'}}}},
                   families: { type: 'array', items: { type: 'string' } },
                   mode: { type: 'string', enum: ['snapshot','delta'] },
                   next_cursor: { type: 'string', format: 'uuid' }, has_more: { type: 'boolean' },

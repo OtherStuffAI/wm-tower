@@ -70,6 +70,13 @@ documents the Tower-only durable checkpoint extension, signed acknowledgements,
 retention policy and separate Flight Deck integration follow-up. Existing v1
 record-sync clients retain their current behavior.
 
+## Negotiated bounded snapshots
+
+[Bounded record snapshots v1](docs/contract/bounded-record-snapshots-v1.md) adds
+opt-in v2 finite committed handover certificates and authenticated <=256 KiB
+chunks for oversized canonical rows or actor sidecars. Whole JSON pages retain
+the 1 MiB/200-entry limits. Existing v1, v2 and legacy sync remain compatible.
+
 ## Additive record access
 
 [Additive record access v1](docs/contract/additive-record-access-v1.md) preserves

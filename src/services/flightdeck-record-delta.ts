@@ -2,26 +2,31 @@ import { accessPartition, observeRecordAccess, drainAccessChanges } from './flig
 import { requireRecordClient, requireRecordHistory, validateRecordClientId } from './flightdeck-record-checkpoints';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
-import { authorizeFlightDeckPgOperation, getEffectiveFlightDeckPgGroupIds, canReadFlightDeckPgContextScope } from './flightdeck-pg-authorization';
+import { recordVisibility, type RecordEntry } from './flightdeck-record-visibility';
+import { issueLargeRecordManifest } from './flightdeck-record-large';
 import { recordFamilies } from './flightdeck-record-families';
 import type { FlightDeckRecordActor, FlightDeckRecordChange, FlightDeckRecordPage, FlightDeckRecordPageV2 } from '../types';
 
 type Db = ReturnType<typeof getDb>;
 import { RecordSyncError, type RecordSyncState } from './flightdeck-record-sync-state';
 export { RecordSyncError, type RecordSyncState } from './flightdeck-record-sync-state';
-type Entry = { family: string; id: string; operation: 'upsert' | 'delete'; position: string; row: Record<string, any>; bytes: number };
+type Entry = RecordEntry;
 export const RECORD_MAX_ROWS = 200;
 export const RECORD_MAX_BYTES = 1_048_576;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type PageInput = { workspaceId: string; actorId: string; cursor?: string | null; limit?: number };
-type DevicePageInput = PageInput & { protocolVersion: 2; clientId: string };
+type DevicePageInput = PageInput & { protocolVersion: 2; clientId: string; extension?: string; largeRecords?: string };
 export function readFlightDeckRecordPage(input: DevicePageInput, db?: Db): Promise<FlightDeckRecordPageV2>;
 export function readFlightDeckRecordPage(input: PageInput & { protocolVersion?: 1 }, db?: Db): Promise<FlightDeckRecordPage>;
-/** Record scans use a snapshot; the short cursor commit shares the clock lock with other readers. */
-export async function readFlightDeckRecordPage(input: PageInput & { protocolVersion?: number; clientId?: string }, db: Db = getDb()): Promise<FlightDeckRecordPage | FlightDeckRecordPageV2> {
+/** Legacy scans use repeatable read. Negotiated scans fence workspace commits for a bounded page. */
+export async function readFlightDeckRecordPage(input: PageInput & { protocolVersion?: number; clientId?: string; extension?: string; largeRecords?: string }, db: Db = getDb()): Promise<FlightDeckRecordPage | FlightDeckRecordPageV2> {
   if (input.protocolVersion !== undefined && ![1,2].includes(input.protocolVersion)) throw new RecordSyncError(400, 'unsupported_protocol_version');
   const device = input.protocolVersion === 2;
+  if (input.extension !== undefined && (!device || input.extension !== 'bounded_snapshot_v1')) throw new RecordSyncError(400, 'unsupported_extension');
+  if (input.largeRecords !== undefined && (input.extension !== 'bounded_snapshot_v1' || input.largeRecords !== 'chunked_v1')) throw new RecordSyncError(400, 'unsupported_extension');
+  const bounded = input.extension === 'bounded_snapshot_v1';
+  const chunked = input.largeRecords === 'chunked_v1';
   if (device) {
     validateRecordClientId(input.clientId);
     if (!input.cursor) throw new RecordSyncError(400, 'cursor_required');
@@ -30,8 +35,13 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
   if (input.cursor && !uuid.test(input.cursor)) throw new RecordSyncError(400, 'invalid_cursor');
   const limit = input.limit ?? RECORD_MAX_ROWS;
   if (!Number.isInteger(limit) || limit < 1 || limit > RECORD_MAX_ROWS) throw new RecordSyncError(400, 'invalid_limit');
-  const run = () => db.begin('isolation level repeatable read', async transaction => {
+  const run = () => db.begin(bounded ? 'isolation level read committed' : 'isolation level repeatable read', async transaction => {
     const sql = transaction as unknown as Db;
+    // Read committed can wait for an active writer and then lock its committed
+    // clock. Every workspace record/authority mutation takes this same lock
+    // before committing, so payload and authority stay stable for this page.
+    let clock = bounded ? (await sql`SELECT position::text,epoch,journal_floor::text,access_revision::text
+      FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`)[0] : undefined;
     const [viewer] = await sql`
       SELECT a.npub, w.app_npub FROM flightdeck_pg_workspace_memberships m
       JOIN flightdeck_pg_actors a ON a.id=m.actor_id
@@ -39,7 +49,7 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       WHERE m.workspace_id=${input.workspaceId} AND m.actor_id=${input.actorId}
     `;
     if (!viewer) throw new RecordSyncError(403, 'workspace_membership_required');
-    let [clock] = await sql`SELECT position::text, epoch, journal_floor::text, access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
+    if (!clock) [clock] = await sql`SELECT position::text, epoch, journal_floor::text, access_revision::text FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId}`;
     if (!clock) {
       [clock] = await sql`INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(${input.workspaceId}) RETURNING position::text,epoch,journal_floor::text,access_revision::text`;
     }
@@ -63,8 +73,23 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
     } else {
       state = { mode: 'snapshot', boundary: clock!.position, after: clock!.position, family: '', id: '', snapshotId: randomUUID() };
     }
+    if (state.largeRecords?.length && input.cursor !== client?.checkpoint_cursor) throw new RecordSyncError(409, 'large_record_ack_required');
+    if ((state.bounded && !bounded) || (state.chunked && !chunked)) throw new RecordSyncError(400, 'extension_required');
     await requireRecordHistory(input.workspaceId, state, clock, sql);
     const next = await observeRecordAccess(state, clock!.access_revision, input.workspaceId, input.actorId, sql);
+    if (bounded) next.bounded = true;
+    if (chunked) next.chunked = true;
+    // Manifest metadata belongs to its issuance page, never to a later page.
+    if (chunked) next.largeRecords = [];
+    if (bounded && state.mode === 'delta' && (!next.target || next.targetComplete)) {
+      next.target = clock!.position; next.targetComplete = false;
+    }
+    // A newly readable partition can contain a row updated beyond the pinned
+    // target after its earlier version was filtered. Its current historic scan
+    // excludes that row, so extend only for an authority gain and repair it via
+    // the journal. Ordinary content writes never change the active target.
+    if (bounded && state.mode === 'delta' && state.access && next.access?.some(key => !state.access!.includes(key))
+      && BigInt(clock!.position) > BigInt(next.target!)) next.target = clock!.position;
     const accessChanges = drainAccessChanges(next, limit);
     const scanLimit = limit - accessChanges.length;
     const catchup = next.catchups?.[0];
@@ -86,103 +111,14 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         ? await sql<Entry[]>`SELECT family,id,'upsert'::text AS operation,${state.boundary}::text AS position,bytes,context AS row
           FROM flightdeck_pg_record_current
           WHERE workspace_id=${input.workspaceId} AND (family,id)>(${state.family},${state.id})
+          AND (${bounded ? state.boundary : null}::bigint IS NULL OR position<=${bounded ? state.boundary : null}::bigint)
           ORDER BY family,id LIMIT ${scanLimit + 1}`
         : await sql<Entry[]>`SELECT family,id,operation,position::text,bytes,context AS row
           FROM flightdeck_pg_record_journal
           WHERE workspace_id=${input.workspaceId} AND position>${state.after}::bigint
+          AND (${bounded ? next.target! : null}::bigint IS NULL OR position<=${bounded ? next.target! : null}::bigint)
           ORDER BY flightdeck_pg_record_journal.position LIMIT ${scanLimit + 1}`;
-    const decisions = new Map<string, boolean>();
-    let effectiveGroups: string[] | undefined;
-    async function grant(permission: string, type: 'channel' | 'scope', id: string): Promise<boolean> {
-      if (!id) return false;
-      const key = `${permission}:${id}`;
-      if (decisions.has(key)) return decisions.get(key)!;
-      const decision = await authorizeFlightDeckPgOperation({ actorNpub: viewer!.npub, appNpub: viewer!.app_npub,
-        workspaceId: input.workspaceId, permission,
-        resource: type === 'channel' ? { type, channelId: id } : { type, scopeId: id } }, sql);
-      decisions.set(key, decision.allowed);
-      return decision.allowed;
-    }
-    async function visible(e: Entry): Promise<boolean> {
-      const r = e.row;
-      if (e.family === 'scope_order') return r.actor_id === input.actorId;
-      // A lifecycle tombstone carries identifiers only. Current grants still
-      // authorize delivery after archival; revoked grants/membership are checked on every page.
-      if (e.operation === 'delete' && ['scope','channel'].includes(e.family)) {
-        effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
-        const groups = effectiveGroups.length ? effectiveGroups : ['00000000-0000-0000-0000-000000000000'];
-        const [allowed] = await sql`SELECT 1 FROM flightdeck_pg_permission_grants g
-          WHERE g.workspace_id=${input.workspaceId} AND g.revoked_at IS NULL
-          AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId}) OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groups)}))
-          AND (( ${e.family}='channel' AND g.resource_type='channel' AND g.resource_channel_id::text=${e.id}
-              AND g.permission IN ('channel.read','task.read','doc.read','file.read','audio_note.read'))
-            OR (${e.family}='scope' AND ((g.resource_type='scope' AND g.resource_scope_id::text=${e.id}
-              AND g.permission IN ('scope.read','scope.manage','context.edit')) OR (g.resource_type='channel' AND g.permission='channel.read'
-              AND EXISTS(SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=g.workspace_id AND c.id=g.resource_channel_id AND c.scope_id::text=${e.id}))))) LIMIT 1`;
-        return !!allowed;
-      }
-      if (e.family === 'feed_subscription' || e.family === 'feed_item_state') return r.reader_actor_id === input.actorId;
-      if (e.family === 'daily_note' || e.family === 'personal_wapp') return r.owner_actor_id === input.actorId;
-      if (e.family === 'autopilot_connection' || e.family === 'workspace_agent') {
-        const key = 'workspace.read';
-        if (!decisions.has(key)) {
-          const decision = await authorizeFlightDeckPgOperation({ actorNpub: viewer!.npub, appNpub: viewer!.app_npub,
-            workspaceId: input.workspaceId, permission: 'workspace.read', resource: { type: 'workspace' } }, sql);
-          decisions.set(key, decision.allowed);
-        }
-        return decisions.get(key)!;
-      }
-      if (['context_component', 'context_reference'].includes(e.family)) {
-        effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
-        const key = `context-scope:${r.scope_id}`;
-        if (!decisions.has(key)) decisions.set(key, await canReadFlightDeckPgContextScope({
-          workspaceId: input.workspaceId, scopeId: r.scope_id, actorId: input.actorId, groupIds: effectiveGroups }, sql));
-        return decisions.get(key)!;
-      }
-      if (e.family === 'scope') {
-        const [scope] = await sql`SELECT 1 FROM flightdeck_pg_scopes WHERE workspace_id=${input.workspaceId} AND id=${e.id} AND archived_at IS NULL`;
-        if (!scope) return false;
-        if (await grant('scope.read', 'scope', e.id) || await grant('context.edit', 'scope', e.id) || await grant('scope.manage', 'scope', e.id)) return true;
-        effectiveGroups ??= await getEffectiveFlightDeckPgGroupIds(input.workspaceId, input.actorId, sql);
-        const groups = effectiveGroups.length ? effectiveGroups : ['00000000-0000-0000-0000-000000000000'];
-        const [childGrant] = await sql`SELECT 1 FROM flightdeck_pg_permission_grants pg
-          JOIN flightdeck_pg_channels c ON c.workspace_id=pg.workspace_id AND c.id=pg.resource_channel_id
-          WHERE pg.workspace_id=${input.workspaceId} AND c.scope_id=${e.id} AND c.archived_at IS NULL
-          AND pg.resource_type='channel' AND pg.permission='channel.read' AND pg.revoked_at IS NULL
-          AND ((pg.principal_type='actor' AND pg.principal_actor_id=${input.actorId})
-            OR (pg.principal_type='group' AND pg.principal_group_id IN ${sql(groups)})) LIMIT 1`;
-        return !!childGrant;
-      }
-      if (e.family === 'resource_view_state' && r.viewer_actor_id !== input.actorId) return false;
-      const parentType = e.family === 'resource_view_state' ? r.resource_type
-        : ['task_comment','task_assignment'].includes(e.family) ? 'task' : e.family === 'doc_comment' ? 'document' : e.family === 'message' && r.thread_id ? 'thread' : null;
-      const parentId = e.family === 'resource_view_state' ? r.resource_id : parentType === 'task' ? r.task_id : parentType === 'thread' ? r.thread_id : r.doc_id;
-      if (parentType && e.operation !== 'delete') {
-        const table = { task: 'flightdeck_pg_tasks', document: 'flightdeck_pg_docs', thread: 'flightdeck_pg_threads' }[parentType as 'task'];
-        if (!table || !parentId) return false;
-        const key = `parent:${parentType}:${parentId}`;
-        if (!decisions.has(key)) {
-          const [parent] = await sql`SELECT 1 FROM ${sql(table)} WHERE workspace_id=${input.workspaceId} AND id=${parentId} AND deleted_at IS NULL`;
-          decisions.set(key, !!parent);
-        }
-        if (!decisions.get(key)) return false;
-      }
-      const channelId = e.family === 'channel' ? e.id : r.channel_id;
-      if (!channelId) return false;
-      const activeKey = `active:${channelId}`;
-      if (!decisions.has(activeKey)) {
-        const [active] = await sql`SELECT 1 FROM flightdeck_pg_channels c JOIN flightdeck_pg_scopes s ON s.workspace_id=c.workspace_id AND s.id=c.scope_id WHERE c.workspace_id=${input.workspaceId} AND c.id=${channelId} AND c.archived_at IS NULL AND s.archived_at IS NULL`;
-        decisions.set(activeKey, !!active);
-      }
-      if (!decisions.get(activeKey)) return false;
-      const target = e.family === 'resource_view_state' ? (r.resource_type === 'document' ? 'doc' : r.resource_type) : e.family;
-      if (target.startsWith('task')) return grant('task.read', 'channel', channelId);
-      if (['doc','doc_comment','file','audio_note'].includes(target)) {
-        return await grant(`${target === 'doc_comment' ? 'doc' : target}.read`, 'channel', channelId)
-          || await grant('channel.read', 'channel', channelId);
-      }
-      return grant('channel.read', 'channel', channelId);
-    }
+    const visible = recordVisibility(input.workspaceId, input.actorId, {npub:viewer!.npub,app_npub:viewer!.app_npub}, sql);
     const nextToken = randomUUID();
     const response: FlightDeckRecordPage | FlightDeckRecordPageV2 = {
       ...(device ? { protocol_version: 2 as const, client_id: input.clientId!, checkpoint_revision: client!.revision }
@@ -192,8 +128,26 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       next_cursor: nextToken, has_more: entries.length > scanLimit, snapshot_id: state.snapshotId,
       snapshot_complete: false, partitions_complete: [], bounds: { max_rows: RECORD_MAX_ROWS, max_bytes: RECORD_MAX_BYTES },
     };
+    if (bounded) (response as FlightDeckRecordPageV2).handover = { target_position: next.target ?? null, through_position: next.after, complete: false, authority_epoch: clock!.epoch, access_revision: clock!.access_revision };
+    if (chunked) (response as FlightDeckRecordPageV2).large_records = [];
+    // Reserve final completeness metadata and maximum revision/position widths.
+    const budget = (changes: FlightDeckRecordChange[]) => Buffer.byteLength(JSON.stringify({ ...response, changes, partitions_complete: Object.keys(recordFamilies),
+      ...(bounded ? { handover: { target_position: '9'.repeat(19), through_position: '9'.repeat(19), complete: false, authority_epoch: clock!.epoch, access_revision: '9'.repeat(19) }, checkpoint_revision: '9'.repeat(19) } : {}) }));
     const actors = new Map<string, FlightDeckRecordActor>();
     let processed = 0;
+    async function oversized(entry: Entry, change: FlightDeckRecordChange) {
+      if (response.changes.length || accessChanges.length) { response.has_more = true; return; }
+      if (!chunked) throw new RecordSyncError(413, 'record_too_large');
+      const manifest = await issueLargeRecordManifest({ workspaceId: input.workspaceId, entry, change: {...change,row:null},
+        source: catchup || state.mode === 'snapshot' ? 'current' : 'journal' }, sql);
+      next.largeRecords!.push(manifest);
+      (response as FlightDeckRecordPageV2).large_records!.push(manifest.public);
+      processed++;
+      if (catchup) catchup.id = entry.id;
+      else if (state.mode === 'snapshot') { next.family = entry.family; next.id = entry.id; }
+      else next.after = entry.position;
+      response.has_more = entries.length > processed;
+    }
     for (const entry of entries.slice(0, scanLimit)) {
       if (await visible(entry)) {
         const change: FlightDeckRecordChange = { family: entry.family, id: entry.id, operation: entry.operation,
@@ -201,10 +155,9 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
           channel_id: entry.family === 'channel' ? entry.id : entry.row.channel_id ?? null,
           row: null };
         // Decide using stored byte size and authorization metadata BEFORE fetching canonical JSON.
-        const envelopeBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
+        const envelopeBytes = budget([...response.changes, change]);
         if (entry.operation === 'upsert' && envelopeBytes + entry.bytes > RECORD_MAX_BYTES) {
-          if (!response.changes.length && !accessChanges.length) throw new RecordSyncError(413, 'record_too_large');
-          response.has_more = true; break;
+          await oversized(entry,change); break;
         }
         if (entry.operation === 'upsert') {
           const [payload] = catchup || state.mode === 'snapshot'
@@ -216,7 +169,7 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         const actorIds = [...new Set(['created_by_actor_id', 'updated_by_actor_id', 'deleted_by_actor_id', 'archived_by_actor_id',
           'owner_actor_id', 'actor_id', 'viewer_actor_id', 'reader_actor_id'].map(key => change.row?.[key])
           .filter((id): id is string => typeof id === 'string' && uuid.test(id) && !actors.has(id)))];
-        const baseBytes = Buffer.byteLength(JSON.stringify({ ...response, changes: [...response.changes, change], partitions_complete: Object.keys(recordFamilies) }));
+        const baseBytes = budget([...response.changes, change]);
         const remaining = RECORD_MAX_BYTES - baseBytes;
         // Profiles have unbounded labels. Size them in SQL before decoding any new identity payload.
         const sizes = actorIds.length ? await sql`SELECT id, octet_length(jsonb_build_object(
@@ -224,12 +177,18 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
           FROM flightdeck_pg_actors WHERE id IN ${sql(actorIds)}` : [];
         if (sizes.reduce((sum, actor) => sum + Number(actor.bytes) + 1, 0) > remaining
           || response.changes.length + 1 + actors.size + sizes.length + accessChanges.length > RECORD_MAX_ROWS) {
-          if (!response.changes.length && !accessChanges.length) throw new RecordSyncError(413, 'record_too_large');
-          response.has_more = true; break;
+          await oversized(entry,change); break;
         }
         const additions = sizes.length ? await sql<FlightDeckRecordActor[]>`
-          SELECT id AS actor_id,npub,display_name,kind FROM flightdeck_pg_actors
-          WHERE id IN ${sql(sizes.map(actor => actor.id))} ORDER BY id` : [];
+          WITH profiles AS MATERIALIZED (
+            SELECT id AS actor_id,npub,display_name,kind,octet_length(jsonb_build_object(
+              'actor_id',id,'npub',npub,'display_name',display_name,'kind',kind)::text)+1 AS bytes
+            FROM flightdeck_pg_actors WHERE id IN ${sql(sizes.map(actor => actor.id))}
+          ) SELECT actor_id,npub,display_name,kind FROM profiles
+          WHERE (SELECT COALESCE(sum(bytes),0) FROM profiles)<=${remaining} ORDER BY actor_id` : [];
+        // Harmless profile edits do not take the workspace clock. Recheck total
+        // profile bytes in the very statement that decodes them, before driver IO.
+        if (additions.length !== sizes.length) { await oversized(entry,change); break; }
         for (const actor of additions) actors.set(actor.actor_id, actor);
         response.actors = [...actors.values()];
         response.changes.push(change);
@@ -246,11 +205,19 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       // Always request the delta handover, including when snapshot scan was empty.
       response.has_more = true;
       next.mode = 'delta'; next.snapshotId = null; next.after = state.boundary;
+      if (bounded) { next.target = clock!.position; next.targetComplete = false; }
     }
     response.has_more ||= !!next.catchups?.length || !!next.accessChanges?.length || !!catchup;
+    if (bounded) {
+      if (state.mode === 'delta' && !catchup && processed === entries.length) next.after = next.target!;
+      next.targetComplete = next.mode === 'delta' && !response.snapshot_complete && next.after === next.target
+        && !next.catchups?.length && !next.accessChanges?.length && !response.has_more;
+      (response as FlightDeckRecordPageV2).handover = { target_position: next.target ?? null, through_position: next.after, complete: !!next.targetComplete, authority_epoch: clock!.epoch, access_revision: clock!.access_revision };
+    }
     next.progress = String(BigInt(state.progress ?? '0') + 1n);
-    // Lock only after the bounded scan. A reset/write since our snapshot raises
-    // 40001 and retries with fresh authority; a later reset waits for this commit.
+    // Legacy readers lock after their scan. A reset/write since their snapshot raises
+    // 40001 and retries with fresh authority. Negotiated readers already hold the
+    // clock fence; later writers/resets wait for this page commit.
     // Always take clock before cursor locks, matching record writer lock order.
     await sql`SELECT epoch,access_revision FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
     if (device) {
@@ -272,7 +239,8 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
         RETURNING token`;
       if (!renewed.length) throw new RecordSyncError(409, 'reset_required');
     }
-    if (state.mode === 'delta' && entries.length === 0 && input.cursor && !catchup
+    if (Buffer.byteLength(JSON.stringify(response)) > RECORD_MAX_BYTES) throw new RecordSyncError(413, 'record_too_large');
+    if (!bounded && state.mode === 'delta' && entries.length === 0 && input.cursor && !catchup
       && !accessChanges.length && !next.catchups?.length && !next.accessChanges?.length) {
       response.next_cursor = input.cursor;
       return response;

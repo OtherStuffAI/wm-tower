@@ -1,0 +1,185 @@
+{
+  "page": {
+    "protocol_version": 2,
+    "client_id": "90000000-0000-4000-8000-000000000002",
+    "checkpoint_revision": "0",
+    "families": [
+      "scope_order",
+      "scope",
+      "channel",
+      "thread",
+      "message",
+      "task",
+      "task_comment",
+      "task_assignment",
+      "doc",
+      "doc_comment",
+      "file",
+      "file_folder",
+      "audio_note",
+      "daily_note",
+      "personal_wapp",
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent",
+      "feed_subscription",
+      "feed_item_state",
+      "context_component",
+      "context_reference"
+    ],
+    "mode": "delta",
+    "changes": [],
+    "actors": [],
+    "access_revision": "4",
+    "access_changes": [],
+    "catchup": null,
+    "retention_policy": "retain_downloaded",
+    "next_cursor": "90000000-0000-4000-8000-000000000003",
+    "has_more": false,
+    "snapshot_id": null,
+    "snapshot_complete": false,
+    "partitions_complete": [],
+    "bounds": {
+      "max_rows": 200,
+      "max_bytes": 1048576
+    },
+    "handover": {
+      "target_position": "15",
+      "through_position": "15",
+      "complete": true,
+      "authority_epoch": "90000000-0000-4000-8000-000000000004",
+      "access_revision": "4"
+    },
+    "large_records": [
+      {
+        "manifest_id": "90000000-0000-4000-8000-000000000001",
+        "family": "message",
+        "id": "50000000-0000-4000-8000-000000000004",
+        "version": "15",
+        "sha256": "69508f47083af0a7d88dbaf86896fa0896e2f2178322451695a5df7b9fbe0750",
+        "total_bytes": 1201009,
+        "chunk_bytes": 262144,
+        "chunk_count": 5
+      }
+    ]
+  },
+  "empty_progress": {
+    "protocol_version": 2,
+    "client_id": "90000000-0000-4000-8000-000000000002",
+    "checkpoint_revision": "0",
+    "families": [
+      "scope_order",
+      "scope",
+      "channel",
+      "thread",
+      "message",
+      "task",
+      "task_comment",
+      "task_assignment",
+      "doc",
+      "doc_comment",
+      "file",
+      "file_folder",
+      "audio_note",
+      "daily_note",
+      "personal_wapp",
+      "resource_view_state",
+      "autopilot_connection",
+      "workspace_agent",
+      "feed_subscription",
+      "feed_item_state",
+      "context_component",
+      "context_reference"
+    ],
+    "mode": "delta",
+    "changes": [],
+    "actors": [],
+    "access_revision": "4",
+    "access_changes": [],
+    "catchup": null,
+    "retention_policy": "retain_downloaded",
+    "next_cursor": "90000000-0000-4000-8000-000000000003",
+    "has_more": true,
+    "snapshot_id": null,
+    "snapshot_complete": false,
+    "partitions_complete": [],
+    "bounds": {
+      "max_rows": 200,
+      "max_bytes": 1048576
+    },
+    "handover": {
+      "target_position": "15",
+      "through_position": "15",
+      "complete": false,
+      "authority_epoch": "90000000-0000-4000-8000-000000000004",
+      "access_revision": "4"
+    },
+    "large_records": []
+  },
+  "acknowledgement": {
+    "cursor": "90000000-0000-4000-8000-000000000003",
+    "expected_revision": "0",
+    "large_record_receipts": [
+      {
+        "manifest_id": "90000000-0000-4000-8000-000000000001",
+        "sha256": "69508f47083af0a7d88dbaf86896fa0896e2f2178322451695a5df7b9fbe0750"
+      }
+    ]
+  },
+  "fail_closed": {
+    "status": 413,
+    "body": {
+      "error": "record_too_large",
+      "protocol_version": 2
+    }
+  },
+  "errors": [
+    "extension_required",
+    "large_record_ack_required",
+    "large_record_receipt_required",
+    "large_record_changed",
+    "page_token_invalid",
+    "record_access_required"
+  ],
+  "envelope_recipe": {
+    "change": {
+      "family": "message",
+      "id": "50000000-0000-4000-8000-000000000004",
+      "operation": "upsert",
+      "version": "15",
+      "workspace_id": "10000000-0000-4000-8000-000000000001",
+      "scope_id": "40000000-0000-4000-8000-000000000001",
+      "channel_id": "30000000-0000-4000-8000-000000000001",
+      "row": {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "workspace_id": "10000000-0000-4000-8000-000000000001",
+        "scope_id": "40000000-0000-4000-8000-000000000001",
+        "channel_id": "30000000-0000-4000-8000-000000000001",
+        "thread_id": null,
+        "body": "",
+        "client_request_id": "example-client-command",
+        "client_request_hash": null,
+        "metadata": {},
+        "created_by_actor_id": "20000000-0000-4000-8000-000000000001",
+        "updated_by_actor_id": "20000000-0000-4000-8000-000000000001",
+        "row_version": 1,
+        "created_at": "2026-09-05T00:00:00+00:00",
+        "updated_at": "2026-09-05T00:00:00+00:00",
+        "deleted_at": null
+      }
+    },
+    "actors": [
+      {
+        "actor_id": "20000000-0000-4000-8000-000000000001",
+        "npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul",
+        "display_name": "Example Author",
+        "kind": "human"
+      }
+    ],
+    "body_repeat": {
+      "character": "€",
+      "count": 400000
+    },
+    "serialization": "JSON.stringify({change,actors}) with existing property order"
+  }
+}

@@ -1,3 +1,4 @@
+import { readLargeRecordChunk } from '../services/flightdeck-record-large';
 import { readScopeOrder, writeScopeOrder } from '../services/scope-order';
 import { registerOrgDataRoutes } from './org-data';
 import { getWorkspaceStorageUsage } from '../services/workspace-storage-usage';
@@ -2209,11 +2210,26 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {
   if (version !== '1' && version !== '2') return c.json({ error: 'unsupported_protocol_version' }, 400);
   try {
     const input = { workspaceId: result.context.workspace.id, actorId: result.context.actor.id,
-      cursor: c.req.query('cursor'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) };
+      extension:c.req.query('extension'), largeRecords:c.req.query('large_records'), cursor: c.req.query('cursor'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) };
     return c.json(version === '2'
       ? await readFlightDeckRecordPage({ ...input, protocolVersion: 2, clientId: c.req.query('client_id')! })
       : await readFlightDeckRecordPage(input));
   } catch (error) { return recordSyncErrorResponse(c, error, version === '2' ? 2 : 1); }
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/clients/:clientId/pages/:cursor/large-records/:manifestId/chunks/:index', async c => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  if (c.req.query('protocol_version') !== '2') return c.json({error:'unsupported_protocol_version'},400);
+  try {
+    const raw=c.req.param('index');
+    if (!/^(0|[1-9][0-9]*)$/.test(raw)) throw new RecordSyncError(400,'invalid_chunk');
+    const bytes=await readLargeRecordChunk({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+      clientId:c.req.param('clientId'),cursor:c.req.param('cursor'),manifestId:c.req.param('manifestId'),index:Number(raw)});
+    return new Response(bytes as BodyInit,{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}});
+  } catch(error) { return recordSyncErrorResponse(c,error,2); }
 });
 
 // NIP-98 signs the exact URL; POST additionally verifies the exact body hash.
@@ -2232,10 +2248,10 @@ for (const operation of ['register', 'read', 'ack', 'retire'] as const) {
       if (operation === 'register') return c.json(await registerRecordClient(input));
       let body: any;
       try { body = await c.req.json(); } catch { throw new RecordSyncError(400, 'invalid_body'); }
-      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['cursor','expected_revision'].includes(key))) {
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['cursor','expected_revision','large_record_receipts'].includes(key))) {
         throw new RecordSyncError(400, 'invalid_body');
       }
-      return c.json(await acknowledgeRecordCheckpoint({ ...input, cursor: body.cursor, expectedRevision: body.expected_revision }));
+      return c.json(await acknowledgeRecordCheckpoint({ ...input, cursor: body.cursor, expectedRevision: body.expected_revision, largeRecordReceipts:body.large_record_receipts }));
     } catch (error) { return recordSyncErrorResponse(c, error, 2); }
   });
 }

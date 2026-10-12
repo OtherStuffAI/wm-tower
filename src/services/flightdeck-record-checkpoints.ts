@@ -1,3 +1,4 @@
+import { requireLargeRecordReceipts, validateLargeRecordReceipts } from './flightdeck-record-large';
 import { recordAccess } from './flightdeck-record-access';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
@@ -9,7 +10,7 @@ export const RECORD_CLIENT_LIMIT = 32;
 export const RECORD_CLIENT_IDLE_DAYS = 90;
 export const RECORD_PAGE_TOKEN_LIMIT = 512;
 export const recordSyncDiscovery = {
-  protocol_versions: [1, 2], device_checkpoints: true,
+  protocol_versions: [1, 2], extensions: ['bounded_snapshot_v1', 'chunked_v1'], device_checkpoints: true,
   additive_access: true, targeted_catchup: true, retention_policy: 'retain_downloaded',
   client_id_format: 'uuid', max_clients_per_actor_workspace: RECORD_CLIENT_LIMIT,
   max_page_tokens_per_client: RECORD_PAGE_TOKEN_LIMIT, page_token_idle_days: 7,
@@ -105,6 +106,7 @@ export async function retireRecordClient(input: RecordClientInput, db: Db = getD
 /** Full snapshot keyset ordering followed by delta handover; never compare just after. */
 async function stateDoesNotRegress(next: RecordSyncState, committed: RecordSyncState, sql: Db): Promise<boolean> {
   if (next.boundary !== committed.boundary) return false;
+  if ((committed.bounded && !next.bounded) || (committed.chunked && !next.chunked)) return false;
   // Equal journal positions may carry different historic catchup progress.
   if (BigInt(next.progress ?? '0') < BigInt(committed.progress ?? '0')) return false;
   if (BigInt(next.accessRevision ?? '0') < BigInt(committed.accessRevision ?? '0')) return false;
@@ -114,13 +116,15 @@ async function stateDoesNotRegress(next: RecordSyncState, committed: RecordSyncS
   const [order] = await sql`SELECT (${next.family}::text,${next.id}::text)>=(${committed.family}::text,${committed.id}::text) AS valid`;
   return order!.valid;
 }
-export async function acknowledgeRecordCheckpoint(input: RecordClientInput & { cursor: string; expectedRevision: string }, db: Db = getDb()): Promise<FlightDeckRecordCheckpoint> {
+export async function acknowledgeRecordCheckpoint(input: RecordClientInput & { cursor: string; expectedRevision: string; largeRecordReceipts?: unknown }, db: Db = getDb()): Promise<FlightDeckRecordCheckpoint> {
   if (typeof input.cursor !== 'string' || !uuid.test(input.cursor)) throw new RecordSyncError(400, 'invalid_cursor');
   if (typeof input.expectedRevision !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(input.expectedRevision)) throw new RecordSyncError(400, 'invalid_checkpoint_revision');
   return checkpointTransaction(input, async (sql, clock) => {
     const client = await requireRecordClient(input, clock.epoch, sql, true);
     // Lost-response retries remain idempotent after the disposable token is gone.
     if (client.checkpoint_cursor === input.cursor) {
+      // Already committed receipts remain idempotent after source/profile changes.
+      requireLargeRecordReceipts(client.checkpoint_state as RecordSyncState,input.largeRecordReceipts);
       await requireRecordHistory(input.workspaceId, client.checkpoint_state as RecordSyncState, clock, sql);
       const [renewed] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
         WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
@@ -134,6 +138,7 @@ export async function acknowledgeRecordCheckpoint(input: RecordClientInput & { c
     if (client.checkpoint_state && !await stateDoesNotRegress(token.state as RecordSyncState, client.checkpoint_state as RecordSyncState, sql)) {
       throw new RecordSyncError(409, 'checkpoint_regression');
     }
+    await validateLargeRecordReceipts(token.state as RecordSyncState,input,input.largeRecordReceipts,sql);
     await requireRecordHistory(input.workspaceId, token.state as RecordSyncState, clock, sql);
     const [saved] = await sql`UPDATE flightdeck_pg_record_clients SET checkpoint_cursor=${input.cursor},checkpoint_state=${sql.json(token.state)},
       revision=revision+1,last_active_at=clock_timestamp() WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}

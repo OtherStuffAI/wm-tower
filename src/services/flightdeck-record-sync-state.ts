@@ -1,5 +1,7 @@
+import type { LargeRecordState } from './flightdeck-record-large';
 /** Complete server-owned continuation, including convergent snapshot handover. */
 export type RecordSyncState = {
+  bounded?: boolean; chunked?: boolean; target?: string; targetComplete?: boolean; largeRecords?: LargeRecordState[];
   mode: 'snapshot' | 'delta'; boundary: string; after: string;
   family: string; id: string; snapshotId: string | null;
   /** Readable partition baseline, separate from ordinary journal position. */
