@@ -224,7 +224,17 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
     expect(payload).not.toContain('private_key');
   });
 
-  test('new workspace members are automatically assigned to Workspace group', async () => {
+  test('bootstrap and runtime repair preserve explicit Workspace scope revocations', async () => {
+    const input={towerServiceNpub:testNpub('revoked-tower'),workspaceServiceNpub:testNpub('revoked-workspace'),workspaceOwnerNpub:testNpub('revoked-owner'),appNpub:testNpub('revoked-app'),creatorNpub:testNpub('revoked-owner'),workspaceName:'Explicit revocation'};
+    const setup=await setupFlightDeckPgDevWorkspace(input,sql);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${setup.workspace_id} AND principal_group_id=${setup.groups.Workspace} AND resource_type='scope'`;
+    await setupFlightDeckPgDevWorkspace(input,sql);
+    const {ensureRuntimeSchema}=await import('../src/schema/ensure-runtime-schema');
+    await ensureRuntimeSchema(sql);
+    expect((await sql`SELECT 1 FROM flightdeck_pg_permission_grants WHERE workspace_id=${setup.workspace_id} AND principal_group_id=${setup.groups.Workspace} AND resource_type='scope' AND revoked_at IS NULL`).length).toBe(0);
+  });
+
+  test('new workspace members can log in without acquiring Workspace content grants', async () => {
     const setup = await setupFlightDeckPgDevWorkspace({
       towerServiceNpub: testNpub('fdpg-setup-tower-2'),
       workspaceServiceNpub: testNpub('fdpg-setup-workspace-2'),
@@ -250,16 +260,16 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
         AND group_id = ${setup.groups.Workspace}
         AND actor_id = ${workspaceOnly.id}
     `;
-    expect(Number(workspaceGroupMembership.count)).toBe(1);
+    expect(Number(workspaceGroupMembership.count)).toBe(0);
 
     const channels = await listVisibleFlightDeckPgChannels({
       workspaceId: setup.workspace_id,
       scopeId: setup.smoke.scope_id,
       actorId: workspaceOnly.id,
-      groupIds: [setup.groups.Workspace],
+      groupIds: [],
       limit: 20,
     }, sql);
-    expect(channels.map((channel) => channel.id)).toContain(setup.smoke.channel_id);
+    expect(channels).toEqual([]);
 
     const decision = await authorizeFlightDeckPgOperation({
       actorNpub: workspaceOnly.npub,
@@ -268,7 +278,8 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
       permission: 'channel.read',
       resource: { type: 'channel', channelId: setup.smoke.channel_id },
     }, sql);
-    expect(decision.allowed).toBe(true);
+    expect(decision.allowed).toBe(false);
+    expect((await authorizeFlightDeckPgOperation({ actorNpub: workspaceOnly.npub, appNpub: setup.app_npub, workspaceId: setup.workspace_id, permission: 'workspace.read', resource: { type: 'workspace' } }, sql)).allowed).toBe(true);
   });
 
   test('access levels expand to canonical channel permission bundles', () => {

@@ -124,3 +124,13 @@ Isolated acceptance: `RECORD_TEST_PORT=<dedicated-port> bun test
 ./tests/flightdeck-additive-record-access.test.ts ./tests/flightdeck-record-delta.test.ts
 ./tests/flightdeck-record-checkpoints.test.ts` after loading `.env.example`. The suites
 create/drop dedicated databases; they never write runtime workspaces.
+
+## Workspace admission and linked storage
+
+Workspace membership grants discovery/login separately from content-sharing
+groups. Member creation grants direct `workspace.read`; it does not implicitly
+join `Workspace`. Startup preserves existing explicit group memberships and
+never recreates a removed Workspace sharing-group membership. Scoped members
+need explicit scope/channel grants. Existing owner/admin sharing grants remain.
+Private typed storage metadata and bytes use the current linked channel ACL;
+legacy uploader/group grants do not bypass a linked typed resource's boundary.

@@ -90,7 +90,9 @@ describe.skipIf(!port || port===5432)('isolated personal order and lifecycle del
   for(const device of devices){const p=await readFlightDeckRecordPage({...device,protocolVersion:2},db);expect(p.mode).toBe('delta');expect(p.changes.map(r=>[r.family,r.operation])).toEqual([['scope','delete'],['channel','delete']]);}
   const after=await db`SELECT * FROM flightdeck_pg_record_clients WHERE workspace_id=${w} ORDER BY client_id`;expect(after.map(r=>r.checkpoint_cursor)).toEqual(before.map(r=>r.checkpoint_cursor));
   const cursor=await synced(b);await db`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${w} AND principal_actor_id=${b}`;
-  await expect(readFlightDeckRecordPage({workspaceId:w,actorId:b,cursor},db)).rejects.toMatchObject({status:409});
+  const revoked=await readFlightDeckRecordPage({workspaceId:w,actorId:b,cursor},db);
+  expect(revoked.mode).toBe('delta');
+  expect(revoked.changes).toEqual([]); // Revocation preserves the cursor and never returns forbidden content.
  });
  test('signed routes: two sessions plus offline reconnect use only scoped delta requests and private preference',async()=>{
   const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},'Route fixture','project') RETURNING id`;

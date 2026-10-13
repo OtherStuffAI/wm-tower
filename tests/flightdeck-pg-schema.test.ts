@@ -299,6 +299,8 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_resource_view_state_rollouts',
       'flightdeck_pg_resource_view_states',
       'flightdeck_pg_response_activities',
+      'flightdeck_pg_scope_order_mutations',
+      'flightdeck_pg_scope_orders',
       'flightdeck_pg_scopes',
       'flightdeck_pg_storage_links',
       'flightdeck_pg_task_assignment_ambiguities',
@@ -1207,7 +1209,7 @@ describe('Flight Deck PG schema foundation', () => {
     }, '23505');
   });
 
-  test('repairs standard groups, Workspace membership, Admins membership, and existing DM participant manage grants', async () => {
+  test('repairs standard groups and Admins without adding Workspace content membership', async () => {
     const [owner] = await sql<{ id: string }[]>`
       INSERT INTO flightdeck_pg_actors (npub, kind, display_name)
       VALUES ('npub1permission06owner', 'human', 'Permission 06 Owner')
@@ -1301,7 +1303,7 @@ describe('Flight Deck PG schema foundation', () => {
       WHERE gm.workspace_id = ${workspace.id}
         AND g.name = 'Workspace'
     `;
-    expect(Number(workspaceMembers.count)).toBe(3);
+    expect(Number(workspaceMembers.count)).toBe(0);
 
     const adminMembers = await sql<{ actor_id: string }[]>`
       SELECT gm.actor_id

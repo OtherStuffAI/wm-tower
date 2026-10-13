@@ -4600,7 +4600,7 @@ export function buildOpenApiDocument(origin: string) {
         post: {
           tags: ['Flight Deck PG'],
           summary: 'Add a typed Flight Deck PG workspace member',
-          description: 'Implemented PH1-5 runtime workspace membership creation. Authorizes workspace.invite against the workspace and creates membership only, without channel grants.',
+          description: 'Implemented PH1-5 runtime workspace membership creation. Authorizes workspace.invite and creates membership plus direct workspace.read for discovery/login. Does not implicitly join the Workspace sharing group or grant scope/channel content. Owner/admin membership also joins Admins. Existing group memberships are preserved.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
           ],

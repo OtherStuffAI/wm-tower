@@ -501,6 +501,59 @@ describe('Flight Deck PG API routes', () => {
     expect((await read(branchMessageId)).res.status).toBe(403);
   });
 
+  test('scope-only member keeps login and is isolated across snapshots deltas direct records and storage', async () => {
+    const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1scopeisolation');
+    await sql`DELETE FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`;
+    const base=`/api/v4/flightdeck-pg/workspaces/${workspaceId}`;
+    const invite=await requestJson(`${base}/members`,'POST',ownerSecret,{actor_npub:GROUP_MEMBER_NPUB,role:'member'});
+    expect(invite.res.status).toBe(201);
+    expect((await sql`SELECT 1 FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`).length).toBe(0);
+    expect((await requestJson(`${base}/me`,'GET',groupMemberSecret)).res.status).toBe(200);
+    const resources=[];
+    for(const name of ['MikeyProjects','Private']) {
+      const [scope]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},${name},'project') RETURNING id`;
+      const [channel]=await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope.id},${name}) RETURNING id`;
+      const [task]=await sql`INSERT INTO flightdeck_pg_tasks(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},${name},${ownerId},${ownerId}) RETURNING id`;
+      const [message]=await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},${name},${ownerId},${ownerId}) RETURNING id`;
+      const object=await createCompletedDocStorageObject({workspaceId,fileName:name,content:name});
+      const [file]=await sql`INSERT INTO flightdeck_pg_files(workspace_id,scope_id,channel_id,storage_object_id,display_name,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},${object.id},${name},${ownerId},${ownerId}) RETURNING id`;
+      await sql`INSERT INTO flightdeck_pg_storage_links(workspace_id,scope_id,channel_id,entity_type,entity_id,storage_object_id,created_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},'file',${file.id},${object.id},${ownerId})`;
+      for(const actor of name==='MikeyProjects'?[ownerId,groupMemberId]:[ownerId]) for(const permission of ['channel.read','task.read','doc.read','file.read','audio_note.read'])
+        await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${workspaceId},'actor',${actor},'channel',${channel.id},${permission})`;
+      if(name==='Private') await sql`UPDATE v4_storage_objects SET created_by_npub=${GROUP_MEMBER_NPUB} WHERE id=${object.id}`; // Uploader status cannot bypass the linked channel ACL.
+      resources.push({scope:scope.id,channel:channel.id,task:task.id,message:message.id,file:file.id,object:object.id,hash:object.sha256Hex});
+    }
+    const [allowed,denied]=resources;
+    for(const [resource,expected] of [[allowed,200],[denied,403]] as const) {
+      for(const suffix of [`tasks/${resource.task}`,`files/${resource.file}`,`files/${resource.file}/object`]) {
+        const res=await requestRaw(`${base}/${suffix}`,'GET',groupMemberSecret);
+        expect(res.res.status).toBe(expected);
+        expect((await requestRaw(`${base}/${suffix}`,'GET',ownerSecret)).res.status).toBe(200);
+      }
+      const res=await requestRaw(`/api/v4/storage/${resource.object}/content`,'GET',groupMemberSecret,{'x-flightdeck-pg-workspace-id':workspaceId,'x-flightdeck-pg-app-npub':APP_NPUB});
+      expect(res.res.status).toBe(expected===200?200:404);
+      expect((await requestRaw(`/${resource.hash}`,'GET',groupMemberSecret)).res.status).toBe(expected===200?200:404);
+      expect((await requestRaw(`/${resource.hash}`,'GET',ownerSecret)).res.status).toBe(200);
+      expect((await requestJson(`/api/v4/storage/${resource.object}`,'GET',groupMemberSecret,undefined,{'x-flightdeck-pg-workspace-id':workspaceId,'x-flightdeck-pg-app-npub':APP_NPUB})).res.status).toBe(expected===200?200:404);
+    }
+    let cursor='',more=true;const changes:any[]=[];
+    while(more) {
+      const p=await requestJson(`${base}/record-sync?protocol_version=1&limit=10${cursor?`&cursor=${cursor}`:''}`,'GET',groupMemberSecret);
+      expect(p.res.status).toBe(200);changes.push(...p.json.changes);cursor=p.json.next_cursor;more=p.json.has_more;
+    }
+    expect(changes.some(c=>c.id===allowed.message)).toBe(true);
+    expect(changes.some(c=>c.scope_id===denied.scope||c.row?.scope_id===denied.scope||c.id===denied.scope)).toBe(false);
+    for(const r of resources) await sql`UPDATE flightdeck_pg_messages SET body=body||' updated' WHERE id=${r.message}`;
+    const delta=await requestJson(`${base}/record-sync?protocol_version=1&cursor=${cursor}`,'GET',groupMemberSecret);
+    expect(delta.res.status).toBe(200);
+    expect(delta.json.changes.some((c:any)=>c.id===allowed.message)).toBe(true);
+    expect(delta.json.changes.some((c:any)=>c.id===denied.message)).toBe(false);
+    const legacy=await requestJson(`${base}/sync`,'GET',groupMemberSecret);
+    expect(legacy.res.status).toBe(200);
+    expect(JSON.stringify(legacy.json)).not.toContain(denied.message);
+    expect(JSON.stringify(legacy.json)).not.toContain(denied.file);
+  });
+
   test('restricted fresh record-sync resolves authors and assignees without directory access', async () => {
     const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1sidecarintegration');
     const [scope]=await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Sidecar','project') RETURNING id`;
@@ -4016,7 +4069,7 @@ describe('Flight Deck PG API routes', () => {
     expect(memberEventEntityIds).not.toContain(siblingDocId);
     expect(memberEventEntityIds).not.toContain(siblingAudioNoteId);
     expect(memberEventEntityIds).not.toContain(siblingReactionCreate.json.reaction.id);
-    expect(memberEvents.json.events.every((event: any) => [channelId, dmChannelId].includes(event.channel_id))).toBe(true);
+    expect(memberEvents.json.events.every((event: any) => event.channel_id === null || [channelId, dmChannelId].includes(event.channel_id))).toBe(true);
     expect(memberEvents.json.events.every((event: any) => event.cursor && event.event_id && event.timestamp && event.refetch)).toBe(true);
 
     const recordSyncPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/record-sync`;
@@ -4186,7 +4239,6 @@ describe('Flight Deck PG API routes', () => {
       INSERT INTO flightdeck_pg_permission_grants (
         workspace_id, principal_type, principal_actor_id, resource_type, permission, created_by_actor_id
       ) VALUES
-        (${workspaceId}, 'actor', ${manager.json.actor.actor_id}, 'workspace', 'workspace.read', ${ownerId}),
         (${workspaceId}, 'actor', ${manager.json.actor.actor_id}, 'workspace', 'event_subscription.manage', ${ownerId})
     `;
     expect(secondaryAgent.res.status).toBe(201);

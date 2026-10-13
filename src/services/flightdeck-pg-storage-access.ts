@@ -449,3 +449,17 @@ export async function resolveReadableFlightDeckPgBlossomObject(
   }
   return null;
 }
+
+/** A linked typed resource uses its current channel ACL, even for its uploader. */
+export async function hasFlightDeckPgStorageAuthority(storageObjectId: string, sql: DbClient = getDb()) {
+  const [row] = await sql`SELECT EXISTS (
+    SELECT 1 FROM flightdeck_pg_storage_links WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_docs WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_files WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_audio_notes WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_doc_versions WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_file_versions WHERE storage_object_id=${storageObjectId}
+    UNION ALL SELECT 1 FROM flightdeck_pg_doc_recovery_versions WHERE storage_object_id=${storageObjectId} OR head_storage_object_id=${storageObjectId}
+  ) AS linked`;
+  return row?.linked === true;
+}

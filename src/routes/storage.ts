@@ -13,13 +13,15 @@ import {
   writeStorageObject,
 } from '../services/storage';
 import type { CompleteStorageInput, PrepareStorageInput } from '../types';
-import { resolveReadableFlightDeckPgMessageAttachment } from '../services/flightdeck-pg-storage-access';
+import { resolveReadableFlightDeckPgBlossomObject, hasFlightDeckPgStorageAuthority } from '../services/flightdeck-pg-storage-access';
 
 export const storageRouter = new Hono();
 
 async function resolveReadablePrivateStorageObject(objectId: string, actorNpub: string) {
-  return await canAccessStorageObject(objectId, actorNpub)
-    ?? await resolveReadableFlightDeckPgMessageAttachment({ actorNpub, storageObjectId: objectId });
+  if (await hasFlightDeckPgStorageAuthority(objectId)) {
+    return resolveReadableFlightDeckPgBlossomObject({ actorNpub, storageObjectId: objectId });
+  }
+  return canAccessStorageObject(objectId, actorNpub);
 }
 
 storageRouter.post('/prepare', async (c) => {

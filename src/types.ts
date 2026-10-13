@@ -582,6 +582,7 @@ export interface FlightDeckPgContractFixture {
 }
 
 export type FlightDeckPgActorKind = 'human' | 'agent' | 'app' | 'service';
+/** Workspace membership permits login; content visibility requires explicit scope/channel or sharing-group grants. */
 export type FlightDeckPgWorkspaceRole = 'owner' | 'admin' | 'member' | 'guest' | 'agent' | 'app';
 
 export interface FlightDeckPgHostedSignupRequest {

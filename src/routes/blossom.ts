@@ -4,7 +4,7 @@ import { nip19, verifyEvent } from 'nostr-tools';
 import { getEffectiveRequestUrl, verifyNip98Auth } from '../auth';
 import { resolveWsKeyNpub } from '../services/user-workspace-keys';
 import { verifyStorageIdentity, openVerifiedStorageStream, hasActiveStorageReference, canAccessStorageObject, storageObjectsByHash } from '../services/storage';
-import { resolveReadableFlightDeckPgBlossomObject } from '../services/flightdeck-pg-storage-access';
+import { resolveReadableFlightDeckPgBlossomObject, hasFlightDeckPgStorageAuthority } from '../services/flightdeck-pg-storage-access';
 
 export const blossomRouter = new Hono();
 blossomRouter.use('/:blob', async (c, next) => {
@@ -60,7 +60,9 @@ blossomRouter.on(['GET', 'HEAD'], '/:blob', async (c, next) => {
   }
   for (const row of candidates) {
     const accessible = actor
-      ? await canAccessStorageObject(row.id, actor) ?? await resolveReadableFlightDeckPgBlossomObject({ actorNpub: actor, storageObjectId: row.id })
+      ? (await hasFlightDeckPgStorageAuthority(row.id)
+        ? await resolveReadableFlightDeckPgBlossomObject({ actorNpub: actor, storageObjectId: row.id })
+        : await canAccessStorageObject(row.id, actor))
       : await canAccessStorageObject(row.id, null) ?? (await hasBlossomPublication(row.id, hash) ? row : null);
     if (!accessible || !await hasActiveStorageReference(row.id)) continue;
     const verified = await verifyStorageIdentity(row);
