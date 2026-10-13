@@ -303,6 +303,19 @@ async function ensureGroupMembership(
   `;
 }
 
+async function ensureWorkspaceGroupBackfill(
+  sql: DbClient,
+  input: { workspaceId: string; workspaceGroupId: string; createdByActorId: string },
+): Promise<void> {
+  await sql`
+    INSERT INTO flightdeck_pg_group_memberships (workspace_id, group_id, actor_id, created_by_actor_id)
+    SELECT m.workspace_id, ${input.workspaceGroupId}, m.actor_id, ${input.createdByActorId}
+    FROM flightdeck_pg_workspace_memberships m
+    WHERE m.workspace_id = ${input.workspaceId}
+    ON CONFLICT (workspace_id, group_id, actor_id) DO NOTHING
+  `;
+}
+
 async function ensureScope(
   sql: DbClient,
   input: { workspaceId: string; name: string; createdByActorId: string; ownerGroupId: string },
@@ -597,6 +610,11 @@ export async function setupFlightDeckPgDevWorkspace(
     });
   }
 
+  await ensureWorkspaceGroupBackfill(sql, {
+    workspaceId: workspace.id,
+    workspaceGroupId: groups.Workspace.id,
+    createdByActorId: creator.id,
+  });
   await ensureGroupGrants(sql, {
     workspaceId: workspace.id,
     groups,

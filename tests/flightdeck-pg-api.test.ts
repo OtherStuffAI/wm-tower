@@ -507,7 +507,8 @@ describe('Flight Deck PG API routes', () => {
     const base=`/api/v4/flightdeck-pg/workspaces/${workspaceId}`;
     const invite=await requestJson(`${base}/members`,'POST',ownerSecret,{actor_npub:GROUP_MEMBER_NPUB,role:'member'});
     expect(invite.res.status).toBe(201);
-    expect((await sql`SELECT 1 FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`).length).toBe(0);
+    expect((await sql`SELECT 1 FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`).length).toBe(1);
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_group_id,resource_type,permission) SELECT ${workspaceId},'group',id,'workspace','workspace.read' FROM flightdeck_pg_groups WHERE workspace_id=${workspaceId} AND name='Workspace'`;
     expect((await requestJson(`${base}/me`,'GET',groupMemberSecret)).res.status).toBe(200);
     const resources=[];
     for(const name of ['MikeyProjects','Private']) {
@@ -518,12 +519,14 @@ describe('Flight Deck PG API routes', () => {
       const object=await createCompletedDocStorageObject({workspaceId,fileName:name,content:name});
       const [file]=await sql`INSERT INTO flightdeck_pg_files(workspace_id,scope_id,channel_id,storage_object_id,display_name,created_by_actor_id,updated_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},${object.id},${name},${ownerId},${ownerId}) RETURNING id`;
       await sql`INSERT INTO flightdeck_pg_storage_links(workspace_id,scope_id,channel_id,entity_type,entity_id,storage_object_id,created_by_actor_id) VALUES(${workspaceId},${scope.id},${channel.id},'file',${file.id},${object.id},${ownerId})`;
-      for(const actor of name==='MikeyProjects'?[ownerId,groupMemberId]:[ownerId]) for(const permission of ['channel.read','task.read','doc.read','file.read','audio_note.read'])
+      for(const actor of name==='MikeyProjects'?[ownerId,groupMemberId]:[ownerId]) for(const permission of ['channel.read','task.read','doc.read','file.read','audio_note.read','channel.write','task.create','task.update','task.comment','comment.create','doc.write','file.write','audio_note.write'])
         await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${workspaceId},'actor',${actor},'channel',${channel.id},${permission})`;
       if(name==='Private') await sql`UPDATE v4_storage_objects SET created_by_npub=${GROUP_MEMBER_NPUB} WHERE id=${object.id}`; // Uploader status cannot bypass the linked channel ACL.
       resources.push({scope:scope.id,channel:channel.id,task:task.id,message:message.id,file:file.id,object:object.id,hash:object.sha256Hex});
     }
     const [allowed,denied]=resources;
+    expect((await requestJson(`${base}/channels/${allowed.channel}/tasks`,'POST',groupMemberSecret,{title:'Scoped contributor creation'})).res.status).toBe(201);
+    expect((await requestJson(`${base}/channels/${denied.channel}/tasks`,'POST',groupMemberSecret,{title:'Forbidden contributor creation'})).res.status).toBe(403);
     for(const [resource,expected] of [[allowed,200],[denied,403]] as const) {
       for(const suffix of [`tasks/${resource.task}`,`files/${resource.file}`,`files/${resource.file}/object`]) {
         const res=await requestRaw(`${base}/${suffix}`,'GET',groupMemberSecret);
@@ -4239,6 +4242,7 @@ describe('Flight Deck PG API routes', () => {
       INSERT INTO flightdeck_pg_permission_grants (
         workspace_id, principal_type, principal_actor_id, resource_type, permission, created_by_actor_id
       ) VALUES
+        (${workspaceId}, 'actor', ${manager.json.actor.actor_id}, 'workspace', 'workspace.read', ${ownerId}),
         (${workspaceId}, 'actor', ${manager.json.actor.actor_id}, 'workspace', 'event_subscription.manage', ${ownerId})
     `;
     expect(secondaryAgent.res.status).toBe(201);

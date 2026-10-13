@@ -234,7 +234,7 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
     expect((await sql`SELECT 1 FROM flightdeck_pg_permission_grants WHERE workspace_id=${setup.workspace_id} AND principal_group_id=${setup.groups.Workspace} AND resource_type='scope' AND revoked_at IS NULL`).length).toBe(0);
   });
 
-  test('new workspace members can log in without acquiring Workspace content grants', async () => {
+  test('Workspace members retain login while unshared scopes remain inaccessible', async () => {
     const setup = await setupFlightDeckPgDevWorkspace({
       towerServiceNpub: testNpub('fdpg-setup-tower-2'),
       workspaceServiceNpub: testNpub('fdpg-setup-workspace-2'),
@@ -260,13 +260,14 @@ describe('Flight Deck PG setup workspace bootstrap', () => {
         AND group_id = ${setup.groups.Workspace}
         AND actor_id = ${workspaceOnly.id}
     `;
-    expect(Number(workspaceGroupMembership.count)).toBe(0);
+    expect(Number(workspaceGroupMembership.count)).toBe(1);
+    await sql`UPDATE flightdeck_pg_permission_grants SET revoked_at=now() WHERE workspace_id=${setup.workspace_id} AND principal_group_id=${setup.groups.Workspace} AND resource_type IN ('scope','channel')`;
 
     const channels = await listVisibleFlightDeckPgChannels({
       workspaceId: setup.workspace_id,
       scopeId: setup.smoke.scope_id,
       actorId: workspaceOnly.id,
-      groupIds: [],
+      groupIds: [setup.groups.Workspace],
       limit: 20,
     }, sql);
     expect(channels).toEqual([]);

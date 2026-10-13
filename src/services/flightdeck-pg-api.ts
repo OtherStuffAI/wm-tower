@@ -2336,13 +2336,13 @@ export async function createFlightDeckPgWorkspaceMember(
     DO UPDATE SET role = EXCLUDED.role
     RETURNING workspace_id, actor_id, role, created_at
   `;
-  // Membership permits workspace discovery/login only. Content-sharing groups
-  // must be selected explicitly; Workspace grants can span every scope.
   await sql`
-    INSERT INTO flightdeck_pg_permission_grants (
-      workspace_id, principal_type, principal_actor_id, resource_type, permission, created_by_actor_id
-    ) VALUES (${input.workspaceId}, 'actor', ${actor.id}, 'workspace', 'workspace.read', ${input.createdByActorId})
-    ON CONFLICT DO NOTHING
+    INSERT INTO flightdeck_pg_group_memberships (workspace_id, group_id, actor_id, created_by_actor_id)
+    SELECT ${input.workspaceId}, g.id, ${actor.id}, ${input.createdByActorId}
+    FROM flightdeck_pg_groups g
+    WHERE g.workspace_id = ${input.workspaceId}
+      AND g.name = 'Workspace'
+    ON CONFLICT (workspace_id, group_id, actor_id) DO NOTHING
   `;
   if (role === 'owner' || role === 'admin') {
     await sql`

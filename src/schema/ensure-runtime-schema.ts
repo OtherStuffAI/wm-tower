@@ -855,6 +855,29 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   `);
 
   await sql.unsafe(`
+    CREATE OR REPLACE FUNCTION flightdeck_pg_ensure_workspace_group_membership()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      workspace_group_id UUID;
+    BEGIN
+      SELECT id INTO workspace_group_id
+      FROM flightdeck_pg_groups
+      WHERE workspace_id = NEW.workspace_id
+        AND name = 'Workspace'
+      LIMIT 1;
+
+      IF workspace_group_id IS NOT NULL THEN
+        INSERT INTO flightdeck_pg_group_memberships (workspace_id, group_id, actor_id, created_by_actor_id)
+        VALUES (NEW.workspace_id, workspace_group_id, NEW.actor_id, NEW.created_by_actor_id)
+        ON CONFLICT (workspace_id, group_id, actor_id) DO NOTHING;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  await sql.unsafe(`
     DROP TRIGGER IF EXISTS trg_flightdeck_pg_default_groups ON flightdeck_pg_workspaces;
     CREATE TRIGGER trg_flightdeck_pg_default_groups
     AFTER INSERT ON flightdeck_pg_workspaces
@@ -863,7 +886,9 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
 
   await sql.unsafe(`
     DROP TRIGGER IF EXISTS trg_flightdeck_pg_workspace_group_membership ON flightdeck_pg_workspace_memberships;
-    -- Do not restore removed sharing-group memberships on restart.
+    CREATE TRIGGER trg_flightdeck_pg_workspace_group_membership
+    AFTER INSERT OR UPDATE OF actor_id ON flightdeck_pg_workspace_memberships
+    FOR EACH ROW EXECUTE FUNCTION flightdeck_pg_ensure_workspace_group_membership();
   `);
 
   await sql.unsafe(`
@@ -872,6 +897,16 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     FROM flightdeck_pg_workspaces w
     CROSS JOIN (VALUES ('Admins'), ('Agents'), ('People'), ('Workspace')) AS default_groups(group_name)
     ON CONFLICT (workspace_id, name) DO NOTHING
+  `);
+
+  await sql.unsafe(`
+    INSERT INTO flightdeck_pg_group_memberships (workspace_id, group_id, actor_id, created_by_actor_id)
+    SELECT m.workspace_id, g.id, m.actor_id, m.created_by_actor_id
+    FROM flightdeck_pg_workspace_memberships m
+    JOIN flightdeck_pg_groups g
+      ON g.workspace_id = m.workspace_id
+     AND g.name = 'Workspace'
+    ON CONFLICT (workspace_id, group_id, actor_id) DO NOTHING
   `);
 
   await sql.unsafe(`
@@ -1224,6 +1259,17 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
         ('Workspace')
     ) AS groups(name)
     ON CONFLICT (workspace_id, name) DO NOTHING
+  `);
+
+  await sql.unsafe(`
+    INSERT INTO flightdeck_pg_group_memberships (workspace_id, group_id, actor_id, created_by_actor_id)
+    SELECT m.workspace_id, g.id, m.actor_id, COALESCE(w.created_by_actor_id, m.created_by_actor_id, m.actor_id)
+    FROM flightdeck_pg_workspace_memberships m
+    JOIN flightdeck_pg_workspaces w ON w.id = m.workspace_id
+    JOIN flightdeck_pg_groups g
+      ON g.workspace_id = m.workspace_id
+      AND g.name = 'Workspace'
+    ON CONFLICT (workspace_id, group_id, actor_id) DO NOTHING
   `);
 
   await sql.unsafe(`

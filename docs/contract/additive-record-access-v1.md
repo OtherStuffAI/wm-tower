@@ -127,10 +127,12 @@ create/drop dedicated databases; they never write runtime workspaces.
 
 ## Workspace admission and linked storage
 
-Workspace membership grants discovery/login separately from content-sharing
-groups. Member creation grants direct `workspace.read`; it does not implicitly
-join `Workspace`. Startup preserves existing explicit group memberships and
-never recreates a removed Workspace sharing-group membership. Scoped members
-need explicit scope/channel grants. Existing owner/admin sharing grants remain.
+Every workspace member belongs to the system `Workspace` group. Its
+`workspace.read` grant permits discovery/login. Membership does not create any
+scope/channel content grants. Remove sharing at the explicit scope/channel
+grant boundary when a member should see only a subset of the workspace.
+Startup/bootstrap preserve explicit grant revocations, including the default
+DMs scope grant. Existing owner/admin and other explicit grants remain intact.
 Private typed storage metadata and bytes use the current linked channel ACL;
 legacy uploader/group grants do not bypass a linked typed resource's boundary.
+Previously authorized downloads and cursor continuity remain preserved.
