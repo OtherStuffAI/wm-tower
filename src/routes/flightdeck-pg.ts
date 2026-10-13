@@ -1,3 +1,4 @@
+import { traceFlightDeckRecordPage } from '../services/flightdeck-record-trace';
 import { readLargeRecordChunk } from '../services/flightdeck-record-large';
 import { readScopeOrder, writeScopeOrder } from '../services/scope-order';
 import { registerOrgDataRoutes } from './org-data';
@@ -2211,9 +2212,13 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {
   try {
     const input = { workspaceId: result.context.workspace.id, actorId: result.context.actor.id,
       extension:c.req.query('extension'), largeRecords:c.req.query('large_records'), cursor: c.req.query('cursor'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')) };
-    return c.json(version === '2'
+    const page = version === '2'
       ? await readFlightDeckRecordPage({ ...input, protocolVersion: 2, clientId: c.req.query('client_id')! })
-      : await readFlightDeckRecordPage(input));
+      : await readFlightDeckRecordPage(input);
+    traceFlightDeckRecordPage({ requestUrl: getEffectiveRequestUrl(c.req.raw).toString(),
+      signerNpub: auth.signerNpub, actorNpub: auth.userNpub, actorId: result.context.actor.id,
+      workspaceId: result.context.workspace.id, page });
+    return c.json(page);
   } catch (error) { return recordSyncErrorResponse(c, error, version === '2' ? 2 : 1); }
 });
 
@@ -3090,6 +3095,21 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/events/stream', async (c) => {
         if (closed || inFlight) return;
         inFlight = true;
         try {
+          // A connection is not an authority snapshot. Group edges, membership
+          // and login grants can change while this stream remains open.
+          const currentContext = await resolveFlightDeckPgRequestContext({
+            workspaceId: context.workspace.id, actorNpub: auth.userNpub,
+          });
+          const currentRead = await authorizeFlightDeckPgOperation({
+            actorNpub: auth.userNpub, appNpub: context.workspace.app_npub,
+            workspaceId: context.workspace.id, permission: 'workspace.read', resource: { type: 'workspace' },
+          });
+          if (!currentContext.membership || (workspaceReadDecision.allowed && !currentRead.allowed)) {
+            controller.enqueue(encodeSseFrame({ event: 'flightdeck_pg.error', data: { error: 'workspace_access_revoked' } }));
+            close();
+            controller.close();
+            return;
+          }
           if (initialAudience) {
             const manageDecision = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'event_subscription.manage', resource: { type: 'workspace' } });
             if (!manageDecision.allowed) {
@@ -3122,7 +3142,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/events/stream', async (c) => {
             : null;
           const events = unionPage
             ? unionPage.events
-            : (await listVisibleFlightDeckPgEvents({ workspaceId: context.workspace.id, actorId: context.actor.id, groupIds: context.groupIds, afterRowVersion, limit, includeWorkspaceEvents: workspaceReadDecision.allowed }))
+            : (await listVisibleFlightDeckPgEvents({ workspaceId: context.workspace.id, actorId: context.actor.id, groupIds: currentContext.groupIds, afterRowVersion, limit, includeWorkspaceEvents: currentRead.allowed }))
               .map((event) => ({ event, visibleToAgentNpubs: [] }));
           for (const { event: row, visibleToAgentNpubs } of events) {
             if (closed) return;

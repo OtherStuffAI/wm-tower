@@ -501,6 +501,49 @@ describe('Flight Deck PG API routes', () => {
     expect((await read(branchMessageId)).res.status).toBe(403);
   });
 
+  test('open HTTP SSE refreshes group membership and closes after workspace revocation', async () => {
+    const { workspaceId, ownerId, groupMemberId, groupId } = await seedWorkspace('npub1livestreamrevocation');
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,permission)
+      VALUES(${workspaceId},'actor',${groupMemberId},'workspace','workspace.read')`;
+    const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Stream','project') RETURNING id`;
+    const channels = [];
+    for (const name of ['Group only', 'Direct']) {
+      const [channel] = await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope.id},${name}) RETURNING id`;
+      channels.push(channel.id);
+    }
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_group_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'group',${groupId},'channel',${channels[0]},'channel.read')`;
+    await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+      VALUES(${workspaceId},'actor',${groupMemberId},'channel',${channels[1]},'channel.read')`;
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: app.fetch });
+    const abort = new AbortController();
+    const url = `http://127.0.0.1:${server.port}/api/v4/flightdeck-pg/workspaces/${workspaceId}/events/stream`;
+    const event = finalizeEvent({kind:27235,created_at:Math.floor(Date.now()/1000),tags:[['u',url],['method','GET']],content:''},groupMemberSecret);
+    try {
+      const response = await fetch(url,{signal:abort.signal,headers:{Authorization:`Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`}});
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: connected');
+      // Let the initial empty poll finish before changing authority.
+      await new Promise(resolve => setTimeout(resolve, 150));
+      await sql`DELETE FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId} AND group_id=${groupId}`;
+      const hiddenId = randomUUID(), visibleId = randomUUID();
+      for (const [channel,id] of [[channels[0],hiddenId],[channels[1],visibleId]]) await sql`INSERT INTO flightdeck_pg_outbox_events(workspace_id,scope_id,channel_id,actor_id,event_type,entity_type,entity_id,operation)
+        VALUES(${workspaceId},${scope.id},${channel},${ownerId},'flightdeck_pg.message.created','message',${id},'create')`;
+      let text = '';
+      while (!text.includes(visibleId)) {
+        const read = await Promise.race([reader.read(),new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('SSE poll timeout')),3000))]);
+        if (read.done) throw new Error('Stream ended before visible event');
+        text += new TextDecoder().decode(read.value);
+      }
+      expect(text).not.toContain(hiddenId);
+      await sql`DELETE FROM flightdeck_pg_workspace_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`;
+      const revoked = await Promise.race([reader.read(),new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Revocation timeout')),3000))]);
+      expect(new TextDecoder().decode(revoked.value)).toContain('workspace_access_revoked');
+      expect((await reader.read()).done).toBe(true);
+    } finally { abort.abort();server.stop(true); }
+  }, 10000);
+
   test('scope-only member keeps login and is isolated across snapshots deltas direct records and storage', async () => {
     const {workspaceId,ownerId,groupMemberId}=await seedWorkspace('npub1scopeisolation');
     await sql`DELETE FROM flightdeck_pg_group_memberships WHERE workspace_id=${workspaceId} AND actor_id=${groupMemberId}`;
