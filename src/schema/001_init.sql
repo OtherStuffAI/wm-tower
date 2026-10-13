@@ -4293,10 +4293,16 @@ DO $$ BEGIN
    flightdeck_pg_workspace_memberships,flightdeck_pg_actors,flightdeck_pg_scopes,flightdeck_pg_channels,
    flightdeck_pg_workspaces IN SHARE ROW EXCLUSIVE MODE;
  LOCK TABLE flightdeck_pg_record_clock IN SHARE ROW EXCLUSIVE MODE;
- UPDATE flightdeck_pg_record_current c SET position=COALESCE((
-   SELECT max(j.position) FROM flightdeck_pg_record_journal j
-   WHERE j.workspace_id=c.workspace_id AND j.family=c.family AND j.id=c.id
- ),0) WHERE c.position=0;
+ -- Aggregate once rather than rescanning the journal for every zero-position
+ -- row. Missing/pruned history stays at zero without rewriting those rows on
+ -- every startup; existing nonzero positions remain authoritative.
+ UPDATE flightdeck_pg_record_current c SET position=j.position
+ FROM (
+   SELECT workspace_id,family,id,max(position) AS position
+   FROM flightdeck_pg_record_journal GROUP BY workspace_id,family,id
+ ) j
+ WHERE c.position=0 AND c.workspace_id=j.workspace_id
+   AND c.family=j.family AND c.id=j.id AND j.position<>0;
  UPDATE flightdeck_pg_record_cursors c SET state=state||jsonb_build_object(
    'access',flightdeck_pg_record_access(c.workspace_id,c.actor_id),'accessRevision',k.access_revision::text,'progress','0')
  FROM flightdeck_pg_record_clock k WHERE k.workspace_id=c.workspace_id AND NOT c.state ? 'access';
