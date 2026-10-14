@@ -356,6 +356,8 @@ export interface CreateWappDbTableRowInput {
 }
 
 export interface UpdateWappDbTableRowInput {
+  /** Optional atomic predicates, evaluated in the UPDATE statement. No match returns 409. */
+  where?: Record<string, Record<string, unknown>>;
   set: Record<string, unknown>;
 }
 

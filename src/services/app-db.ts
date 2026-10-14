@@ -667,9 +667,12 @@ export async function updateWappDbTableRow(
   const params = entries.map(([, value]) => sqlValue(value));
   const assignments = entries.map(([field], index) => `${quoteIdent(normalizeIdentifier(field, 'field'))} = $${index + 1}`);
   params.push(id);
-  const query = `UPDATE ${quoteIdent(namespace.schema_name)}.${quoteIdent(table)} SET ${assignments.join(', ')} WHERE "id" = $${params.length} RETURNING *`;
+  const idParameter = params.length;
+  const predicate = input.where === undefined ? '' : buildWhereClause({ where: input.where }, params).replace(/^WHERE /, ' AND ');
+  const query = `UPDATE ${quoteIdent(namespace.schema_name)}.${quoteIdent(table)} SET ${assignments.join(', ')} WHERE "id" = $${idParameter}${predicate} RETURNING *`;
   try {
     const [row] = await sql.unsafe(query, params);
+    if (!row && input.where !== undefined) throw new AppDbError('row_conflict', 409, 'conditional update did not match');
     return { workspace_owner_npub: workspaceOwnerNpub, app_npub: appNpub, schema_name: namespace.schema_name, table, row: row || null };
   } catch (error) {
     const code = typeof error === 'object' && error && 'code' in error ? String((error as any).code) : '';

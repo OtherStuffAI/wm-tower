@@ -466,6 +466,31 @@ describe('Workspace app DB API', () => {
     expect(conflictRes.status).toBe(409);
   });
 
+  test('conditionally updates once under competing writers and rejects stale predicates', async () => {
+    const base = `/api/v4/workspaces/${encodeURIComponent(OWNER)}/apps/${encodeURIComponent(APP_NPUB)}/db/tables/companies/rows`;
+    const create = { id: 'cas_company', data: { name: 'CAS fixture', status: 'original', profile: {} } };
+    const created = await app.request(base, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authHeader(base, 'POST', appSecret, create) }, body: JSON.stringify(create),
+    });
+    expect(created.status).toBe(201);
+    const path = `${base}/cas_company`;
+    const patch = (status: string, where: Record<string, Record<string, unknown>>) => {
+      const body = { set: { status }, where };
+      return app.request(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: authHeader(path, 'PATCH', appSecret, body) }, body: JSON.stringify(body) });
+    };
+    const results = await Promise.all([patch('first', { status: { eq: 'original' } }), patch('second', { status: { eq: 'original' } })]);
+    expect(results.map(r => r.status).sort()).toEqual([200, 409]);
+    const winner = await results.find(r => r.status === 200)!.json();
+    const stale = await patch('overwrite', { status: { eq: 'original' } });
+    expect(stale.status).toBe(409);
+    expect((await stale.json()).code).toBe('row_conflict');
+    const saved = await app.request(path, { headers: { Authorization: authHeader(path, 'GET', appSecret) } });
+    expect((await saved.json()).row.status).toBe(winner.row.status);
+    expect((await patch('bad', { 'status; DROP TABLE companies': { eq: 'original' } })).status).toBe(400);
+    expect((await patch('bad', { status: { unsafe: 'original' } })).status).toBe(400);
+    expect((await patch('bad', { name: { eq: "' OR true --" } })).status).toBe(409);
+  });
+
   test('performs app-signed relational CRUD and constrained query without breaking JSONB rows', async () => {
     const rowsPath = `/api/v4/workspaces/${encodeURIComponent(OWNER)}/apps/${encodeURIComponent(APP_NPUB)}/db/tables/companies/rows`;
     const createBody = {

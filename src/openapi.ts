@@ -7117,6 +7117,7 @@ export function buildOpenApiDocument(origin: string) {
         patch: {
           tags: ['Workspace App DB'],
           summary: 'Patch one WApp table row by id',
+          description: 'Optional where predicates use the constrained query operators and are checked atomically with the update. A predicate mismatch returns 409; omit where to retain unconditional update behavior.',
           parameters: [
             { name: 'workspaceOwnerNpub', in: 'path', required: true, schema: { type: 'string' } },
             { name: 'appNpub', in: 'path', required: true, schema: { type: 'string' } },
@@ -7125,10 +7126,11 @@ export function buildOpenApiDocument(origin: string) {
           ],
           requestBody: {
             required: true,
-            content: { 'application/json': { schema: { type: 'object', properties: { set: { type: 'object', additionalProperties: true } }, required: ['set'] } } },
+            content: { 'application/json': { schema: { type: 'object', properties: { set: { type: 'object', additionalProperties: true }, where: { type: 'object', additionalProperties: { type: 'object', minProperties: 1, maxProperties: 1 }, description: 'Atomic field predicates, using the same operators as table queries.' } }, required: ['set'] } } },
           },
           responses: {
             '200': { description: 'Updated row', content: { 'application/json': { schema: { type: 'object' } } } },
+            '409': { description: 'Conditional update did not match; read current data before retrying', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
             '404': { description: 'Row not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
           },
         },
