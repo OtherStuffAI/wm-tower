@@ -1,14 +1,14 @@
-import { startHostingBillingRunner } from './services/hosting-billing';
 import { ensureServiceIdentity } from './service-identity';
 import { startFipsIngress } from './fips-ingress';
 
 const identity = await ensureServiceIdentity();
 
-const [{ createApp }, { config }, { getDb }, { ensureRuntimeSchema }] = await Promise.all([
+const [{ createApp }, { config }, { getDb }, { ensureRuntimeSchema }, { startHostingBillingRunner }] = await Promise.all([
   import('./server'),
   import('./config'),
   import('./db'),
   import('./schema/ensure-runtime-schema'),
+  import('./services/hosting-billing'),
 ]);
 
 const app = createApp();
