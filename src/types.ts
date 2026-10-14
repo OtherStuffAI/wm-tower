@@ -3094,3 +3094,10 @@ export interface HostingAdminGrantRequest { amount_cents: number; idempotency_ke
 export interface HostingUsageHour { workspace_id: string; account_id: string; hour: string; status: 'charged' | 'unavailable' | 'missed' | 'partial_hour'; bytes: string | null; debit_units: string; evidence: WorkspaceStorageUsage | { reason: string }; }
 export interface HostingLedgerEntry { id: string; account_id: string; workspace_id: string | null; kind: 'welcome' | 'usage' | 'admin' | 'stripe' | 'promo_expiry'; amount_units: string; paid_after_units: string; promo_after_units: string; idempotency_key: string; reason: string; actor_npub: string | null; created_at: string; }
 export interface HostingBillingStatus { can_top_up?: boolean; version: 1; billing_mode: 'usd_prepaid'; workspace_id: string; account_id: string; currency: 'USD'; tariff: HostingBillingTariff; balance_units: string; balance_usd: string; promo_units: string; promo_usd: string; promo_expires_at: string; paid_usd: string; billing_state: 'active' | 'read_only_grace' | 'measurement_pending'; depleted_at: string | null; grace_ends_at: string | null; hourly_burn_usd: string | null; estimated_runout_at: string | null; coverage: 'objects_and_logical_pg_rows'; measurements: HostingUsageHour[]; stripe: { configured: boolean; mode: string; live_rollout_blocked: boolean }; }
+
+/** Actor/workspace personal selection; false rows are durable unpin tombstones. */
+export interface FlightDeckPgThreadPin {
+ id: string; workspace_id: string; actor_id: string; thread_id: string;
+ channel_id: string | null; root_record_id: string | null; pinned: boolean;
+ pinned_at: string | null; row_version: number; updated_at: string;
+}

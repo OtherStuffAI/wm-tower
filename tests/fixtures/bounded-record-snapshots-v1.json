@@ -25,7 +25,8 @@
       "feed_subscription",
       "feed_item_state",
       "context_component",
-      "context_reference"
+      "context_reference",
+      "thread_pin"
     ],
     "mode": "delta",
     "changes": [],
@@ -177,7 +178,7 @@
       }
     ],
     "body_repeat": {
-      "character": "€",
+      "character": "\u20ac",
       "count": 400000
     },
     "serialization": "JSON.stringify({change,actors}) with existing property order"

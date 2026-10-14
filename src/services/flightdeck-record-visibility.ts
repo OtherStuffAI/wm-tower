@@ -18,7 +18,7 @@ export function recordVisibility(workspaceId: string, actorId: string, viewer: {
     }
     async function visible(e: RecordEntry): Promise<boolean> {
       const r = e.row;
-      if (e.family === 'scope_order') return r.actor_id === actorId;
+      if (['scope_order','thread_pin'].includes(e.family)) return r.actor_id === actorId;
       // A lifecycle tombstone carries identifiers only. Current grants still
       // authorize delivery after archival; revoked grants/membership are checked on every page.
       if (e.operation === 'delete' && ['scope','channel'].includes(e.family)) {

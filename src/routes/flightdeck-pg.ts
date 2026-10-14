@@ -1,3 +1,4 @@
+import { mutateThreadPin, ThreadPinError } from '../services/thread-pins';
 import { traceFlightDeckRecordPage } from '../services/flightdeck-record-trace';
 import { readLargeRecordChunk } from '../services/flightdeck-record-large';
 import { readScopeOrder, writeScopeOrder } from '../services/scope-order';
@@ -1761,6 +1762,22 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/me', async (c) => {
       channels: channels.map(serializeFlightDeckPgChannel),
     },
   });
+});
+
+flightDeckPgRouter.put('/workspaces/:workspaceId/me/thread-pins/:threadId', async (c) => {
+  c.header('Cache-Control','private, no-store');
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  try {
+    const raw = await c.req.text();
+    if (Buffer.byteLength(raw)>4096) throw new ThreadPinError(400,'invalid_thread_pin');
+    const pin = await mutateThreadPin(result.context.workspace.id,result.context.actor.id,c.req.param('threadId'),JSON.parse(raw));
+    return c.json({identity:result.identity,pin});
+  } catch (error) {
+    if (error instanceof ThreadPinError) return jsonError(c,error.status,error.code,error.code,result.identity);
+    if (error instanceof SyntaxError) return jsonError(c,400,'invalid_thread_pin','Invalid JSON',result.identity);
+    throw error;
+  }
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/me/scope-order', async (c) => {

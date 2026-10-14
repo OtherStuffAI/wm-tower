@@ -21,7 +21,8 @@ export async function seedBoundedRecordWorkload(sql:ReturnType<typeof postgres>,
   }
   for(const [family,suffix] of Object.entries(recordFamilies)){
     if(family==='message')continue;
-    const template=family==='scope_order'?{workspace_id:c.workspaceId,actor_id:c.actorId,scope_ids:[c.scopeId],row_version:1,updated_at:'2026-01-01T00:00:00Z'}
+    const template=family==='thread_pin'?{id:c.actorId,workspace_id:c.workspaceId,actor_id:c.actorId,thread_id:c.actorId,pinned:true,pinned_at:'2026-01-01T00:00:00Z',row_version:1,updated_at:'2026-01-01T00:00:00Z'}
+      :family==='scope_order'?{workspace_id:c.workspaceId,actor_id:c.actorId,scope_ids:[c.scopeId],row_version:1,updated_at:'2026-01-01T00:00:00Z'}
       :family==='context_component'?context.components[0]:family==='context_reference'?context.references[0]:canonical.find((r:any)=>r.family===family).row;
     const table=`flightdeck_pg_${suffix}`;
     if(['doc','file','audio_note'].includes(family))for(let start=0;start<count;start+=1000)await sql`INSERT INTO v4_storage_objects(id,owner_npub,created_by_npub,file_name,content_type,storage_path)
@@ -44,7 +45,7 @@ export async function seedBoundedRecordWorkload(sql:ReturnType<typeof postgres>,
           'source_key',jsonb_build_array('public','https://example.test/fixture/'||i::text),
           'component_id',md5('context_component'||i::text)::uuid,'target_type','task','target_id',md5('task'||i::text)::uuid,
           'target',jsonb_build_object('record_id',md5('task'||i::text)::uuid)) ||
-        jsonb_build_object('deleted_by_actor_id',NULL,'archived_by_actor_id',NULL,'thread_id',NULL,'parent_thread_id',NULL,'source_message_id',NULL,'branch_point_message_id',NULL,
+        jsonb_build_object('deleted_by_actor_id',NULL,'archived_by_actor_id',NULL,'thread_id',CASE WHEN ${family}='thread_pin' THEN md5('thread'||i::text)::uuid ELSE NULL END,'parent_thread_id',NULL,'source_message_id',NULL,'branch_point_message_id',NULL,
           'parent_id',NULL,'parent_folder_id',NULL,'folder_id',NULL,'parent_comment_id',NULL,'current_version_id',NULL,'owner_group_id',NULL,
           'default_channel_id',NULL,'wapp_installation_id',NULL,'client_request_id',NULL,'client_request_hash',NULL,'viewed_activity_version',0))).*
         FROM generate_series(${start}::int,${Math.min(start+999,count-1)}::int) i ON CONFLICT DO NOTHING`;
