@@ -26,7 +26,7 @@
       "feed_item_state",
       "context_component",
       "context_reference",
-      "thread_pin"
+      "personal_pin"
     ],
     "mode": "delta",
     "changes": [],

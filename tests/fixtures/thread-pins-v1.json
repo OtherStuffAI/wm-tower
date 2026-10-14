@@ -9,6 +9,8 @@
     "pinned": false,
     "pinned_at": null,
     "row_version": 2,
-    "updated_at": "2026-10-14T00:00:00Z"
+    "updated_at": "2026-10-14T00:00:00Z",
+    "resource_type": "thread",
+    "resource_id": "30000000-0000-4000-8000-000000000001"
   }
 }

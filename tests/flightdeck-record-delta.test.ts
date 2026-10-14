@@ -72,7 +72,7 @@ test('every advertised family has all-mutation trigger and complete canonical fi
     expect(Number(trigger!.tgtype)&(4|8|16)).toBe(4|8|16);
     const columns=await db`SELECT column_name FROM information_schema.columns WHERE table_name=${`flightdeck_pg_${table}`}`;
     const context=JSON.parse(readFileSync(new URL('./fixtures/context-record-delta-v1.json',import.meta.url),'utf8'));
-    const fixture=family==='thread_pin' ? {row:JSON.parse(readFileSync(new URL('./fixtures/thread-pins-v1.json',import.meta.url),'utf8')).pin} : family==='scope_order' ? {row:{workspace_id:workspaceId,actor_id:actorId,scope_ids:[],row_version:0,updated_at:null}} : family.startsWith('context_') ? {row:context[family==='context_component'?'components':'references'][0]} : fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
+    const fixture=family==='personal_pin' ? {row:JSON.parse(readFileSync(new URL('./fixtures/thread-pins-v1.json',import.meta.url),'utf8')).pin} : family==='scope_order' ? {row:{workspace_id:workspaceId,actor_id:actorId,scope_ids:[],row_version:0,updated_at:null}} : family.startsWith('context_') ? {row:context[family==='context_component'?'components':'references'][0]} : fixtures.canonical_upserts.changes.find((c:any)=>c.family===family);
     expect(Object.keys(fixture.row).sort()).toEqual(columns.map(c=>c.column_name).sort());
   }
 });

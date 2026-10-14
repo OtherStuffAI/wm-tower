@@ -21,7 +21,7 @@ export async function seedBoundedRecordWorkload(sql:ReturnType<typeof postgres>,
   }
   for(const [family,suffix] of Object.entries(recordFamilies)){
     if(family==='message')continue;
-    const template=family==='thread_pin'?{id:c.actorId,workspace_id:c.workspaceId,actor_id:c.actorId,thread_id:c.actorId,pinned:true,pinned_at:'2026-01-01T00:00:00Z',row_version:1,updated_at:'2026-01-01T00:00:00Z'}
+    const template=family==='personal_pin'?{id:c.actorId,workspace_id:c.workspaceId,actor_id:c.actorId,resource_type:'thread',resource_id:c.actorId,thread_id:c.actorId,pinned:true,pinned_at:'2026-01-01T00:00:00Z',row_version:1,updated_at:'2026-01-01T00:00:00Z'}
       :family==='scope_order'?{workspace_id:c.workspaceId,actor_id:c.actorId,scope_ids:[c.scopeId],row_version:1,updated_at:'2026-01-01T00:00:00Z'}
       :family==='context_component'?context.components[0]:family==='context_reference'?context.references[0]:canonical.find((r:any)=>r.family===family).row;
     const table=`flightdeck_pg_${suffix}`;

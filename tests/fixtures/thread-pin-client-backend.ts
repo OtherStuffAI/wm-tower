@@ -31,9 +31,15 @@ const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) 
 const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${w},${scope!.id},'Fixture') RETURNING id`;
 await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${channel!.id},'channel.read')`;
 const threads=await db`INSERT INTO flightdeck_pg_threads(workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id) VALUES(${w},${scope!.id},${channel!.id},'First',${a},${a}),(${w},${scope!.id},${channel!.id},'Second',${a},${a}),(${w},${scope!.id},${channel!.id},'Third',${a},${a}) RETURNING id`;
+for(const permission of ['task.read','doc.read'])await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${channel!.id},${permission})`;
+const [task]=await db`INSERT INTO flightdeck_pg_tasks(id,workspace_id,scope_id,channel_id,title,created_by_actor_id,updated_by_actor_id) VALUES(${threads[2]!.id},${w},${scope!.id},${channel!.id},'Pinned task',${a},${a}) RETURNING id`;
+const [object]=await db`INSERT INTO v4_storage_objects(owner_npub,created_by_npub,file_name,content_type,storage_path) VALUES('owner','creator','fixture.txt','text/plain','pin-fixture') RETURNING id`;
+const [doc]=await db`INSERT INTO flightdeck_pg_docs(id,workspace_id,scope_id,channel_id,storage_object_id,title,created_by_actor_id,updated_by_actor_id) VALUES(${threads[2]!.id},${w},${scope!.id},${channel!.id},${object!.id},'Pinned document',${a},${a}) RETURNING id`;
+const [otherWorkspace]=await db`INSERT INTO flightdeck_pg_workspaces(tower_service_npub,workspace_service_npub,workspace_owner_npub,app_npub,name) VALUES('tower','other-service',${npubs[0]!},${npubs[0]!},'Other workspace') RETURNING id`;
+await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${otherWorkspace!.id},${a},'member')`;
 setDb(db);
 const app=createApp(),server=Bun.serve({hostname:'127.0.0.1',port:0,fetch:app.fetch});
-console.log(JSON.stringify({ready:true,baseUrl:`http://127.0.0.1:${server.port}`,workspaceId:w,actorIds:actors.map(r=>r.id),npubs,channelId:channel!.id,threadIds:threads.map(r=>r.id)}));
+console.log(JSON.stringify({ready:true,baseUrl:`http://127.0.0.1:${server.port}`,workspaceId:w,actorIds:actors.map(r=>r.id),npubs,channelId:channel!.id,threadIds:threads.map(r=>r.id),taskId:task!.id,documentId:doc!.id,otherWorkspaceId:otherWorkspace!.id}));
 let done=false;
 async function cleanup(){if(done)return;done=true;server.stop(true);await db.end();const connAdmin=postgres({...conn,database:'postgres'});await connAdmin.unsafe(`DROP DATABASE IF EXISTS ${name}`);await connAdmin.end();process.exit(0);}
 const lines=createInterface({input:process.stdin});

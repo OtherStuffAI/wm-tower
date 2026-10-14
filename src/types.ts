@@ -3096,8 +3096,11 @@ export interface HostingLedgerEntry { id: string; account_id: string; workspace_
 export interface HostingBillingStatus { can_top_up?: boolean; version: 1; billing_mode: 'usd_prepaid'; workspace_id: string; account_id: string; currency: 'USD'; tariff: HostingBillingTariff; balance_units: string; balance_usd: string; promo_units: string; promo_usd: string; promo_expires_at: string; paid_usd: string; billing_state: 'active' | 'read_only_grace' | 'measurement_pending'; depleted_at: string | null; grace_ends_at: string | null; hourly_burn_usd: string | null; estimated_runout_at: string | null; coverage: 'objects_and_logical_pg_rows'; measurements: HostingUsageHour[]; stripe: { configured: boolean; mode: string; live_rollout_blocked: boolean }; }
 
 /** Actor/workspace personal selection; false rows are durable unpin tombstones. */
-export interface FlightDeckPgThreadPin {
- id: string; workspace_id: string; actor_id: string; thread_id: string;
+export interface FlightDeckPgPersonalPin {
+ id: string; workspace_id: string; actor_id: string; thread_id: string | null;
+ resource_type: 'thread' | 'task' | 'document'; resource_id: string;
  channel_id: string | null; root_record_id: string | null; pinned: boolean;
  pinned_at: string | null; row_version: number; updated_at: string;
 }
+
+export type FlightDeckPgThreadPin = FlightDeckPgPersonalPin;

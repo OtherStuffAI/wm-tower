@@ -1,25 +1,29 @@
-# Personal thread pins v1
+# Personal pins v1
 
-Personal thread selections synchronize for the authenticated actor in one
+Personal thread, task and document selections synchronize for the authenticated actor in one
 workspace. Tower owns state; Ambulando owns its Dexie projection and UI. This
 adds a typed operation rather than extending unrelated resource view states,
 notification preferences, personal agent settings or WApp preferences.
 
-`PUT /api/v4/flightdeck-pg/workspaces/:workspaceId/me/thread-pins/:threadId`
+`PUT /api/v4/flightdeck-pg/workspaces/:workspaceId/me/pins/:resourceType/:resourceId`
+(`resourceType` is `thread`, `task` or `document`). The thread checkpoint route
+`PUT .../me/thread-pins/:threadId` remains an alias. The typed route
 accepts only `pinned`, `expected_row_version`, `mutation_id`, optional
 `import_only`, and optional import-only `pinned_at`. The NIP-98 signer resolves
 through existing workspace session mapping to the canonical actor. Membership
-is required; caller-supplied actor/reader fields are rejected. Human pins require
-channel read access; other actor kinds also require thread participation. Unpin
+is required; caller-supplied actor/reader fields are rejected. Thread pins require channel read access; non-human thread readers also require
+participation. Task and document pins require the existing `task.read` or
+`doc.read` channel permission. Pinning acquires no edit lease and changes no
+resource, assignment, document body or read position. Unpin
 can remove unavailable targets, without granting access or returning content.
 
 The acknowledgement is `identity` plus `pin`: a stable row UUID, workspace,
-actor, thread, canonical channel/root IDs, pinned boolean, pinned timestamp,
+actor, resource type/ID, optional thread ID, canonical channel/root IDs, pinned boolean, pinned timestamp,
 per-thread row version, and updated timestamp. Personal rows contain no titles.
 Unavailable legacy imports preserve only the UUID selection, without metadata.
 An import accepts no channel/root fields and cannot confer read authority.
 
-Each actor/workspace/thread pair has its own CAS version. Absent means version
+Each actor/workspace/type/resource pair has its own CAS version. Absent means version
 0. Successful operations advance the version; unpin retains a permanent false
 row. Same-thread concurrent writes at one base version yield one winner and one
 `409 thread_pin_conflict`. Independent threads never overwrite one another.
@@ -35,7 +39,7 @@ on repeated migration from a stale device. The same actor can import disjoint
 legacy selections from multiple devices. New explicit pins can repin tombstones
 at their current version. Tombstones and mutation receipts are not pruned.
 
-Canonical `thread_pin` rows, including false tombstones, use existing bounded
+Canonical `personal_pin` rows, including false tombstones, use existing bounded
 record snapshots/deltas and actor-only visibility. SSE hints are personal to the
 actor, excluded from shared workspace and managed agent audiences. No new stream,
 poller, authority epoch or read receipt is introduced. Consumers must register
@@ -49,3 +53,27 @@ or CAS conflicts discard that request and dependent same-thread requests, report
 a visible error and recover canonical state. The user can choose a new mutation
 after recovery. A stale pin retry cannot revive a newer unpin; an intentional
 new explicit pin can. Browser data clearing discards unsent local changes only.
+
+
+## Upgrade and client presentation
+
+The thread checkpoint's table names remain for storage compatibility. The
+idempotent `personal-pins-v1.sql` migration adds typed resource identity, retains
+row UUIDs/versions and mutation receipts, and leaves immutable historical
+`thread_pin` journal entries readable as a legacy alias. Current rows recover as
+`personal_pin`; the migration does not reset cursor epochs or read watermarks.
+Only thread selections have legacy imports. New task/document operations are
+explicit user intentions and use the same per-resource CAS/tombstones.
+
+The unified list uses type/ID keys so equal UUIDs in different resource tables
+never collide. Canonical Dexie task/document titles and personalized attention
+update through liveQuery. Missing/deleted/inaccessible resources show a neutral
+typed unavailable label and remain removable. Opening tasks/documents delegates
+to the existing internal-reference navigation, preserving departure/draft,
+normal view/read and edit-lease behavior. Pin controls on Inbox cards and detail
+headers mutate only the personal outbox, including while a task/document is open.
+
+Membership revocation denies reads/writes but retains private selections and
+tombstones. Rejoining as the same canonical actor cannot revive stale pins.
+Only deleting the workspace or canonical actor cascades this personal state;
+those are identity lifetime boundaries, rather than tombstone expiry.
