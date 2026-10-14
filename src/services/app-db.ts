@@ -46,6 +46,7 @@ const WAPP_DB_CAPABILITIES = {
   migrations: true,
   crud: true,
   query: true,
+  conditional_update: true,
   public_app_data: true,
 };
 
@@ -496,7 +497,7 @@ export async function listWappDbMigrations(workspaceOwnerNpub: string, appNpub: 
 
 function sqlValue(value: unknown): unknown {
   if (value === undefined) return null;
-  if (value && typeof value === 'object') return JSON.stringify(value);
+  if (value && typeof value === 'object') return getDb().json(value as any);
   return value;
 }
 

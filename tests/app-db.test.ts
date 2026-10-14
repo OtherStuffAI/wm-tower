@@ -506,10 +506,12 @@ describe('Workspace app DB API', () => {
       body: JSON.stringify(createBody),
     });
     expect(createRes.status).toBe(201);
-    expect((await createRes.json()).row.id).toBe('company_123');
+    const createdRow = (await createRes.json()).row;
+    expect(createdRow.id).toBe('company_123');
+    expect(createdRow.profile).toEqual({ tier: 'gold' });
 
     const patchPath = `${rowsPath}/company_123`;
-    const patchBody = { set: { status: 'complete' } };
+    const patchBody = { set: { status: 'complete', profile: { tier: 'platinum', nested: { active: true }, tags: ['a', 'b'] } } };
     const patchRes = await app.request(patchPath, {
       method: 'PATCH',
       headers: {
@@ -519,7 +521,9 @@ describe('Workspace app DB API', () => {
       body: JSON.stringify(patchBody),
     });
     expect(patchRes.status).toBe(200);
-    expect((await patchRes.json()).row.status).toBe('complete');
+    const patchedRow = (await patchRes.json()).row;
+    expect(patchedRow.status).toBe('complete');
+    expect(patchedRow.profile).toEqual(patchBody.set.profile);
 
     const queryPath = `/api/v4/workspaces/${encodeURIComponent(OWNER)}/apps/${encodeURIComponent(APP_NPUB)}/db/tables/companies/query`;
     const queryBody = {
