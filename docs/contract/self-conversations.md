@@ -11,6 +11,10 @@ scope or display name. Reopening returns the same channel with a null audit even
 renaming does not change its identity. Archived conversations are excluded.
 Initial sharing grants and subsequent grant additions or replacements are refused.
 Existing channel permissions remain the authority for messages and attachments.
+If the requested label already exists in the scope, including an archived row,
+Tower gives the new self channel a UUID-suffixed storage name. A label collision
+never reuses another actor's channel or prevents creation. Clients present the
+singleton as Note to self based on its participants, not its storage name.
 
 Native and browser clients use the same message, thread, attachment and retry
 contracts. A storage metadata `size_bytes` value can be a decimal JSON string

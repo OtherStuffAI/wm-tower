@@ -2988,6 +2988,18 @@ export async function createFlightDeckPgChannel(
         AND id = ${channel.id}
     `;
   }
+  let name = input.name;
+  if (input.kind === 'dm' && input.participantNpubs?.length === 1) {
+    // Channel names are unique per scope, including archived rows. Independent
+    // private self conversations share a display label, not a channel identity.
+    // The scope lock above serializes label allocation across different actors.
+    const [occupied] = await sql<{ id: string }[]>`
+      SELECT id FROM flightdeck_pg_channels
+      WHERE workspace_id = ${input.workspaceId} AND scope_id = ${input.scopeId}
+        AND name = ${name} LIMIT 1
+    `;
+    if (occupied) name = `${name} (${randomUUID()})`;
+  }
   const [channel] = await sql<FlightDeckPgChannelRow[]>`
     INSERT INTO flightdeck_pg_channels (
       workspace_id,
@@ -3003,7 +3015,7 @@ export async function createFlightDeckPgChannel(
     VALUES (
       ${input.workspaceId},
       ${input.scopeId},
-      ${input.name},
+      ${name},
       ${input.description ?? null},
       ${sql.json(asDbJson(input.metadata ?? {}))},
       ${input.kind},

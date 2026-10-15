@@ -2168,6 +2168,19 @@ describe('Flight Deck PG API routes', () => {
     const renamedReopen = await requestJson(channelsPath, 'POST', ownerSecret, selfBody);
     expect(renamedReopen.json.channel.id).toBe(selfId);
     expect(renamedReopen.json.channel.name).toBe('Personal notebook');
+    // A second member must be able to use the same self-chat label in the
+    // shared DM scope, even when that label belongs to an archived channel.
+    const [memberReadGrant] = await sql<{ id: string }[]>`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,permission,created_by_actor_id)
+      VALUES(${workspaceId},'actor',${memberCreate.json.actor.actor_id},'workspace','workspace.read',${ownerId}) RETURNING id`;
+    const memberSelf = await requestJson(channelsPath, 'POST', memberSecret, { name: 'Personal notebook', kind: 'dm', participant_npubs: [MEMBER_NPUB] });
+    expect(memberSelf.res.status).toBe(201);
+    expect(memberSelf.json.channel.id).not.toBe(selfId);
+    expect((await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${memberSelf.json.channel.id}/messages`, 'GET', ownerSecret)).res.status).toBe(403);
+    await sql`UPDATE flightdeck_pg_channels SET archived_at = NOW(), name = 'Archived notes' WHERE id = ${memberSelf.json.channel.id}`;
+    const afterArchive = await requestJson(channelsPath, 'POST', memberSecret, { name: 'Archived notes', kind: 'dm', participant_npubs: [MEMBER_NPUB] });
+    expect(afterArchive.res.status).toBe(201);
+    expect(afterArchive.json.channel.id).not.toBe(memberSelf.json.channel.id);
+    await sql`DELETE FROM flightdeck_pg_permission_grants WHERE id = ${memberReadGrant.id}`;
     // Independent browser/native-shaped requests use the same canonical rows,
     // including replies, private image bytes and message retry identifiers.
     const imageBytes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures/note-to-self/sanitized.png'));
