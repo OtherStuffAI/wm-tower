@@ -2150,6 +2150,52 @@ describe('Flight Deck PG API routes', () => {
     expect(groupMemberChannels.json.channels.map((channel: any) => channel.id)).toContain(channelId);
     expect(groupMemberChannels.json.channels.map((channel: any) => channel.id)).not.toContain(siblingChannelId);
 
+    // A single canonical private conversation survives repeated and concurrent
+    // opens from independent clients. Repeated self participants normalize.
+    const selfBody = { name: 'Note to self', kind: 'dm', participant_npubs: [OWNER_NPUB, OWNER_NPUB] };
+    const selfOpens = await Promise.all(Array.from({ length: 4 }, () => requestJson(channelsPath, 'POST', ownerSecret, selfBody)));
+    for (const opened of selfOpens) expect(opened.res.status).toBe(201);
+    const selfId = selfOpens[0].json.channel.id;
+    expect(new Set(selfOpens.map(opened => opened.json.channel.id)).size).toBe(1);
+    expect(selfOpens[0].json.channel.participant_npubs).toEqual([OWNER_NPUB]);
+    // Independent browser/native-shaped requests use the same canonical rows,
+    // including replies, private image bytes and message retry identifiers.
+    const imageBytes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures/note-to-self/sanitized.png'));
+    const prepared = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/storage/prepare`, 'POST', ownerSecret, { file_name: 'note.png', content_type: 'image/png', size_bytes: imageBytes.length, is_public: false });
+    expect(prepared.res.status).toBe(201);
+    const objectId = prepared.json.object_id;
+    expect(await writeStorageObject(objectId, imageBytes, OWNER_NPUB)).not.toBeNull();
+    expect(await completeStorageObject(objectId, { sha256_hex: sha256Hex(imageBytes), size_bytes: imageBytes.length }, OWNER_NPUB)).not.toBeNull();
+    const messagePath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${selfId}/messages`;
+    const requestId = randomUUID();
+    const nativeBody = { body: 'Native note with image', create_thread: true, client_request_id: requestId,
+      message_signature: messageSignature({ body: 'Native note with image', secret: ownerSecret, workspaceId, channelId: selfId }),
+      metadata: { attachments: [{ kind: 'image', storage_object_id: objectId, filename: 'note.png', mime_type: 'image/png', size_bytes: imageBytes.length }] } };
+    const nativeMessage = await requestJson(messagePath, 'POST', ownerSecret, nativeBody);
+    expect(nativeMessage.res.status).toBe(201);
+    const retryMessage = await requestJson(messagePath, 'POST', ownerSecret, nativeBody);
+    expect(retryMessage.json.message.id).toBe(nativeMessage.json.message.id);
+    const selfThreadId = nativeMessage.json.message.thread_id;
+    const browserMessage = await requestJson(messagePath, 'POST', ownerSecret, { body: 'Browser reply', thread_id: selfThreadId, client_request_id: randomUUID(),
+      message_signature: messageSignature({ body: 'Browser reply', secret: ownerSecret, workspaceId, channelId: selfId, threadId: selfThreadId }) });
+    expect(browserMessage.res.status).toBe(201);
+    const sharedHistory = await requestJson(messagePath, 'GET', ownerSecret);
+    expect(sharedHistory.json.messages.map((row: any) => row.body)).toEqual(['Native note with image', 'Browser reply']);
+    const uploaded = await requestRaw(`/api/v4/storage/${objectId}/content`, 'GET', ownerSecret);
+    expect(uploaded.res.status).toBe(200);
+    expect(Buffer.from(uploaded.bytes)).toEqual(imageBytes);
+    expect((await requestRaw(`/api/v4/storage/${objectId}/content`, 'GET', memberSecret)).res.status).toBe(404);
+
+    const othersChannels = await requestJson(channelsPath, 'GET', memberSecret);
+    expect(othersChannels.json.channels.map((row: any) => row.id)).not.toContain(selfId);
+    const selfMessagesPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${selfId}/messages`;
+    expect((await requestJson(selfMessagesPath, 'GET', memberSecret)).res.status).toBe(403);
+    expect((await requestJson(selfMessagesPath, 'POST', memberSecret, { body: 'Forbidden', client_request_id: randomUUID() })).res.status).toBe(403);
+    const selfGrantsPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${selfId}/grants`;
+    expect((await requestJson(selfGrantsPath, 'POST', ownerSecret, { principal_type: 'actor', principal_id: memberCreate.json.actor.actor_id, access_level: 'view' })).res.status).toBe(403);
+    expect((await requestJson(selfGrantsPath + '/actor/' + memberCreate.json.actor.actor_id, 'PUT', ownerSecret, { access_level: 'view' })).res.status).toBe(403);
+    expect((await requestJson(channelsPath, 'POST', ownerSecret, { ...selfBody, grants: [{ principal_type: 'actor', principal_id: memberCreate.json.actor.actor_id, access_level: 'view' }] })).res.status).toBe(400);
+
     const dmNonMemberCreate = await requestJson(channelsPath, 'POST', ownerSecret, {
       name: 'Owner and isolated participant DM',
       description: 'Private DM that is the only visible channel for the other participant.',

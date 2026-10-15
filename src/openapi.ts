@@ -4734,7 +4734,8 @@ export function buildOpenApiDocument(origin: string) {
         post: {
           tags: ['Flight Deck PG'],
           summary: 'Contract fixture: create channel',
-          description: 'Implemented PH1-5 runtime channel creation. Authorizes channel.create against the parent scope. metadata.agent_chat is validated and normalized with Agent Direct Chat universally enabled; legacy basePrompt/contextPrompt is exposed through agent_chat.context_prompt for compatibility.',
+          description: 'DMs accept the caller as a single participant for an owner-private Note to self, or two distinct workspace members for a normal DM. Repeated self participants normalize to one. Self conversations are serialized and reused per workspace and actor across clients and scopes, including concurrent opens. Self conversations reject initial sharing grants and later grant additions/updates. Normal named channels authorize channel.create against the parent scope. metadata.agent_chat is validated and normalized with Agent Direct Chat universally enabled; legacy basePrompt/contextPrompt maps to agent_chat.context_prompt.',
+
           'x-flightdeck-pg-contract-fixture': flightDeckPgContractFixturePaths['flightdeck_pg.channels.create'],
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },

@@ -89,6 +89,7 @@ import {
   upsertFlightDeckPgPushSubscription,
 } from '../services/flightdeck-pg-notifications';
 import {
+  type FlightDeckPgChannelRow,
   buildFlightDeckPgIdentity,
   acquireFlightDeckPgEditLease,
   archiveFlightDeckPgChannel,
@@ -4017,12 +4018,14 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/scopes/:scopeId/channels', asy
   if (!channelKinds.has(kind)) fields.push({ path: 'kind', code: 'invalid', message: 'kind is not a valid channel kind' });
   if (kind !== 'dm' && participantNpubs.length > 0) fields.push({ path: 'participant_npubs', code: 'invalid', message: 'participant_npubs is only supported for DM channels' });
   if (kind === 'dm' && !participantNpubs.includes(auth.userNpub)) participantNpubs.unshift(auth.userNpub);
-  if (kind === 'dm' && participantNpubs.length !== 2) {
-    fields.push({ path: 'participant_npubs', code: 'invalid', message: 'DM channels require exactly two distinct participants' });
+  if (kind === 'dm' && (participantNpubs.length < 1 || participantNpubs.length > 2)) {
+    fields.push({ path: 'participant_npubs', code: 'invalid', message: 'DM channels require one self participant or two distinct participants' });
   }
   const normalizedChannelMetadata = validateFlightDeckPgChannelMetadata(metadata);
   fields.push(...normalizedChannelMetadata.errors);
   const initialGrants = parseInitialChannelGrants(body, fields);
+  const selfDm = kind === 'dm' && participantNpubs.length === 1;
+  if (selfDm && initialGrants.length) fields.push({ path: 'grants', code: 'invalid', message: 'Note to self cannot be shared' });
   if (fields.length) return validationError(c, identity, fields);
 
   // DMs are member-to-member: any workspace member may open a DM with another
@@ -4061,6 +4064,18 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/scopes/:scopeId/channels', asy
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
+      // Serialize by workspace + self identity, including concurrent creates from
+      // different devices/scopes. Reuse canonical records even after renaming.
+      if (selfDm) {
+        await sql`SELECT pg_advisory_xact_lock(hashtextextended(${context.workspace.id + ':self-dm:' + auth.userNpub}, 0))`;
+        const [existing] = await sql<FlightDeckPgChannelRow[]>`
+          SELECT * FROM flightdeck_pg_channels
+          WHERE workspace_id = ${context.workspace.id} AND kind = 'dm'
+            AND archived_at IS NULL AND participant_npubs = ${participantNpubs}::text[]
+          ORDER BY created_at, id LIMIT 1
+        `;
+        if (existing) return { channel: existing, auditId: null };
+      }
       const channel = await createFlightDeckPgChannel({
         workspaceId: context.workspace.id,
         scopeId,
@@ -4434,6 +4449,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/grants', a
 
   const channel = await resolveFlightDeckPgChannel(context.workspace.id, channelId);
   if (!channel) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
+  if (channel.kind === 'dm' && channel.participant_npubs?.length === 1) return jsonError(c, 403, 'self_dm_private', 'Note to self cannot be shared', identity);
 
   try {
     const payload = await getDb().begin(async (tx) => {
@@ -4527,6 +4543,7 @@ flightDeckPgRouter.put('/workspaces/:workspaceId/channels/:channelId/grants/:pri
 
   const channel = await resolveFlightDeckPgChannel(context.workspace.id, channelId);
   if (!channel) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
+  if (channel.kind === 'dm' && channel.participant_npubs?.length === 1) return jsonError(c, 403, 'self_dm_private', 'Note to self cannot be shared', identity);
 
   try {
     const payload = await getDb().begin(async (tx) => {
