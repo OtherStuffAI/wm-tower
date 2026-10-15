@@ -30,7 +30,8 @@ validate_base() {
 
 pull_with_timeout() {
   local image="$1"
-  docker pull "$image" &
+  # Keep stdout reserved for the image reference returned to the caller.
+  docker pull "$image" >&2 &
   local pull_pid=$!
   local deadline=$((SECONDS + PULL_TIMEOUT_SECONDS))
 
