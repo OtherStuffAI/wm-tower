@@ -405,6 +405,26 @@ node src/cli.js init --token "<connection_token>"
 
 ## Update deploy
 
+For a reviewed API-only checkpoint on an existing healthy stack, limit container
+replacement to Tower. First verify the ownership labels described above, validate
+the existing Compose/FIPS configuration, and validate the cached Bun base:
+
+```bash
+docker compose --env-file .env.prod --env-file .env.fips \
+  -f docker-compose.prod.yml -f docker-compose.fips.yml config --quiet
+bun scripts/fips-host-launchd.ts .env.fips > /dev/null
+export TOWER_BUN_IMAGE="$(./docker/ensure-bun-base.sh)"
+docker compose --env-file .env.prod --env-file .env.fips \
+  -f docker-compose.prod.yml -f docker-compose.fips.yml build tower
+docker compose --env-file .env.prod --env-file .env.fips \
+  -f docker-compose.prod.yml -f docker-compose.fips.yml up -d --no-deps tower
+```
+
+Use the existing volumes and secrets. Check both HTTP and native FIPS health as
+in the deployment script, plus the actual public HTTPS backend. Compare container
+IDs before/after to verify unrelated services were preserved. This narrower path
+does not apply when dependencies or Compose configuration need an upgrade.
+
 ```bash
 cd /path/to/wingman-tower
 ./rebuild_deploy_docker.sh

@@ -2158,14 +2158,30 @@ describe('Flight Deck PG API routes', () => {
     const selfId = selfOpens[0].json.channel.id;
     expect(new Set(selfOpens.map(opened => opened.json.channel.id)).size).toBe(1);
     expect(selfOpens[0].json.channel.participant_npubs).toEqual([OWNER_NPUB]);
+    const crossScopeOpen = await requestJson(childChannelsPath, 'POST', ownerSecret, { ...selfBody, name: 'Another client label' });
+    expect(crossScopeOpen.res.status).toBe(201);
+    expect(crossScopeOpen.json.channel.id).toBe(selfId);
+    expect(crossScopeOpen.json.channel.scope_id).toBe(scopeId);
+    expect(crossScopeOpen.json.audit.event_id).toBeNull();
+    const renamedSelf = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${selfId}`, 'PATCH', ownerSecret, { name: 'Personal notebook' });
+    expect(renamedSelf.res.status).toBe(200);
+    const renamedReopen = await requestJson(channelsPath, 'POST', ownerSecret, selfBody);
+    expect(renamedReopen.json.channel.id).toBe(selfId);
+    expect(renamedReopen.json.channel.name).toBe('Personal notebook');
     // Independent browser/native-shaped requests use the same canonical rows,
     // including replies, private image bytes and message retry identifiers.
     const imageBytes = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures/note-to-self/sanitized.png'));
     const prepared = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/storage/prepare`, 'POST', ownerSecret, { file_name: 'note.png', content_type: 'image/png', size_bytes: imageBytes.length, is_public: false });
     expect(prepared.res.status).toBe(201);
     const objectId = prepared.json.object_id;
-    expect(await writeStorageObject(objectId, imageBytes, OWNER_NPUB)).not.toBeNull();
-    expect(await completeStorageObject(objectId, { sha256_hex: sha256Hex(imageBytes), size_bytes: imageBytes.length }, OWNER_NPUB)).not.toBeNull();
+    const objectPath = `/api/v4/storage/${objectId}`;
+    const uploadBody = { base64_data: imageBytes.toString('base64') };
+    expect((await requestJson(objectPath, 'PUT', memberSecret, uploadBody)).res.status).toBe(404);
+    expect((await requestJson(objectPath, 'PUT', ownerSecret, uploadBody)).res.status).toBe(200);
+    expect((await requestJson(objectPath + '/complete', 'POST', ownerSecret, { sha256_hex: sha256Hex(imageBytes), size_bytes: imageBytes.length })).res.status).toBe(200);
+    const completedImage = await requestJson(objectPath, 'GET', ownerSecret);
+    expect(completedImage.json).toMatchObject({ sha256_hex: sha256Hex(imageBytes), size_bytes: String(imageBytes.length), is_public: false });
+    expect(typeof completedImage.json.completed_at).toBe('string');
     const messagePath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${selfId}/messages`;
     const requestId = randomUUID();
     const nativeBody = { body: 'Native note with image', create_thread: true, client_request_id: requestId,
