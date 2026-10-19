@@ -26,8 +26,10 @@ describe('supported Nstack deployment contract', () => {
     expect(compose).toContain('${NOSTR_RELAY_PUBLIC_ORIGIN:?set NOSTR_RELAY_PUBLIC_ORIGIN}');
     expect(compose).toContain('${NSTACK_BLOSSOM_PUBLIC_ORIGIN:?set NSTACK_BLOSSOM_PUBLIC_ORIGIN}');
     expect(compose).toContain('${BLOSSOM_PUBLIC_DOMAIN:?set BLOSSOM_PUBLIC_DOMAIN}');
+    expect(compose).toContain('${BLOSSOM_PUBLISH_PUBKEY:?set BLOSSOM_PUBLISH_PUBKEY}');
     expect(env).toContain('NOSTR_RELAY_PUBLIC_ORIGIN=wss://relay.example.com');
     expect(env).toContain('NSTACK_BLOSSOM_PUBLIC_ORIGIN=https://blossom.example.com');
+    expect(env).toContain('BLOSSOM_PUBLISH_PUBKEY=replace-with-64-character-hex-pubkey');
     expect(env).not.toContain('NOSTR_RELAY_NSEC=');
   });
 
@@ -84,6 +86,9 @@ describe('supported Nstack deployment contract', () => {
     expect(blossom).toContain('connectTimeout: 10000');
     expect(blossom).toContain('bodyTimeout: 120000');
     expect(blossom).toContain('keepExif: false');
+    expect(blossom.match(/pubkeys: \["\$\{BLOSSOM_PUBLISH_PUBKEY\}"\]/g)?.length).toBe(6);
+    expect(blossom.match(/requirePubkeyInRule: true/g)?.length).toBe(2);
+    expect(blossom).not.toContain('requirePubkeyInRule: false');
     expect(compose).toContain('BLOSSOM_REQUIRE_CONFIG: "1"');
     expect(compose).toContain('cap_drop: ["ALL"]');
     expect(compose).toContain('/deno-dir:size=256m,mode=1777');

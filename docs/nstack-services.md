@@ -67,14 +67,16 @@ list and delete require scoped BUD-11 events; delete is owner-only. Reporting
 accepts signed NIP-56 kind-1984 events as BUD-09 defines.
 
 The server verifies body hashes, requires upload lengths, caps upload/media
-inputs at 100 MiB, applies a MIME allowlist with finite retention, prunes
-ownerless data, strips image EXIF during optimisation, and uses upstream's
-redirect-aware DNS/IP SSRF checks for mirroring. Mirror connect/body timeouts
-are 10/120 seconds. The service has CPU, memory, process and temporary-space
-limits. Its BUD-01 middleware applies wildcard read CORS plus explicit
-`GET`, `HEAD`, `PUT`, `DELETE` and `OPTIONS` preflight handling; mutation safety
-comes from BUD-11 signatures rather than browser-origin trust. The upstream
-component does not implement a per-pubkey byte quota;
+inputs at 100 MiB, and requires the authenticated publisher pubkey to match
+the explicit `BLOSSOM_PUBLISH_PUBKEY` storage-rule allowlist for upload,
+mirror and media operations. It applies a MIME allowlist with finite retention,
+prunes ownerless data, strips image EXIF during optimisation, and uses
+upstream's redirect-aware DNS/IP SSRF checks for mirroring. Mirror connect/body
+timeouts are 10/120 seconds. The service has CPU, memory, process and
+temporary-space limits. Its BUD-01 middleware applies wildcard read CORS plus
+explicit `GET`, `HEAD`, `PUT`, `DELETE` and `OPTIONS` preflight handling;
+mutation safety comes from BUD-11 signatures rather than browser-origin trust.
+The upstream component does not implement a per-pubkey byte quota;
 operators must monitor/cap the persistent volume at the host/storage layer.
 Finite retention and the publisher/auth gates are the safe default, not a
 promise of unlimited durable storage.
@@ -89,6 +91,7 @@ NOSTR_RELAY_PUBLIC_ORIGIN=wss://relay.example.com
 NOSTR_RELAY_PUBLISH_PUBKEYS=<hex-pubkey>[,<hex-pubkey>...]
 NSTACK_BLOSSOM_PUBLIC_ORIGIN=https://blossom.example.com
 BLOSSOM_PUBLIC_DOMAIN=blossom.example.com
+BLOSSOM_PUBLISH_PUBKEY=<hex-pubkey>
 ```
 
 The default host listeners are loopback-only: Tower `3100`, relay `7777`, and
@@ -96,6 +99,16 @@ Blossom `3002`. Terminate TLS at the existing reverse proxy. Preserve WebSocket
 upgrade headers for the relay. Blossom and relay must remain at their domain
 root because their protocols define root paths. Do not route either over
 Tower's root path.
+
+For a host-running Cloudflare Tunnel, target `ws://127.0.0.1:7777` for the
+relay and `http://127.0.0.1:3002` for Blossom. Ports `8080` and `3000` are
+container-internal and are not the host tunnel targets.
+
+This service does not automatically push local uploads to a third-party
+Blossom server. Cross-server replication must be initiated by a client with a
+publisher-authorized BUD-11 signature (for example, a dual-publish or remote
+mirror workflow). Never place a user's private Nostr key in Tower merely to
+replicate blobs.
 
 Validate interpolation without printing resolved secrets:
 

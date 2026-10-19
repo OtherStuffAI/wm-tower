@@ -13,16 +13,22 @@ storage:
   rules:
     - type: "image/*"
       expiration: 90 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
     - type: "video/*"
       expiration: 30 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
     - type: "audio/*"
       expiration: 30 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
     - type: "application/pdf"
       expiration: 90 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
     - type: "application/*"
       expiration: 30 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
     - type: "*"
       expiration: 14 days
+      pubkeys: ["${BLOSSOM_PUBLISH_PUBKEY}"]
 
 upload:
   enabled: true
@@ -31,7 +37,7 @@ upload:
   workers: 2
   maxJobsPerWorker: 2
   throughputWindowMs: 1000
-  requirePubkeyInRule: false
+  requirePubkeyInRule: true
 
 mirror:
   enabled: true
@@ -50,7 +56,7 @@ list:
 media:
   enabled: true
   requireAuth: true
-  requirePubkeyInRule: false
+  requirePubkeyInRule: true
   maxSize: 104857600
   tmpDir: ./data/media-tmp
   image:

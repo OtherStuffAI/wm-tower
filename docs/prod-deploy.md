@@ -33,7 +33,8 @@ If you use the provided Docker Compose stack, set these wrapper vars too:
 - `MINIO_API_HOST_PORT`
 - `MINIO_CONSOLE_HOST_PORT`
 - `NOSTR_RELAY_PUBLIC_ORIGIN` and `NOSTR_RELAY_PUBLISH_PUBKEYS`
-- `NSTACK_BLOSSOM_PUBLIC_ORIGIN` and `BLOSSOM_PUBLIC_DOMAIN`
+- `NSTACK_BLOSSOM_PUBLIC_ORIGIN`, `BLOSSOM_PUBLIC_DOMAIN`, and the sole
+  publisher's 64-character hex `BLOSSOM_PUBLISH_PUBKEY`
 
 If you run raw `docker run`, pass the app port as `PORT`.
 
