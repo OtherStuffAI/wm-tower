@@ -2706,6 +2706,55 @@ export function buildOpenApiDocument(origin: string) {
           },
           required: ['name', 'version', 'git_commit', 'git_branch', 'build_time', 'runtime'],
         },
+        NstackServiceAvailability: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['status', 'checked_at'],
+          properties: {
+            status: { type: 'string', enum: ['available', 'unavailable', 'unknown'] },
+            checked_at: { type: ['string', 'null'], format: 'date-time' },
+          },
+        },
+        NstackServiceDescriptor: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'kind', 'endpoint', 'version', 'protocols', 'capabilities', 'features', 'availability'],
+          properties: {
+            id: { type: 'string', enum: ['tower', 'relay', 'blossom'] },
+            kind: { type: 'string', enum: ['tower', 'nostr_relay', 'blossom'] },
+            endpoint: { type: 'string', format: 'uri', description: 'Canonical public origin from explicit operator configuration; never inferred from forwarding headers.' },
+            version: { type: 'string' },
+            protocols: { type: 'array', items: { type: 'string' } },
+            capabilities: { type: 'array', items: { type: 'string' } },
+            features: {
+              type: 'object', additionalProperties: false,
+              properties: {
+                nips: { type: 'array', items: { type: 'integer', minimum: 1 } },
+                buds: { type: 'array', items: { type: 'integer', minimum: 1 } },
+              },
+            },
+            availability: { $ref: '#/components/schemas/NstackServiceAvailability' },
+          },
+        },
+        NstackServiceDiscoveryV1: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['schema', 'schema_version', 'generated_at', 'cache_ttl_seconds', 'stack', 'services'],
+          properties: {
+            schema: { type: 'string', const: 'org.wingman.nstack.services' },
+            schema_version: { type: 'integer', const: 1 },
+            generated_at: { type: 'string', format: 'date-time' },
+            cache_ttl_seconds: { type: 'integer', minimum: 1 },
+            stack: {
+              type: 'object', additionalProperties: false, required: ['tower_npub', 'name'],
+              properties: {
+                tower_npub: { type: ['string', 'null'], description: 'Public Tower service identity only.' },
+                name: { type: ['string', 'null'] },
+              },
+            },
+            services: { type: 'array', items: { $ref: '#/components/schemas/NstackServiceDescriptor' } },
+          },
+        },
         HealthResponse: {
           type: 'object',
           properties: {
@@ -4271,6 +4320,20 @@ export function buildOpenApiDocument(origin: string) {
                   schema: { $ref: '#/components/schemas/HealthResponse' },
                 },
               },
+            },
+          },
+        },
+      },
+      '/.well-known/nstack.json': {
+        get: {
+          tags: ['Health'],
+          security: [],
+          summary: 'Discover configured public Nstack services',
+          description: 'Versioned, cacheable public metadata for Tower, relay and full Blossom endpoints. Services with disabled or invalid public origins are omitted. Availability is a bounded health observation, not authority. The response never includes workspaces, users, credentials, signatures, tokens, internal Docker names or operator endpoints.',
+          responses: {
+            '200': {
+              description: 'Safe Nstack service descriptor. Cache-Control defines freshness and stale-if-error behavior.',
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/NstackServiceDiscoveryV1' } } },
             },
           },
         },

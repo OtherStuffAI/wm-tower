@@ -2128,6 +2128,40 @@ export interface StorageBlossomMetadata {
   blossom_auth: 'public' | 'nostr';
 }
 
+// ---- Public Nstack service discovery ----
+
+export type NstackServiceId = 'tower' | 'relay' | 'blossom';
+export type NstackServiceAvailability = 'available' | 'unavailable' | 'unknown';
+
+export interface NstackServiceDescriptor {
+  id: NstackServiceId;
+  kind: 'tower' | 'nostr_relay' | 'blossom';
+  endpoint: string;
+  version: string;
+  protocols: string[];
+  capabilities: string[];
+  features: {
+    nips?: number[];
+    buds?: number[];
+  };
+  availability: {
+    status: NstackServiceAvailability;
+    checked_at: string | null;
+  };
+}
+
+export interface NstackServiceDiscoveryV1 {
+  schema: 'org.wingman.nstack.services';
+  schema_version: 1;
+  generated_at: string;
+  cache_ttl_seconds: number;
+  stack: {
+    tower_npub: string | null;
+    name: string | null;
+  };
+  services: NstackServiceDescriptor[];
+}
+
 export interface V4StorageObject {
   id: string;
   owner_npub: string;

@@ -18,7 +18,8 @@
     "db:migrate-plaintext": "bun run src/schema/migrate-plaintext-records.ts",
     "db:replay-v3-open-tasks": "bun run src/schema/replay-v3-open-tasks.ts",
     "db:cleanup-wapp-activity": "bun run src/schema/cleanup-wapp-activity.ts",
-    "git:gateway": "bun run src/git-gateway.ts"
+    "git:gateway": "bun run src/git-gateway.ts",
+    "nstack:smoke": "bun run scripts/nstack-smoke.ts"
   },
   "dependencies": {
     "hono": "^4.7.0",

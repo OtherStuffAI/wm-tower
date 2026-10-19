@@ -21,8 +21,9 @@ For the current Wingman Be Free workflow:
 - Flight Deck is not intended to run in Docker for local dev; it is run locally via Wingman/PM2 and deployed to CapRover for the latest live version
 - Yoke is a local CLI and should ideally be consumable via `npx wingman-yoke` or `bunx wingman-yoke`
 
-The portable Docker bundle is backend-only: Tower, Postgres, MinIO, and the
-stock Forgejo provider with a plain reverse proxy preserving its public URL.
+The portable Docker bundle is backend-only: Tower, Postgres, MinIO, a persistent
+Nostr relay, a full Blossom server, and the stock Forgejo provider with a plain
+reverse proxy preserving its public URL.
 Tower authenticates explicitly allowlisted Nostr identities through OIDC only.
 Forgejo issues native OAuth credentials and owns all accounts, repository/team
 permissions, Git and APIs. Autopilot's shipped helper signs in again through
@@ -30,6 +31,11 @@ Tower when a native credential expires; there are no Tower Git grants, permissio
 workers or issue broker. See [migration](docs/forgejo-native-auth-migration.md)
 for the reviewed cutover and native access recovery. Flight Deck and Autopilot
 stay outside this stack.
+
+Nostr Browser and other consent boundaries can inspect the safe public service
+catalogue at `/.well-known/nstack.json`. See
+[Nstack services](docs/nstack-services.md) for the relay/Blossom boundary,
+protocol surface, routing and activation checks.
 
 ## Protocol Docs
 

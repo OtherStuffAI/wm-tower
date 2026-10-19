@@ -26,6 +26,12 @@ function positiveIntEnv(name: string, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function booleanEnv(name: string, fallback = false): boolean {
+  const value = String(process.env[name] ?? '').trim();
+  if (!value) return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3100', 10),
   directHttpsUrl: requiredEnv('SUPERBASED_DIRECT_HTTPS_URL'),
@@ -98,6 +104,25 @@ export const config = {
   tower: {
     name: String(process.env.SUPERBASED_TOWER_NAME || '').trim() || null,
     description: String(process.env.SUPERBASED_TOWER_DESCRIPTION || '').trim() || null,
+  },
+  nstack: {
+    descriptorCacheTtlSeconds: positiveIntEnv('NSTACK_DESCRIPTOR_CACHE_TTL_SECONDS', 30),
+    relay: {
+      enabled: booleanEnv('NSTACK_RELAY_ENABLED'),
+      publicOrigin: String(process.env.NSTACK_RELAY_PUBLIC_ORIGIN || '').trim(),
+      healthUrl: String(process.env.NSTACK_RELAY_HEALTH_URL || '').trim(),
+      version: String(process.env.NSTACK_RELAY_VERSION || '0.10.0').trim() || '0.10.0',
+    },
+    blossom: {
+      enabled: booleanEnv('NSTACK_BLOSSOM_ENABLED'),
+      publicOrigin: String(process.env.NSTACK_BLOSSOM_PUBLIC_ORIGIN || '').trim(),
+      healthUrl: String(process.env.NSTACK_BLOSSOM_HEALTH_URL || '').trim(),
+      version: String(process.env.NSTACK_BLOSSOM_VERSION || '6.4.1').trim() || '6.4.1',
+      mediaEnabled: booleanEnv('NSTACK_BLOSSOM_MEDIA_ENABLED', true),
+      listEnabled: booleanEnv('NSTACK_BLOSSOM_LIST_ENABLED', true),
+      mirrorEnabled: booleanEnv('NSTACK_BLOSSOM_MIRROR_ENABLED', true),
+      reportEnabled: booleanEnv('NSTACK_BLOSSOM_REPORT_ENABLED', true),
+    },
   },
   billing: {
     mode: /^(metered)$/i.test((process.env.SUPERBASED_BILLING_MODE || '').trim()) ? 'metered' : 'disabled',

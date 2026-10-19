@@ -73,6 +73,66 @@ services:
       STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:?set STORAGE_S3_SECRET_KEY}
       STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-superbased-storage}
 
+  nostr-relay:
+    image: docker.io/scsibug/nostr-rs-relay:0.10.0@sha256:48d54c2d2781577cf3ed2951112f0953dc2c5e7c9d2ea20c64e8c0fa37d16e4d
+    container_name: wingman-tower-nostr-relay
+    restart: unless-stopped
+    environment:
+      NOSTR_RELAY_PUBLIC_ORIGIN: ${NOSTR_RELAY_PUBLIC_ORIGIN:?set NOSTR_RELAY_PUBLIC_ORIGIN}
+      NOSTR_RELAY_PUBLISH_PUBKEYS: ${NOSTR_RELAY_PUBLISH_PUBKEYS:?set NOSTR_RELAY_PUBLISH_PUBKEYS}
+    entrypoint: ["/bin/bash", "/opt/nstack/render-relay-config.sh"]
+    ports:
+      - "${NOSTR_RELAY_HOST_BIND_ADDRESS:-127.0.0.1}:${NOSTR_RELAY_HOST_PORT:-7777}:8080"
+    volumes:
+      - tower-nostr-relay-data:/usr/src/app/db
+      - ./deploy/nstack/render-relay-config.sh:/opt/nstack/render-relay-config.sh:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET / HTTP/1.1\\r\\nHost: localhost\\r\\nAccept: application/nostr+json\\r\\nConnection: close\\r\\n\\r\\n' >&3 && read -r status <&3 && [[ $$status == *' 200 '* ]]"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  blossom:
+    image: ghcr.io/hzrd149/blossom-server:6.4.1@sha256:446fa6c4b0ca529a1fbceabf5ea75839b5b76dfb0d0e1d150f3bae5f9a52b3b8
+    container_name: wingman-tower-blossom
+    restart: unless-stopped
+    environment:
+      BLOSSOM_REQUIRE_CONFIG: "1"
+      BLOSSOM_PUBLIC_DOMAIN: ${BLOSSOM_PUBLIC_DOMAIN:?set BLOSSOM_PUBLIC_DOMAIN}
+    ports:
+      - "${BLOSSOM_HOST_BIND_ADDRESS:-127.0.0.1}:${BLOSSOM_HOST_PORT:-3002}:3000"
+    volumes:
+      - tower-blossom-data:/app/data
+      - ./deploy/nstack/blossom.yml:/app/config.yml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      # Deno may materialize architecture-specific native npm bindings here on
+      # first boot; keep the image filesystem read-only and the cache ephemeral.
+      - /deno-dir:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "deno", "eval", "const r=await fetch('http://127.0.0.1:3000/');Deno.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
   tower:
     build:
       context: .
@@ -123,6 +183,18 @@ services:
       SUPERBASED_SERVICE_NSEC: ${SUPERBASED_SERVICE_NSEC:?set SUPERBASED_SERVICE_NSEC}
       SUPERBASED_SERVICE_PUBKEY_HEX: ${SUPERBASED_SERVICE_PUBKEY_HEX:-}
       SUPERBASED_SERVICE_NPUB: ${SUPERBASED_SERVICE_NPUB:-}
+      NSTACK_RELAY_ENABLED: ${NSTACK_RELAY_ENABLED:-true}
+      NSTACK_RELAY_PUBLIC_ORIGIN: ${NOSTR_RELAY_PUBLIC_ORIGIN:?set NOSTR_RELAY_PUBLIC_ORIGIN}
+      NSTACK_RELAY_HEALTH_URL: http://nostr-relay:8080/
+      NSTACK_RELAY_VERSION: "0.10.0"
+      NSTACK_BLOSSOM_ENABLED: ${NSTACK_BLOSSOM_ENABLED:-true}
+      NSTACK_BLOSSOM_PUBLIC_ORIGIN: ${NSTACK_BLOSSOM_PUBLIC_ORIGIN:?set NSTACK_BLOSSOM_PUBLIC_ORIGIN}
+      NSTACK_BLOSSOM_HEALTH_URL: http://blossom:3000/
+      NSTACK_BLOSSOM_VERSION: "6.4.1"
+      NSTACK_BLOSSOM_MEDIA_ENABLED: "true"
+      NSTACK_BLOSSOM_LIST_ENABLED: "true"
+      NSTACK_BLOSSOM_MIRROR_ENABLED: "true"
+      NSTACK_BLOSSOM_REPORT_ENABLED: "true"
       GIT_GATEWAY_ORIGINS: ${GIT_GATEWAY_ORIGINS:-}
       GIT_FORGEJO_BASE_URL: ${GIT_FORGEJO_BASE_URL:-}
       GIT_GATEWAY_PORT: ${GIT_GATEWAY_PORT:-3180}
@@ -234,3 +306,5 @@ volumes:
   tower-minio-data:
   tower-forgejo-data:
   tower-forgejo-config:
+  tower-nostr-relay-data:
+  tower-blossom-data:

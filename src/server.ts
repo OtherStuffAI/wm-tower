@@ -24,6 +24,7 @@ import { userRouter } from './routes/user';
 import { workspacesRouter } from './routes/workspaces';
 import { wappActivityFlightDeckRouter, wappActivityPublisherRouter } from './routes/wapp-activity';
 import { wappManagementRouter } from './routes/wapp-management';
+import { buildNstackServiceDiscovery } from './services/nstack-discovery';
 
 export function createApp() {
   const app = new Hono();
@@ -53,6 +54,12 @@ export function createApp() {
     });
   });
   app.get('/version', (c) => c.json(getTowerBuildInfo()));
+  app.get('/.well-known/nstack.json', async (c) => {
+    const descriptor = await buildNstackServiceDiscovery();
+    c.header('Cache-Control', `public, max-age=${descriptor.cache_ttl_seconds}, stale-if-error=${descriptor.cache_ttl_seconds * 2}`);
+    c.header('X-Content-Type-Options', 'nosniff');
+    return c.json(descriptor);
+  });
   app.get('/openapi.json', (c) => {
     const origin = new URL(c.req.url).origin;
     return c.json(buildOpenApiDocument(origin));

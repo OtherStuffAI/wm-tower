@@ -32,6 +32,8 @@ If you use the provided Docker Compose stack, set these wrapper vars too:
 - `MINIO_HOST_BIND_ADDRESS` (defaults to `127.0.0.1`)
 - `MINIO_API_HOST_PORT`
 - `MINIO_CONSOLE_HOST_PORT`
+- `NOSTR_RELAY_PUBLIC_ORIGIN` and `NOSTR_RELAY_PUBLISH_PUBKEYS`
+- `NSTACK_BLOSSOM_PUBLIC_ORIGIN` and `BLOSSOM_PUBLIC_DOMAIN`
 
 If you run raw `docker run`, pass the app port as `PORT`.
 
@@ -50,6 +52,7 @@ Optional because Tower has code defaults:
 - `SUPERBASED_SERVICE_PUBKEY_HEX`
 - `SUPERBASED_SERVICE_NPUB`
 - `DB_WAIT_MAX_ATTEMPTS` default `40`
+- `NSTACK_DESCRIPTOR_CACHE_TTL_SECONDS` default `30`
 
 Tower optionally provides Nostr OIDC authentication for stock Forgejo. Set
 `GIT_OIDC_ALLOWED_NPUBS` explicitly and preserve issuer, signing key, client
@@ -99,6 +102,8 @@ cp .env.prod.example .env.prod
 - leave `TOWER_PORT=3100` unless you intentionally want the app listening on a different internal port
 - set `TOWER_HOST_PORT` if you want to publish the container on a different host port
 - set `MINIO_API_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` if `9000` / `9001` are already occupied
+- set distinct root public origins for the relay and full Blossom server, and
+  configure the relay publisher allowlist with hex Nostr pubkeys
 - keep `TOWER_HOST_BIND_ADDRESS` and `MINIO_HOST_BIND_ADDRESS` on `127.0.0.1`
   for same-host access/reverse proxying. Set a private interface (or deliberately
   `0.0.0.0`) only when the deployment network requires direct host exposure.
@@ -127,6 +132,8 @@ This starts:
 - `wingman-tower-postgres`
 - `wingman-tower-minio`
 - `wingman-tower-minio-init`
+- `wingman-tower-nostr-relay`
+- `wingman-tower-blossom`
 - `wingman-tower-b3`
 - `wingman-tower-forgejo`
 - `wingman-tower-git-gateway`
@@ -164,8 +171,14 @@ curl http://127.0.0.1:${TOWER_HOST_PORT:-3100}/health
 curl http://127.0.0.1:${GIT_GATEWAY_HOST_PORT:-3180}/health
 curl http://127.0.0.1:${GIT_GATEWAY_HOST_PORT:-3180}/ready
 curl http://127.0.0.1:${MINIO_API_HOST_PORT:-9000}/minio/health/live
+curl http://127.0.0.1:${TOWER_HOST_PORT:-3100}/.well-known/nstack.json
 docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f tower
 ```
+
+Relay and Blossom bind to loopback by default on ports `7777` and `3002`.
+Route them through distinct TLS-enabled domains; the relay proxy must preserve
+WebSocket upgrades. Full configuration, security boundaries and post-restart
+smoke commands are in [Nstack services](nstack-services.md).
 
 The shipped Autopilot `git-credential-wingman` helper obtains a native Forgejo
 OAuth credential through the session broker and Tower Nostr OIDC. Expiry causes

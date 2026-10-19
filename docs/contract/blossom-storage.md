@@ -30,6 +30,13 @@ BUD-02 upload and BUD-12 list/delete interoperability are not advertised or expo
 Tower's existing authenticated upload and management APIs remain authoritative.
 No relay announcements, mirroring or public metadata enumeration are added.
 
+This remains Tower's ACL-backed compatibility/publication surface. The supported
+Nstack deployment also includes a full Blossom sidecar at a distinct explicit
+origin; see [Nstack services](../nstack-services.md). Sidecar uploads and owner
+rows are independent and never become Tower objects or private Flight Deck
+files. `BLOSSOM_PUBLIC_ORIGIN` continues to mean Tower's retrieval origin;
+`NSTACK_BLOSSOM_PUBLIC_ORIGIN` identifies the separate full protocol server.
+
 ## Verification and race handling
 
 Completion streams stored bytes into SHA-256 and derives actual size. A supplied

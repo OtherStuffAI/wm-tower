@@ -1,0 +1,93 @@
+port: 3000
+host: 0.0.0.0
+publicDomain: "${BLOSSOM_PUBLIC_DOMAIN}"
+
+database:
+  path: data/sqlite.db
+
+storage:
+  backend: local
+  local:
+    dir: ./data/blobs
+  removeWhenNoOwners: true
+  rules:
+    - type: "image/*"
+      expiration: 90 days
+    - type: "video/*"
+      expiration: 30 days
+    - type: "audio/*"
+      expiration: 30 days
+    - type: "application/pdf"
+      expiration: 90 days
+    - type: "application/*"
+      expiration: 30 days
+    - type: "*"
+      expiration: 14 days
+
+upload:
+  enabled: true
+  requireAuth: true
+  maxSize: 104857600
+  workers: 2
+  maxJobsPerWorker: 2
+  throughputWindowMs: 1000
+  requirePubkeyInRule: false
+
+mirror:
+  enabled: true
+  requireAuth: true
+  connectTimeout: 10000
+  bodyTimeout: 120000
+
+delete:
+  requireAuth: true
+
+list:
+  enabled: true
+  requireAuth: true
+  allowListOthers: false
+
+media:
+  enabled: true
+  requireAuth: true
+  requirePubkeyInRule: false
+  maxSize: 104857600
+  tmpDir: ./data/media-tmp
+  image:
+    quality: 88
+    progressive: true
+    maxWidth: 1920
+    maxHeight: 1080
+    outputFormat: webp
+    maintainAspectRatio: true
+    keepExif: false
+    fps: 30
+  video:
+    quality: 85
+    maxHeight: 1080
+    maxFps: 30
+    format: mp4
+    audioCodec: aac
+    videoCodec: libx264
+  thumbnail:
+    enabled: true
+    quality: 80
+    maxWidth: 512
+    maxHeight: 512
+    outputFormat: webp
+    videoSeek: 1
+
+prune:
+  initialDelayMs: 60000
+  intervalMs: 30000
+  batchSize: 1000
+
+landing:
+  enabled: true
+  title: "Wingman Nstack Blossom"
+
+report:
+  enabled: true
+
+dashboard:
+  enabled: false
