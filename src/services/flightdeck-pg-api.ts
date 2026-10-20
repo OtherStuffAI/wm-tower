@@ -998,7 +998,7 @@ export function normalizeFlightDeckPgPersonalWappSignerMetadata(input: {
       'metadata.signer.allowed_nip98_target_origins',
       errors,
     );
-  const eventKinds = normalizePositiveIntegerList(
+  const eventKinds = normalizeNonNegativeIntegerList(
     signer.allowed_event_kinds,
     'metadata.signer.allowed_event_kinds',
     errors,
@@ -1120,7 +1120,7 @@ function normalizeOriginList(
   return origins;
 }
 
-function normalizePositiveIntegerList(
+function normalizeNonNegativeIntegerList(
   value: unknown,
   path: string,
   errors: FlightDeckPgValidationField[],
@@ -1131,18 +1131,18 @@ function normalizePositiveIntegerList(
     errors.push({
       path,
       code: 'invalid',
-      message: `${path} must be an array of positive integers`,
+      message: `${path} must be an array of non-negative integers`,
     });
     return [];
   }
   const result: number[] = [];
   value.forEach((item, index) => {
     const numberValue = Number(item);
-    if (!Number.isInteger(numberValue) || numberValue < 1) {
+    if (!Number.isSafeInteger(numberValue) || numberValue < 0) {
       errors.push({
         path: `${path}.${index}`,
         code: 'invalid',
-        message: `${path}.${index} must be a positive integer`,
+        message: `${path}.${index} must be a non-negative integer`,
       });
       return;
     }

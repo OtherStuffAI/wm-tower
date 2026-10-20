@@ -53,6 +53,41 @@ describe('Flight Deck PG personal WApp signer metadata', () => {
     expect(result.metadata.signer).toEqual(result.profile);
   });
 
+  test('accepts Nostr kind 0 while rejecting negative and unsafe event kinds', () => {
+    const accepted = normalizeFlightDeckPgPersonalWappSignerMetadata({
+      launchUrl: 'https://example-wapp.agent.example.invalid/app',
+      metadata: {
+        signer: {
+          enabled: true,
+          allowed_origins: ['https://example-wapp.agent.example.invalid'],
+          allowed_event_kinds: [0, 3, 27235, 0],
+        },
+      },
+    });
+
+    expect(accepted.errors).toEqual([]);
+    expect(accepted.profile?.allowed_event_kinds).toEqual([0, 3, 27235]);
+
+    for (const invalidKind of [-1, Number.MAX_SAFE_INTEGER + 1]) {
+      const rejected = normalizeFlightDeckPgPersonalWappSignerMetadata({
+        launchUrl: 'https://example-wapp.agent.example.invalid/app',
+        metadata: {
+          signer: {
+            enabled: true,
+            allowed_origins: ['https://example-wapp.agent.example.invalid'],
+            allowed_event_kinds: [invalidKind, 27235],
+          },
+        },
+      });
+
+      expect(rejected.profile).toBeNull();
+      expect(rejected.errors).toContainEqual(expect.objectContaining({
+        path: 'metadata.signer.allowed_event_kinds.0',
+        code: 'invalid',
+      }));
+    }
+  });
+
   test('fails closed when signer metadata does not include launch origin', () => {
     const result = normalizeFlightDeckPgPersonalWappSignerMetadata({
       launchUrl: 'https://example-wapp.agent.example.invalid/app',
