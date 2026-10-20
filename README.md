@@ -46,6 +46,10 @@ The current Superbased V4 protocol drafts live in:
 These proposals formalize the implemented Tower contract for auth, workspaces,
 groups, record sync, storage, service discovery, and connection/bootstrap packaging.
 
+[NBrowser workspace backup v1](docs/contract/nbrowser-workspace-backup-v1.md)
+defines the selected-workspace private ciphertext and per-user recovery-pointer
+contract for NBrowser, including owner-managed namespace registration.
+
 ## Production
 
 Optional, explicitly configured mesh transport is documented in

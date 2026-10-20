@@ -32,6 +32,14 @@ import {
   prepareStorageObjectForAuthorizedOwner,
 } from '../services/storage';
 import {
+  AppDbError,
+  createWorkspaceAppRow,
+  deleteWorkspaceAppRow,
+  getWorkspaceAppRow,
+  listWorkspaceAppRows,
+  updateWorkspaceAppRow,
+} from '../services/app-db';
+import {
   authorizeFlightDeckPgOperation,
   createFlightDeckPgNestedGroupEdge,
   getFlightDeckPgWorkspaceMembership,
@@ -326,6 +334,7 @@ import {
   validateFlightDeckPgChannelMetadata,
 } from '../services/flightdeck-pg-agent-direct';
 import type {
+  CreateWorkspaceAppRowInput,
   FlightDeckPgActorKind,
   FlightDeckPgApprovalStatus,
   FlightDeckPgChannelKind,
@@ -357,6 +366,8 @@ import type {
   FlightDeckPgWorkroomStatus,
   FlightDeckPgWorkspaceRole,
   PrepareStorageInput,
+  UpdateWorkspaceAppRowInput,
+  WorkspaceAppRowVisibility,
 } from '../types';
 
 export const flightDeckPgRouter = new Hono();
@@ -925,6 +936,23 @@ async function requireFlightDeckPgContext(
     },
     identity,
   };
+}
+
+function flightDeckPgAppRowError(c: Context, error: unknown, identity: FlightDeckPgIdentity) {
+  if (error instanceof AppDbError) {
+    return jsonError(c, error.status as 400 | 403 | 404 | 409, error.code, error.message, identity);
+  }
+  return c.json({
+    error: error instanceof Error ? error.message : 'Workspace app row request failed',
+    code: 'workspace_app_row_failed',
+    status: 500,
+    identity,
+  }, 500);
+}
+
+function parseWorkspaceAppRowLimit(value: string | undefined): number | undefined {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseLimit(c: Context) {
@@ -2065,6 +2093,179 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/storage/prepare', async (c) =>
     }, 201);
   } catch (error) {
     return jsonError(c, 500, 'storage_prepare_failed', error instanceof Error ? error.message : 'Failed to prepare PG storage object', identity);
+  }
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/apps/:appNpub/db/:collection/rows', async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const appNpub = String(c.req.param('appNpub') || '').trim();
+  const collection = String(c.req.param('collection') || '').trim();
+
+  try {
+    const rows = await listWorkspaceAppRows(
+      context.workspace.workspace_owner_npub,
+      appNpub,
+      collection,
+      auth.userNpub,
+      {
+        limit: parseWorkspaceAppRowLimit(c.req.query('limit')),
+        offset: parseWorkspaceAppRowLimit(c.req.query('offset')),
+        owner_npub: c.req.query('owner_npub'),
+        visibility: c.req.query('visibility') as WorkspaceAppRowVisibility | undefined,
+        group_id: c.req.query('group_id'),
+      },
+    );
+    return c.json({
+      identity,
+      workspace_id: context.workspace.id,
+      workspace_owner_npub: context.workspace.workspace_owner_npub,
+      app_npub: appNpub,
+      collection,
+      rows,
+    });
+  } catch (error) {
+    return flightDeckPgAppRowError(c, error, identity);
+  }
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/apps/:appNpub/db/:collection/rows', async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const appNpub = String(c.req.param('appNpub') || '').trim();
+  const collection = String(c.req.param('collection') || '').trim();
+  const body = await readJsonBody(c) as CreateWorkspaceAppRowInput | null;
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+
+  try {
+    const row = await createWorkspaceAppRow(
+      context.workspace.workspace_owner_npub,
+      appNpub,
+      collection,
+      body,
+      auth.userNpub,
+    );
+    return c.json({
+      identity,
+      workspace_id: context.workspace.id,
+      workspace_owner_npub: context.workspace.workspace_owner_npub,
+      app_npub: appNpub,
+      collection,
+      row,
+    }, 201);
+  } catch (error) {
+    return flightDeckPgAppRowError(c, error, identity);
+  }
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/apps/:appNpub/db/:collection/rows/:rowId', async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const appNpub = String(c.req.param('appNpub') || '').trim();
+  const collection = String(c.req.param('collection') || '').trim();
+  const rowId = String(c.req.param('rowId') || '').trim();
+
+  try {
+    const row = await getWorkspaceAppRow(
+      context.workspace.workspace_owner_npub,
+      appNpub,
+      collection,
+      rowId,
+      auth.userNpub,
+    );
+    if (!row) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
+    return c.json({
+      identity,
+      workspace_id: context.workspace.id,
+      workspace_owner_npub: context.workspace.workspace_owner_npub,
+      app_npub: appNpub,
+      collection,
+      row,
+    });
+  } catch (error) {
+    return flightDeckPgAppRowError(c, error, identity);
+  }
+});
+
+flightDeckPgRouter.patch('/workspaces/:workspaceId/apps/:appNpub/db/:collection/rows/:rowId', async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const appNpub = String(c.req.param('appNpub') || '').trim();
+  const collection = String(c.req.param('collection') || '').trim();
+  const rowId = String(c.req.param('rowId') || '').trim();
+  const body = await readJsonBody(c) as UpdateWorkspaceAppRowInput | null;
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+
+  try {
+    const row = await updateWorkspaceAppRow(
+      context.workspace.workspace_owner_npub,
+      appNpub,
+      collection,
+      rowId,
+      body,
+      auth.userNpub,
+    );
+    if (!row) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
+    return c.json({
+      identity,
+      workspace_id: context.workspace.id,
+      workspace_owner_npub: context.workspace.workspace_owner_npub,
+      app_npub: appNpub,
+      collection,
+      row,
+    });
+  } catch (error) {
+    return flightDeckPgAppRowError(c, error, identity);
+  }
+});
+
+flightDeckPgRouter.delete('/workspaces/:workspaceId/apps/:appNpub/db/:collection/rows/:rowId', async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const appNpub = String(c.req.param('appNpub') || '').trim();
+  const collection = String(c.req.param('collection') || '').trim();
+  const rowId = String(c.req.param('rowId') || '').trim();
+
+  try {
+    const deleted = await deleteWorkspaceAppRow(
+      context.workspace.workspace_owner_npub,
+      appNpub,
+      collection,
+      rowId,
+      auth.userNpub,
+    );
+    if (!deleted) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
+    return c.json({
+      identity,
+      workspace_id: context.workspace.id,
+      workspace_owner_npub: context.workspace.workspace_owner_npub,
+      app_npub: appNpub,
+      collection,
+      row_id: rowId,
+      deleted: true,
+    });
+  } catch (error) {
+    return flightDeckPgAppRowError(c, error, identity);
   }
 });
 

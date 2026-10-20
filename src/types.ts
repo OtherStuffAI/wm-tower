@@ -1683,6 +1683,26 @@ export interface UpdateWorkspaceAppRowInput {
   metadata?: Record<string, unknown>;
 }
 
+/** Workspace-UUID-bound envelope used by Flight Deck PG app-row routes. */
+export interface FlightDeckPgWorkspaceAppRowsResponse {
+  identity: FlightDeckPgIdentityFields;
+  workspace_id: string;
+  workspace_owner_npub: string;
+  app_npub: string;
+  collection: string;
+  rows: WorkspaceAppRowResponse[];
+}
+
+/** Workspace-UUID-bound single-row envelope used by Flight Deck PG app-row routes. */
+export interface FlightDeckPgWorkspaceAppRowResponse {
+  identity: FlightDeckPgIdentityFields;
+  workspace_id: string;
+  workspace_owner_npub: string;
+  app_npub: string;
+  collection: string;
+  row: WorkspaceAppRowResponse;
+}
+
 // ---- Graph Memory ----
 
 export type GraphMemoryVisibility = 'personal' | 'agent' | 'group' | 'workspace';

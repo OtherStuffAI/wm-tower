@@ -284,16 +284,25 @@ function assertDescriptorSigner(appNpub: string, signerNpub: string) {
 }
 
 async function requireRegisteredApp(sql: DbClient, workspaceOwnerNpub: string, appNpub: string) {
-  const [app] = await sql<{ ok: number }[]>`
-    SELECT 1 AS ok
+  const [app] = await sql<{ capabilities: unknown }[]>`
+    SELECT capabilities
     FROM workspace_apps
     WHERE workspace_owner_npub = ${workspaceOwnerNpub}
       AND app_npub = ${appNpub}
       AND enabled = true
     LIMIT 1
   `;
-  if (!app?.ok) {
+  if (!app) {
     throw new AppDbError('app_not_found', 404, 'workspace app not found');
+  }
+  return {
+    privateRowsOnly: Array.isArray(app.capabilities) && app.capabilities.includes('app_rows.private_only'),
+  };
+}
+
+function assertAppRowVisibilityAllowed(app: { privateRowsOnly: boolean }, visibility: WorkspaceAppRowVisibility) {
+  if (app.privateRowsOnly && visibility !== 'private') {
+    throw new AppDbError('visibility_forbidden', 403, 'app namespace only permits private rows');
   }
 }
 
@@ -823,7 +832,8 @@ export async function createWorkspaceAppRow(
   const data = normalizeJsonValue(input.data);
   const metadata = normalizeJsonObject(input.metadata, 'metadata');
 
-  await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
+  const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
+  assertAppRowVisibilityAllowed(app, visibility);
   await assertCanUseVisibility(sql, workspaceOwnerNpub, userNpub, visibility, groupId);
 
   try {
@@ -887,7 +897,7 @@ export async function listWorkspaceAppRows(
   const visibility = options.visibility ? normalizeVisibility(options.visibility) : '';
   const groupId = String(options.group_id || '').trim();
 
-  await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
+  const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
   await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
 
   const rows = await sql<WorkspaceAppRow[]>`
@@ -896,6 +906,7 @@ export async function listWorkspaceAppRows(
     WHERE r.workspace_owner_npub = ${workspaceOwnerNpub}
       AND r.app_npub = ${appNpub}
       AND r.collection = ${collection}
+      AND (${!app.privateRowsOnly} OR r.visibility = 'private')
       AND (${ownerNpub || null}::text IS NULL OR r.owner_npub = ${ownerNpub || null})
       AND (${visibility || null}::text IS NULL OR r.visibility = ${visibility || null})
       AND (${groupId || null}::uuid IS NULL OR r.group_id = ${groupId || null})
@@ -918,7 +929,7 @@ export async function getWorkspaceAppRow(
   const collection = normalizeCollection(collectionInput);
   const rowId = normalizeRowId(rowIdInput);
 
-  await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
+  const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
   await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
 
   const [row] = await sql<WorkspaceAppRow[]>`
@@ -928,6 +939,7 @@ export async function getWorkspaceAppRow(
       AND r.app_npub = ${appNpub}
       AND r.collection = ${collection}
       AND r.row_id = ${rowId}
+      AND (${!app.privateRowsOnly} OR r.visibility = 'private')
       AND ${visibleRowCondition(sql, userNpub)}
     LIMIT 1
   `;
@@ -946,7 +958,7 @@ export async function updateWorkspaceAppRow(
   const collection = normalizeCollection(collectionInput);
   const rowId = normalizeRowId(rowIdInput);
 
-  await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
+  const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
   await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
 
   const [current] = await sql<WorkspaceAppRow[]>`
@@ -962,6 +974,7 @@ export async function updateWorkspaceAppRow(
   if (!(await canWriteRow(sql, current, userNpub))) return null;
 
   const nextVisibility = input.visibility === undefined ? current.visibility : normalizeVisibility(input.visibility);
+  assertAppRowVisibilityAllowed(app, nextVisibility);
   const nextGroupId = nextVisibility === 'group'
     ? String(input.group_id === undefined ? current.group_id || '' : input.group_id || '').trim()
     : null;
