@@ -4611,6 +4611,31 @@ LANGUAGE plpgsql AS $$ DECLARE p BIGINT; ident TEXT; BEGIN
 END $$;
 -- end_priority_record_sync_v1
 
+-- archived_lifecycle_tombstones_v1
+-- Scopes/channels archived before the record journal existed never emitted the
+-- lifecycle tombstone the capture trigger now writes on archival, so retained or
+-- adopted caches never learn they are gone. Emit exactly that tombstone through
+-- the normal writer for any archived row whose latest head is not a delete.
+-- Delivery stays grant-bound by record visibility; reruns are no-ops.
+DO $$ DECLARE t RECORD; BEGIN
+ LOCK TABLE flightdeck_pg_scopes,flightdeck_pg_channels IN SHARE ROW EXCLUSIVE MODE;
+ FOR t IN
+   SELECT workspace_id,family,row FROM (
+     SELECT c.workspace_id,'channel'::text AS family,c.id,c.archived_at,to_jsonb(c) AS row,0 AS rank FROM flightdeck_pg_channels c
+     WHERE c.archived_at IS NOT NULL
+     UNION ALL
+     SELECT s.workspace_id,'scope'::text,s.id,s.archived_at,to_jsonb(s),1 FROM flightdeck_pg_scopes s
+     WHERE s.archived_at IS NOT NULL
+   ) archived
+   WHERE NOT EXISTS(SELECT 1 FROM flightdeck_pg_record_heads h WHERE h.workspace_id=archived.workspace_id
+     AND h.family=archived.family AND h.id=archived.id::text AND h.operation='delete')
+   ORDER BY workspace_id,rank,archived_at,id
+ LOOP
+   PERFORM flightdeck_pg_record_emit(t.workspace_id,t.family,t.row,'delete');
+ END LOOP;
+END $$;
+-- end_archived_lifecycle_tombstones_v1
+
 -- Personal pins retain unpin tombstones; migration is insert-if-absent.
 CREATE TABLE IF NOT EXISTS flightdeck_pg_thread_pins (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
