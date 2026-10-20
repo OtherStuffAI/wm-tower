@@ -1,7 +1,7 @@
 # Flight Deck PG Canvas authority
 
 Tower owns the shared Canvas definition, visibility, viewer order, naplet
-references and presentation state. Ambulando owns the spatial rendering and its
+references, native elements, threaded comments, and presentation state. Ambulando owns the spatial rendering and its
 viewer-partitioned Dexie projection. A Canvas is workspace-wide; it is not
 anchored to a scope or channel.
 
@@ -15,6 +15,11 @@ The NIP-98 surface is:
 - `GET /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/snapshot`
 - `POST /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/naplets`
 - `PATCH /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId`
+- `DELETE /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId`
+- `POST /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/elements`
+- `PATCH/DELETE /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId`
+- `GET/POST /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/comments`
+- `PATCH /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId`
 
 Every route uses the normal resolved NIP-98 actor. Human and agent actors follow
 the same membership, stable-group and record permission path. List and snapshot
@@ -34,10 +39,19 @@ Canvases visible to the current actor and fails on a visibility-set race. This
 lets two actors order different restricted projections without turning a
 channel into the Canvas owner.
 
-Canvas and naplet PATCH operations require `expected_row_version` and use an
+Canvas, naplet, element and comment mutations require `expected_row_version`
+where they update or delete an existing row and use an
 atomic row-version predicate. Audit and outbox rows are written in the same
 transaction. Canvas outbox events receive an additional visibility filter;
 restricted Canvas IDs and naplet IDs do not become generic workspace events.
+
+Native elements are Canvas-owned rows with a validated kind, bounded layout,
+JSON data, actor attribution, soft deletion, and monotonic row version.
+Comments are Canvas-owned root/reply rows anchored either to coordinates or a
+naplet. A reply inherits its root anchor. Any viewer may comment; resolving or
+reopening is limited to the comment author or a Canvas manager and uses CAS.
+Comment snapshots include authors and timestamps for browser and agent callers
+through the same signed API.
 
 ## Canonical source mapping
 
@@ -66,6 +80,11 @@ not-found records all become the same response:
 No source type, source ID, title, author, timestamps, counts, filename or content
 is included in this state. The explanatory sentence shown to a person remains a
 client concern.
+
+A naplet-anchored comment follows the same independent source boundary. If the
+viewer cannot read that naplet source, serialization degrades the anchor to its
+stored canvas coordinates and does not expose the naplet ID or protected source
+metadata.
 
 ## HTML boundary
 

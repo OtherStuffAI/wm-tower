@@ -63,19 +63,31 @@ import {
   FlightDeckPgCanvasConflictError,
   FlightDeckPgCanvasValidationError,
   createFlightDeckPgCanvas,
+  createFlightDeckPgCanvasComment,
+  createFlightDeckPgCanvasElement,
   createFlightDeckPgCanvasNaplet,
   createFlightDeckPgCanvasOutboxEvent,
+  deleteFlightDeckPgCanvasElement,
+  deleteFlightDeckPgCanvasNaplet,
+  listFlightDeckPgCanvasComments,
+  listFlightDeckPgCanvasElements,
   listFlightDeckPgCanvasNaplets,
   listVisibleFlightDeckPgCanvases,
   normalizeFlightDeckPgCanvasLayout,
+  normalizeFlightDeckPgCanvasAnchor,
+  normalizeFlightDeckPgCanvasElementLayout,
   normalizeFlightDeckPgCanvasViewport,
   reorderVisibleFlightDeckPgCanvases,
   resolveFlightDeckPgCanvasSource,
   resolveVisibleFlightDeckPgCanvas,
   serializeAuthorizedFlightDeckPgCanvasNaplet,
+  serializeFlightDeckPgCanvasComment,
+  serializeFlightDeckPgCanvasElement,
   serializeFlightDeckPgCanvas,
   updateFlightDeckPgCanvas,
+  updateFlightDeckPgCanvasElement,
   updateFlightDeckPgCanvasNaplet,
+  setFlightDeckPgCanvasCommentResolved,
 } from '../services/flightdeck-pg-canvases';
 import {
   AGENT_INSTRUCTION_SIGNATURE_METADATA_KEY,
@@ -358,6 +370,7 @@ import type {
   FlightDeckPgApprovalStatus,
   FlightDeckPgChannelKind,
   FlightDeckPgCanvasSourceType,
+  FlightDeckPgCanvasElementKind,
   FlightDeckPgCanvasVisibilityMode,
   FlightDeckPgGroupKind,
   FlightDeckPgInvocationRecipient,
@@ -462,6 +475,7 @@ const invocationRecipientTypes = new Set(['person', 'agent']);
 const invocationTargetTypes = new Set<FlightDeckPgInvocationTargetType>(['document', 'task', 'file']);
 const invocationStatuses = new Set<FlightDeckPgInvocationStatus>(['open', 'closed']);
 const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html']);
+const canvasElementKinds = new Set<FlightDeckPgCanvasElementKind>(['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame']);
 
 function canvasVisibilityFromBody(value: unknown) {
   const object = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -9707,7 +9721,20 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/canvases/:canvasId/snapshot', a
   if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
   const rows = await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId);
   const naplets = await Promise.all(rows.map((naplet) => serializeAuthorizedFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, naplet })));
-  return c.json({ workspace_id: context.workspace.id, identity, complete: true, canvas: serializeFlightDeckPgCanvas(canvas), naplets });
+  const readableNapletIds = new Set(naplets.filter((naplet) => naplet.access === 'ready').map((naplet) => naplet.id));
+  const [elements, comments] = await Promise.all([
+    listFlightDeckPgCanvasElements(context.workspace.id, canvasId),
+    listFlightDeckPgCanvasComments(context.workspace.id, canvasId),
+  ]);
+  return c.json({
+    workspace_id: context.workspace.id,
+    identity,
+    complete: true,
+    canvas: serializeFlightDeckPgCanvas(canvas),
+    naplets,
+    elements: elements.map(serializeFlightDeckPgCanvasElement),
+    comments: comments.map((comment) => serializeFlightDeckPgCanvasComment(comment, readableNapletIds)),
+  });
 });
 
 flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/naplets', async (c) => {
@@ -9781,6 +9808,222 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/naplets/:n
     });
     const naplet = await serializeAuthorizedFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, naplet: payload.naplet });
     return c.json({ workspace_id: context.workspace.id, identity, naplet, audit: { event_id: payload.auditId, operation: 'canvas_naplet.update', actor_npub: auth.userNpub }, outbox: payload.outbox });
+  } catch (error) {
+    if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
+    throw error;
+  }
+});
+
+flightDeckPgRouter.delete('/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId'), napletId = c.req.param('napletId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  if (!canvas.can_manage) return jsonError(c, 403, 'permission_denied', 'Actor cannot manage this Canvas', identity);
+  const body = await readJsonBody(c);
+  const expectedRowVersion = Number(body?.expected_row_version);
+  if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1 || !isUuid(napletId)) return validationError(c, identity, [{ path: 'expected_row_version', code: 'required', message: 'expected_row_version must be a positive integer' }]);
+  try {
+    const payload = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const naplet = await deleteFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, napletId, actorId: context.actor.id, expectedRowVersion }, sql);
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.delete', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, row_version: naplet.row_version } }, sql);
+      const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_naplet.deleted', entityType: 'canvas_naplet', entityId: naplet.id, operation: 'deleted', entityRowVersion: naplet.row_version, payload: { canvas_id: canvasId, naplet_id: naplet.id } }, sql);
+      return { naplet, auditId, outbox };
+    });
+    return c.json({ workspace_id: context.workspace.id, identity, deleted: true, id: payload.naplet.id, audit: { event_id: payload.auditId, operation: 'canvas_naplet.delete', actor_npub: auth.userNpub }, outbox: payload.outbox });
+  } catch (error) {
+    if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
+    throw error;
+  }
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/elements', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  if (!canvas.can_manage) return jsonError(c, 403, 'permission_denied', 'Actor cannot manage this Canvas', identity);
+  const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+  const kind = String(body.kind || '').trim() as FlightDeckPgCanvasElementKind;
+  const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data as Record<string, unknown> : null;
+  const fields: { path: string; code: string; message: string }[] = [];
+  if (!canvasElementKinds.has(kind)) fields.push({ path: 'kind', code: 'invalid', message: 'kind is not a supported Canvas element' });
+  if (!body.layout || typeof body.layout !== 'object' || Array.isArray(body.layout)) fields.push({ path: 'layout', code: 'invalid', message: 'layout must be an object' });
+  if (!data || JSON.stringify(data).length > 200000) fields.push({ path: 'data', code: 'invalid', message: 'data must be an object no larger than 200 KB' });
+  if (kind === 'text' && !String(data?.text || '').trim()) fields.push({ path: 'data.text', code: 'required', message: 'text elements require text' });
+  if (fields.length || !data) return validationError(c, identity, fields);
+  const payload = await getDb().begin(async (tx) => {
+    const sql = asDbClient(tx);
+    const element = await createFlightDeckPgCanvasElement({ workspaceId: context.workspace.id, canvasId, actorId: context.actor.id, kind, layout: normalizeFlightDeckPgCanvasElementLayout(body.layout), data }, sql);
+    const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_element.create', resourceType: 'canvas_element', resourceId: element.id, metadata: { canvas_id: canvasId, kind, row_version: element.row_version } }, sql);
+    const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_element.created', entityType: 'canvas_element', entityId: element.id, operation: 'created', entityRowVersion: element.row_version, payload: { canvas_id: canvasId, element_id: element.id } }, sql);
+    return { element, auditId, outbox };
+  });
+  return c.json({ workspace_id: context.workspace.id, identity, element: serializeFlightDeckPgCanvasElement(payload.element), audit: { event_id: payload.auditId, operation: 'canvas_element.create', actor_npub: auth.userNpub }, outbox: payload.outbox }, 201);
+});
+
+flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId'), elementId = c.req.param('elementId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  if (!canvas.can_manage) return jsonError(c, 403, 'permission_denied', 'Actor cannot manage this Canvas', identity);
+  const body = await readJsonBody(c);
+  const expectedRowVersion = Number(body?.expected_row_version);
+  const data = body?.data === undefined ? undefined : body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data as Record<string, unknown> : null;
+  const fields: { path: string; code: string; message: string }[] = [];
+  if (!isUuid(elementId)) fields.push({ path: 'elementId', code: 'invalid', message: 'elementId must be a UUID' });
+  if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) fields.push({ path: 'expected_row_version', code: 'required', message: 'expected_row_version must be a positive integer' });
+  if (body?.layout !== undefined && (!body.layout || typeof body.layout !== 'object' || Array.isArray(body.layout))) fields.push({ path: 'layout', code: 'invalid', message: 'layout must be an object' });
+  if (body?.data !== undefined && (!data || JSON.stringify(data).length > 200000)) fields.push({ path: 'data', code: 'invalid', message: 'data must be an object no larger than 200 KB' });
+  if (body?.layout === undefined && body?.data === undefined) fields.push({ path: 'body', code: 'empty', message: 'layout or data is required' });
+  if (fields.length) return validationError(c, identity, fields);
+  try {
+    const payload = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const element = await updateFlightDeckPgCanvasElement({ workspaceId: context.workspace.id, canvasId, elementId, actorId: context.actor.id, expectedRowVersion, layout: body.layout === undefined ? undefined : normalizeFlightDeckPgCanvasElementLayout(body.layout), data: data ?? undefined }, sql);
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_element.update', resourceType: 'canvas_element', resourceId: element.id, metadata: { canvas_id: canvasId, row_version: element.row_version } }, sql);
+      const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_element.updated', entityType: 'canvas_element', entityId: element.id, operation: 'updated', entityRowVersion: element.row_version, payload: { canvas_id: canvasId, element_id: element.id } }, sql);
+      return { element, auditId, outbox };
+    });
+    return c.json({ workspace_id: context.workspace.id, identity, element: serializeFlightDeckPgCanvasElement(payload.element), audit: { event_id: payload.auditId, operation: 'canvas_element.update', actor_npub: auth.userNpub }, outbox: payload.outbox });
+  } catch (error) {
+    if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
+    throw error;
+  }
+});
+
+flightDeckPgRouter.delete('/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId'), elementId = c.req.param('elementId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  if (!canvas.can_manage) return jsonError(c, 403, 'permission_denied', 'Actor cannot manage this Canvas', identity);
+  const body = await readJsonBody(c);
+  const expectedRowVersion = Number(body?.expected_row_version);
+  if (!isUuid(elementId) || !Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) return validationError(c, identity, [{ path: 'expected_row_version', code: 'required', message: 'expected_row_version must be a positive integer' }]);
+  try {
+    const payload = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const element = await deleteFlightDeckPgCanvasElement({ workspaceId: context.workspace.id, canvasId, elementId, actorId: context.actor.id, expectedRowVersion }, sql);
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_element.delete', resourceType: 'canvas_element', resourceId: element.id, metadata: { canvas_id: canvasId, row_version: element.row_version } }, sql);
+      const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_element.deleted', entityType: 'canvas_element', entityId: element.id, operation: 'deleted', entityRowVersion: element.row_version, payload: { canvas_id: canvasId, element_id: element.id } }, sql);
+      return { element, auditId, outbox };
+    });
+    return c.json({ workspace_id: context.workspace.id, identity, deleted: true, id: payload.element.id, audit: { event_id: payload.auditId, operation: 'canvas_element.delete', actor_npub: auth.userNpub }, outbox: payload.outbox });
+  } catch (error) {
+    if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
+    throw error;
+  }
+});
+
+async function canvasCommentsForViewer(context: FlightDeckPgRequiredRequestContext, actorNpub: string, canvasId: string) {
+  const rows = await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId);
+  const naplets = await Promise.all(rows.map((naplet) => serializeAuthorizedFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub, naplet })));
+  const readableNapletIds = new Set(naplets.filter((naplet) => naplet.access === 'ready').map((naplet) => naplet.id));
+  return (await listFlightDeckPgCanvasComments(context.workspace.id, canvasId)).map((comment) => serializeFlightDeckPgCanvasComment(comment, readableNapletIds));
+}
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/canvases/:canvasId/comments', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  return c.json({ workspace_id: context.workspace.id, identity, complete: true, comments: await canvasCommentsForViewer(context, auth.userNpub, canvasId) });
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/comments', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  const body = await readJsonBody(c);
+  if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
+  const anchor = body.anchor && typeof body.anchor === 'object' && !Array.isArray(body.anchor) ? body.anchor as Record<string, unknown> : {};
+  const requestedAnchorType = String(anchor.type || 'canvas').trim();
+  const anchorType = requestedAnchorType === 'naplet' ? 'naplet' : 'canvas';
+  const anchorNapletId = anchorType === 'naplet' ? String(anchor.naplet_id || '').trim() : null;
+  const parentCommentId = body.parent_comment_id ? String(body.parent_comment_id).trim() : null;
+  const commentBody = String(body.body || '').trim();
+  const fields: { path: string; code: string; message: string }[] = [];
+  if (requestedAnchorType !== 'canvas' && requestedAnchorType !== 'naplet') fields.push({ path: 'anchor.type', code: 'invalid', message: 'anchor.type must be canvas or naplet' });
+  if (!commentBody || commentBody.length > 10000) fields.push({ path: 'body', code: 'invalid', message: 'body must contain 1 to 10000 characters' });
+  if (anchorType === 'naplet' && !isUuid(anchorNapletId || '')) fields.push({ path: 'anchor.naplet_id', code: 'invalid', message: 'anchor.naplet_id must be a UUID' });
+  if (parentCommentId && !isUuid(parentCommentId)) fields.push({ path: 'parent_comment_id', code: 'invalid', message: 'parent_comment_id must be a UUID' });
+  if (fields.length) return validationError(c, identity, fields);
+  if (!parentCommentId && anchorType === 'naplet') {
+    const naplet = (await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId)).find((item) => item.id === anchorNapletId);
+    const authorized = naplet ? await serializeAuthorizedFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, naplet }) : null;
+    if (!authorized || authorized.access !== 'ready') return jsonError(c, 400, 'canvas_anchor_unavailable', 'Canvas comment anchor is unavailable', identity);
+  }
+  try {
+    const payload = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const comment = await createFlightDeckPgCanvasComment({ workspaceId: context.workspace.id, canvasId, actorId: context.actor.id, anchorType, anchorNapletId, anchor: normalizeFlightDeckPgCanvasAnchor(anchor), parentCommentId, body: commentBody }, sql);
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_comment.create', resourceType: 'canvas_comment', resourceId: comment.id, metadata: { canvas_id: canvasId, parent_comment_id: parentCommentId, anchor_type: anchorType, row_version: comment.row_version } }, sql);
+      const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_comment.created', entityType: 'canvas_comment', entityId: comment.id, operation: 'created', entityRowVersion: comment.row_version, payload: { canvas_id: canvasId, comment_id: comment.id } }, sql);
+      return { comment, auditId, outbox };
+    });
+    const comment = (await canvasCommentsForViewer(context, auth.userNpub, canvasId)).find((item) => item.id === payload.comment.id);
+    return c.json({ workspace_id: context.workspace.id, identity, comment, audit: { event_id: payload.auditId, operation: 'canvas_comment.create', actor_npub: auth.userNpub }, outbox: payload.outbox }, 201);
+  } catch (error) {
+    if (error instanceof FlightDeckPgCanvasValidationError) return validationError(c, identity, [{ path: 'anchor', code: 'invalid', message: error.message }]);
+    throw error;
+  }
+});
+
+flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId'), commentId = c.req.param('commentId');
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  const existing = (await listFlightDeckPgCanvasComments(context.workspace.id, canvasId)).find((comment) => comment.id === commentId);
+  if (!existing) return jsonError(c, 404, 'canvas_comment_unavailable', 'Canvas comment unavailable', identity);
+  if (!canvas.can_manage && existing.created_by_actor_id !== context.actor.id) return jsonError(c, 403, 'permission_denied', 'Actor cannot resolve this Canvas comment', identity);
+  const body = await readJsonBody(c);
+  const expectedRowVersion = Number(body?.expected_row_version);
+  if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1 || typeof body?.resolved !== 'boolean') return validationError(c, identity, [{ path: 'body', code: 'invalid', message: 'resolved and expected_row_version are required' }]);
+  try {
+    const payload = await getDb().begin(async (tx) => {
+      const sql = asDbClient(tx);
+      const comment = await setFlightDeckPgCanvasCommentResolved({ workspaceId: context.workspace.id, canvasId, commentId, actorId: context.actor.id, expectedRowVersion, resolved: body.resolved }, sql);
+      const operation = body.resolved ? 'canvas_comment.resolve' : 'canvas_comment.reopen';
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: operation, resourceType: 'canvas_comment', resourceId: comment.id, metadata: { canvas_id: canvasId, row_version: comment.row_version } }, sql);
+      const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: `flightdeck_pg.${operation.replace('.', '.')}`, entityType: 'canvas_comment', entityId: comment.id, operation: 'updated', entityRowVersion: comment.row_version, payload: { canvas_id: canvasId, comment_id: comment.id, resolved: body.resolved } }, sql);
+      return { comment, operation, auditId, outbox };
+    });
+    const comment = (await canvasCommentsForViewer(context, auth.userNpub, canvasId)).find((item) => item.id === payload.comment.id);
+    return c.json({ workspace_id: context.workspace.id, identity, comment, audit: { event_id: payload.auditId, operation: payload.operation, actor_npub: auth.userNpub }, outbox: payload.outbox });
   } catch (error) {
     if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
     throw error;

@@ -3373,6 +3373,31 @@ export function buildOpenApiDocument(origin: string) {
             title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains only immutable package bytes plus version and digest; never credentials or URLs.' }, row_version: { type: 'integer', minimum: 1 },
           },
         },
+        FlightDeckPgCanvasElementLayout: {
+          type: 'object', additionalProperties: false, required: ['x', 'y', 'width', 'height', 'z'],
+          properties: { x: { type: 'integer' }, y: { type: 'integer' }, width: { type: 'integer', minimum: 8, maximum: 4000 }, height: { type: 'integer', minimum: 8, maximum: 4000 }, z: { type: 'integer', minimum: 1, maximum: 100000 } },
+        },
+        FlightDeckPgCanvasElement: {
+          type: 'object', additionalProperties: false, required: ['id', 'kind', 'layout', 'data', 'row_version', 'created_at', 'updated_at'],
+          properties: {
+            id: { type: 'string', format: 'uuid' }, kind: { type: 'string', enum: ['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame'] },
+            layout: { $ref: '#/components/schemas/FlightDeckPgCanvasElementLayout' }, data: { type: 'object', additionalProperties: true },
+            row_version: { type: 'integer', minimum: 1 }, created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        FlightDeckPgCanvasComment: {
+          type: 'object', additionalProperties: false, required: ['id', 'anchor', 'parent_comment_id', 'body', 'resolved_at', 'author', 'row_version', 'created_at', 'updated_at'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            anchor: { oneOf: [
+              { type: 'object', additionalProperties: false, required: ['type', 'x', 'y'], properties: { type: { type: 'string', const: 'canvas' }, x: { type: 'integer' }, y: { type: 'integer' } } },
+              { type: 'object', additionalProperties: false, required: ['type', 'naplet_id'], properties: { type: { type: 'string', const: 'naplet' }, naplet_id: { type: 'string', format: 'uuid' } } },
+            ] },
+            parent_comment_id: { type: ['string', 'null'], format: 'uuid' }, body: { type: 'string', minLength: 1, maxLength: 10000 }, resolved_at: { type: ['string', 'null'], format: 'date-time' },
+            author: { type: 'object', additionalProperties: false, required: ['actor_id', 'npub', 'label'], properties: { actor_id: { type: 'string', format: 'uuid' }, npub: { type: 'string' }, label: { type: 'string' } } },
+            row_version: { type: 'integer', minimum: 1 }, created_at: { type: 'string', format: 'date-time' }, updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
         WorkspaceAppDbRow: {
           type: 'object',
           properties: {
@@ -5389,7 +5414,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read a Canvas with independently authorized source projections',
           description: 'Re-authorizes every document, channel task list, chat thread, or immutable HTML file version for the same NIP-98 viewer. Forbidden, revoked, missing, invalid, or unreadable sources all return only id, access=denied, layout and row_version. HTML returns digest-verified package bytes and no URL, credential, signer, host-fetch or same-origin authority.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          responses: { '200': { description: 'Complete identity-bound snapshot', content: { 'application/json': { schema: { type: 'object', required: ['workspace_id', 'identity', 'complete', 'canvas', 'naplets'], properties: { workspace_id: { type: 'string', format: 'uuid' }, identity: { type: 'object' }, complete: { type: 'boolean', const: true }, canvas: { $ref: '#/components/schemas/FlightDeckPgCanvas' }, naplets: { type: 'array', items: { oneOf: [{ $ref: '#/components/schemas/FlightDeckPgCanvasNapletReady' }, { $ref: '#/components/schemas/FlightDeckPgCanvasNapletDenied' }] } } } } } } }, '404': { description: 'Canvas unavailable' } },
+          responses: { '200': { description: 'Complete identity-bound snapshot', content: { 'application/json': { schema: { type: 'object', required: ['workspace_id', 'identity', 'complete', 'canvas', 'naplets', 'elements', 'comments'], properties: { workspace_id: { type: 'string', format: 'uuid' }, identity: { type: 'object' }, complete: { type: 'boolean', const: true }, canvas: { $ref: '#/components/schemas/FlightDeckPgCanvas' }, naplets: { type: 'array', items: { oneOf: [{ $ref: '#/components/schemas/FlightDeckPgCanvasNapletReady' }, { $ref: '#/components/schemas/FlightDeckPgCanvasNapletDenied' }] } }, elements: { type: 'array', items: { $ref: '#/components/schemas/FlightDeckPgCanvasElement' } }, comments: { type: 'array', items: { $ref: '#/components/schemas/FlightDeckPgCanvasComment' } } } } } } }, '404': { description: 'Canvas unavailable' } },
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/naplets': {
@@ -5408,6 +5433,57 @@ export function buildOpenApiDocument(origin: string) {
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, title: { type: ['string', 'null'], minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
           responses: { '200': { description: 'Naplet presentation state updated' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
+        },
+        delete: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Delete a Canvas naplet',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 } } } } } },
+          responses: { '200': { description: 'Naplet deleted' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/elements': {
+        post: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Create a native Canvas element',
+          description: 'Creates a persistence-backed text, shape, connector, drawing or frame and emits audit plus ACL-filtered outbox evidence.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['kind', 'layout', 'data'], properties: { kind: { type: 'string', enum: ['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame'] }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasElementLayout' }, data: { type: 'object', additionalProperties: true } } } } } },
+          responses: { '201': { description: 'Element created' }, '403': { description: 'Management denied' } },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/elements/{elementId}': {
+        patch: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Update a native Canvas element',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'elementId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasElementLayout' }, data: { type: 'object', additionalProperties: true } } } } } },
+          responses: { '200': { description: 'Element updated' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
+        },
+        delete: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Delete a native Canvas element',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'elementId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 } } } } } },
+          responses: { '200': { description: 'Element deleted' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/comments': {
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'List Canvas comment threads',
+          description: 'Human and agent callers receive the same authorized threaded comments. Naplet anchors are reduced to canvas coordinates unless the caller can independently read the naplet source.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '200': { description: 'Complete comment list' }, '404': { description: 'Canvas unavailable' } },
+        },
+        post: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Create a Canvas comment or reply',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['anchor', 'body'], properties: { anchor: { type: 'object' }, parent_comment_id: { type: 'string', format: 'uuid' }, body: { type: 'string', minLength: 1, maxLength: 10000 } } } } } },
+          responses: { '201': { description: 'Comment created' }, '400': { description: 'Invalid anchor or reply' }, '404': { description: 'Canvas unavailable' } },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/comments/{commentId}': {
+        patch: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Resolve or reopen a Canvas comment thread',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'commentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['resolved', 'expected_row_version'], properties: { resolved: { type: 'boolean' }, expected_row_version: { type: 'integer', minimum: 1 } } } } } },
+          responses: { '200': { description: 'Comment thread updated' }, '403': { description: 'Only the author or a Canvas manager may resolve' }, '409': { description: 'Stale row version' } },
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/personal-wapps': {
