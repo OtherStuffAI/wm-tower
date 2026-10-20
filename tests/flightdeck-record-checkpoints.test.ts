@@ -235,6 +235,7 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
       // reset a newly seeded workspace and are independent of this extension.
       await ensureRuntimeSchema(oldDb);
       // Recreate the precise pre-v2 schema after legacy runtime stabilization.
+      await oldDb`DROP TABLE flightdeck_pg_record_adoptions`;
       await oldDb`DROP TABLE flightdeck_pg_record_page_tokens`;
       await oldDb`DROP TABLE flightdeck_pg_record_clients`;
       await oldDb`ALTER TABLE flightdeck_pg_record_clock DROP COLUMN journal_floor`;

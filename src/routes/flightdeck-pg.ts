@@ -14,6 +14,7 @@ import { registerFeedReaderRoutes } from './feed-reader';
 import { registerRecordClient, readRecordCheckpoint, retireRecordClient, acknowledgeRecordCheckpoint, recordSyncDiscovery } from '../services/flightdeck-record-checkpoints';
 import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
 import { normalizePriorityFilters, prioritySyncDiscovery, readContextClosure, readPriorityRecords, readRepairManifest, repairRecords } from '../services/flightdeck-record-priority';
+import { adoptRecordCache, recordAdoptionDiscovery } from '../services/flightdeck-record-adoption';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createHash } from 'crypto';
@@ -1593,7 +1594,7 @@ flightDeckPgRouter.get('/service', async (c) => {
       schema_version: 1,
     },
     capabilities: flightDeckPgCapabilities,
-    record_sync: {...recordSyncDiscovery,...prioritySyncDiscovery},
+    record_sync: {...recordSyncDiscovery,...prioritySyncDiscovery,cache_adoption:recordAdoptionDiscovery},
     links: {
       workspace_descriptor_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor',
       me_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me',
@@ -2517,10 +2518,14 @@ function recordSyncErrorResponse(c: Context, error: unknown, protocol: 1 | 2) {
   if (!(error instanceof RecordSyncError)) throw error;
   const discard = ['reset_required', 'history_pruned', 'client_expired', 'client_not_registered'].includes(error.code);
   const repairable = [...(discard ? [error.code] : []), 'page_token_invalid', 'auxiliary_cursor_invalid'].includes(error.code);
+  const adoption = error.code.startsWith('adoption_') || error.code === 'client_already_checkpointed';
   return c.json({ error: error.code, protocol_version: protocol,
     ...(discard ? { reset: { discard_authoritative: false, preserve_pending: true, preserve_downloaded: true } } : {}),
     ...(repairable ? { recovery: { reason_code: error.code, strategy: 'repair_manifest', full_snapshot_required: false,
-      manifest_route: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair-manifest' } } : {}) }, error.status);
+      manifest_route: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair-manifest' } } : {}),
+    ...(adoption ? { recovery: { reason_code:error.code, strategy:'restart_cache_adoption', full_snapshot_required:false,
+      preserve_pending:true,preserve_downloaded:true,
+      adoption_route:'/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/adoption' } } : {}) }, error.status);
 }
 
 function priorityFiltersFromRequest(c: Context) {
@@ -2609,6 +2614,16 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/clients/:clientId/p
       clientId:c.req.param('clientId'),cursor:c.req.param('cursor'),manifestId:c.req.param('manifestId'),index:Number(raw)});
     return new Response(bytes as BodyInit,{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}});
   } catch(error) { return recordSyncErrorResponse(c,error,2); }
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/record-sync/clients/:clientId/adoption',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  if(c.req.query('protocol_version')!=='2')return c.json({error:'unsupported_protocol_version'},400);
+  try{let body:any;try{body=await c.req.json();}catch{throw new RecordSyncError(400,'invalid_body');}
+    return c.json(await adoptRecordCache({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+      appNpub:result.context.workspace.app_npub,clientId:c.req.param('clientId')},body));}
+  catch(error){return recordSyncErrorResponse(c,error,2);}
 });
 
 // NIP-98 signs the exact URL; POST additionally verifies the exact body hash.

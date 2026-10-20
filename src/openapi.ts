@@ -5910,6 +5910,19 @@ export function buildOpenApiDocument(origin: string) {
           responses: recordCheckpointResponses,
         },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/adoption': {
+        post: {
+          tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Adopt an existing authorized cache as a durable v2 checkpoint',
+          description:'Starts from an unfiltered repair-manifest cursor, challenges the client against every authorized identity at that captured head, requires selective repair receipts for every mismatch, then atomically supersedes the same client incomplete snapshot with a delta checkpoint. Matching bodies are never returned. Every continuation is viewer/app/workspace/client/head/epoch/access/checkpoint/phase-bound; retries of the last accepted payload are idempotent. Absence and access loss never delete retained rows; only explicit tombstones do.',
+          parameters:recordCheckpointParameters,
+          requestBody:{required:true,content:{'application/json':{schema:{oneOf:[
+            {type:'object',additionalProperties:false,required:['request_id','manifest_cursor','expected_checkpoint_revision'],properties:{request_id:{type:'string',format:'uuid'},manifest_cursor:{type:'string',format:'uuid'},expected_checkpoint_revision:{type:'string',pattern:'^(0|[1-9][0-9]{0,18})$'}}},
+            {type:'object',additionalProperties:false,required:['cursor','inventory'],properties:{cursor:{type:'string',format:'uuid'},inventory:{type:'array',maxItems:200,items:{type:'object',additionalProperties:false,required:['family','id','state'],properties:{family:{type:'string'},id:{type:'string'},state:{type:'string',enum:['active','deleted','missing']},version:{type:'string',pattern:'^(0|[1-9][0-9]{0,18})$'}}}}}},
+            {type:'object',additionalProperties:false,required:['cursor','repaired'],properties:{cursor:{type:'string',format:'uuid'},repaired:{type:'array',maxItems:200,items:{type:'object',additionalProperties:false,required:['family','id','state','version'],properties:{family:{type:'string'},id:{type:'string'},state:{type:'string',enum:['active','deleted']},version:{type:'string',pattern:'^(0|[1-9][0-9]{0,18})$'}}}}}},
+          ]}}}},
+          responses:{'200':{description:'inventory_required challenge, repair_required identities, or adopted durable v2 checkpoint'},'400':{description:'Invalid protocol, client, body, inventory or receipt shape'},'401':{description:'NIP-98 exact URL/method/payload authentication required'},'403':{description:'Current workspace/viewer/app authority required'},'409':{description:'Explicit manifest, cursor, phase, authority, checkpoint, inventory, repair, capacity or already-checkpointed recovery reason; existing snapshot remains recoverable'},'413':{description:'Request or response exceeds 1 MiB'}},
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority': {
         get: {
           tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Read authorized current records newest-first without advancing completeness',

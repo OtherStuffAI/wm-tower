@@ -100,6 +100,11 @@ adds an independent newest-first working-set feed, authorized context closure,
 stable compact repair manifests, and selective canonical body repair. These
 supplements never advance the v2 completeness checkpoint or delete by omission.
 
+[Existing-cache adoption v1](docs/contract/record-cache-adoption-v1.md) lets a
+registered v2 device prove its retained cache against one captured unfiltered
+manifest, selectively repair only mismatches, and atomically establish a durable
+delta checkpoint without retransmitting matching canonical bodies.
+
 ## Personal attention
 
 [Personal attention v1](docs/contract/personal-attention-v1.md) documents the

@@ -3226,6 +3226,28 @@ export interface FlightDeckRecordCheckpoint {
   checkpoint_revision: string;
   last_active_at: string;
 }
+export interface FlightDeckRecordAdoptionChallenge {
+  family: string;
+  id: string;
+  version: string;
+  state: 'active'|'deleted';
+  relationships: Record<string,string>;
+}
+export interface FlightDeckRecordAdoptionBase {
+  protocol_version: 2;
+  adoption_id: string;
+  captured_head: string;
+  authority_epoch: string;
+  access_revision: string;
+  checkpoint_revision: string;
+  bounds: { max_rows:number; max_bytes:number };
+  retention_policy: 'retain_downloaded';
+}
+export type FlightDeckRecordAdoptionResponse = FlightDeckRecordAdoptionBase & (
+  | { status:'inventory_required'; cursor:string; challenge:FlightDeckRecordAdoptionChallenge[]; has_more:boolean }
+  | { status:'repair_required'; cursor:string; records:FlightDeckRecordAdoptionChallenge[]; repair_route:string }
+  | { status:'adopted'; checkpoint:FlightDeckRecordCheckpoint }
+);
 
 /** Actor-specific public reference to the exact bytes of a retained file version. */
 export interface FlightDeckPgBlossomPublicationStatus {

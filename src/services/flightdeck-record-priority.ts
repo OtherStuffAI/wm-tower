@@ -28,6 +28,7 @@ type PriorityFilters = {
 type AuxiliaryState = {
   head: string;
   epoch: string;
+  accessRevision?: string;
   filters: PriorityFilters;
   position?: string;
   family?: string;
@@ -83,7 +84,7 @@ async function viewerAndClock(input: ViewerInput, sql: Db) {
 }
 
 async function loadState(kind: 'priority'|'manifest', input: ViewerInput & {cursor?: string; filters: PriorityFilters}, clock: any, sql: Db): Promise<AuxiliaryState> {
-  if (!input.cursor) return {head:clock.position,epoch:clock.epoch,filters:input.filters};
+  if (!input.cursor) return {head:clock.position,epoch:clock.epoch,accessRevision:clock.access_revision,filters:input.filters};
   if (!token.test(input.cursor)) throw new RecordSyncError(400, 'invalid_cursor');
   const [saved] = await sql`SELECT state FROM flightdeck_pg_record_aux_cursors WHERE token=${input.cursor}
     AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND app_npub=${input.appNpub} AND kind=${kind}

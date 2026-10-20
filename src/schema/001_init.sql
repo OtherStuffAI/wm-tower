@@ -3794,6 +3794,27 @@ CREATE INDEX IF NOT EXISTS idx_fd_record_page_client ON flightdeck_pg_record_pag
 CREATE INDEX IF NOT EXISTS idx_fd_record_page_activity ON flightdeck_pg_record_page_tokens(last_used_at,token);
 -- Future prefix-pruning must advance this floor under the workspace clock lock.
 ALTER TABLE flightdeck_pg_record_clock ADD COLUMN IF NOT EXISTS journal_floor BIGINT NOT NULL DEFAULT 0;
+-- record_cache_adoption_v1
+-- Durable, bounded proof that an existing cache covers one authorized manifest
+-- head. The client row is replaced only by the final successful transaction.
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_adoptions (
+ adoption_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ workspace_id UUID NOT NULL, actor_id UUID NOT NULL, client_id UUID NOT NULL,
+ app_npub TEXT NOT NULL, request_id UUID NOT NULL, manifest_cursor UUID NOT NULL,
+ epoch UUID NOT NULL, access_revision BIGINT NOT NULL, captured_head BIGINT NOT NULL,
+ base_revision BIGINT NOT NULL, cursor UUID NOT NULL DEFAULT gen_random_uuid(),
+ previous_cursor UUID, phase TEXT NOT NULL CHECK(phase IN ('inventory','repair','adopted')),
+ state JSONB NOT NULL, last_request_hash TEXT, last_response JSONB NOT NULL,
+ committed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(workspace_id,actor_id,client_id,request_id), UNIQUE(cursor), UNIQUE(previous_cursor),
+ FOREIGN KEY(workspace_id,actor_id,client_id)
+   REFERENCES flightdeck_pg_record_clients(workspace_id,actor_id,client_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_adoption_owner ON flightdeck_pg_record_adoptions
+ (workspace_id,actor_id,created_at DESC,adoption_id);
+CREATE INDEX IF NOT EXISTS idx_fd_record_adoption_activity ON flightdeck_pg_record_adoptions(last_used_at,adoption_id);
+-- end_record_cache_adoption_v1
 -- end_flightdeck_record_checkpoints_v2
 
 
