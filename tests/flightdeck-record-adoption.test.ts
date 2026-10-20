@@ -78,8 +78,8 @@ describe.skipIf(!port||port===5432)('existing cache adoption v1',()=>{
     expect(await adoptRecordCache(client(clientId),request,db)).toEqual(response);
     await expect(adoptRecordCache(client(clientId),{cursor,inventory:[]},db)).rejects.toMatchObject({code:'adoption_cursor_invalid'});
     const repaired=await repairRecords({...viewer(),records:response.records},db);
-    await expect(adoptRecordCache(client(clientId),{cursor:response.cursor,repaired:[]},db)).rejects.toMatchObject({code:'adoption_repair_incomplete'});
     const done=await finish(clientId,response,target);expect(done.repairs).toBe(1);expect(done.response.status).toBe('adopted');
+    expect(done.response.deferred).toBeUndefined();
     expect(repaired.changes[0]!.id).toBe(target);
   });
 
@@ -127,14 +127,80 @@ describe.skipIf(!port||port===5432)('existing cache adoption v1',()=>{
     expect((await readRecordCheckpoint({workspaceId,actorId,clientId:expiringId},db)).checkpoint_cursor).toBeNull();
   });
 
-  test('repair receipts must be complete, ordered and current',async()=>{const targets=[await message('stale receipt one'),await message('stale receipt two')];const clientId=randomUUID();let {response}=await start(clientId);
+  async function repairStep(targets:string[]){const clientId=randomUUID();let {response}=await start(clientId);
     while(response.status==='inventory_required'&&!targets.every(target=>response.challenge.some((entry:any)=>entry.id===target)))response=await adoptRecordCache(client(clientId),{cursor:response.cursor,inventory:exact(response.challenge)},db);
     const inventory=exact(response.challenge).map((entry:any)=>targets.includes(entry.id)?{family:entry.family,id:entry.id,state:'missing'}:entry);response=await adoptRecordCache(client(clientId),{cursor:response.cursor,inventory},db);
-    expect(response.status).toBe('repair_required');const receipts=response.records.map((entry:any)=>({family:entry.family,id:entry.id,state:entry.state,version:entry.version}));
-    await expect(adoptRecordCache(client(clientId),{cursor:response.cursor,repaired:receipts.slice(1)},db)).rejects.toMatchObject({code:'adoption_repair_incomplete'});
-    await expect(adoptRecordCache(client(clientId),{cursor:response.cursor,repaired:[...receipts].reverse()},db)).rejects.toMatchObject({code:'adoption_repair_incomplete'});
-    await expect(adoptRecordCache(client(clientId),{cursor:response.cursor,repaired:receipts.map((entry:any,index:number)=>index?entry:{...entry,version:String(BigInt(entry.version)+1n)})},db)).rejects.toMatchObject({code:'adoption_repair_incomplete'});
-    expect((await readRecordCheckpoint({workspaceId,actorId,clientId},db)).checkpoint_cursor).toBeNull();
+    expect(response.status).toBe('repair_required');
+    return {clientId,response,receipts:response.records.map((entry:any)=>({family:entry.family,id:entry.id,state:entry.state,version:entry.version}))};
+  }
+
+  test('unconfirmed repair receipts are deferred and never fail the session',async()=>{const targets=[await message('stale receipt one'),await message('stale receipt two')];
+    const omitted=await repairStep(targets);let next=await adoptRecordCache(client(omitted.clientId),{cursor:omitted.response.cursor,repaired:omitted.receipts.slice(1)},db);
+    expect(next.deferred).toEqual([expect.objectContaining({id:omitted.receipts[0].id,state:'active',version:omitted.receipts[0].version})]);
+    const done=await finish(omitted.clientId,next);expect(done.response.status).toBe('adopted');expect(done.response.deferred_total).toBe('1');
+    expect((await readRecordCheckpoint({workspaceId,actorId,clientId:omitted.clientId},db)).checkpoint_cursor).toBe(done.response.checkpoint.checkpoint_cursor);
+
+    const reordered=await repairStep(targets);next=await adoptRecordCache(client(reordered.clientId),{cursor:reordered.response.cursor,repaired:[...reordered.receipts].reverse()},db);
+    expect(next.deferred).toBeUndefined();expect((await finish(reordered.clientId,next)).response.status).toBe('adopted');
+
+    const stale=await repairStep(targets);next=await adoptRecordCache(client(stale.clientId),{cursor:stale.response.cursor,
+      repaired:stale.receipts.map((entry:any,index:number)=>index?entry:{...entry,version:String(BigInt(entry.version)-1n)})},db);
+    expect(next.deferred?.map((entry:any)=>entry.id)).toEqual([stale.receipts[0].id]);
+    const staleDone=await finish(stale.clientId,next);expect(staleDone.response.status).toBe('adopted');
+    const delta=await readFlightDeckRecordPage({workspaceId,actorId,clientId:stale.clientId,protocolVersion:2,cursor:staleDone.response.checkpoint.checkpoint_cursor},db);
+    expect(delta.mode).toBe('delta');
+  });
+
+  test('a head advanced after the challenge is settled by the adopted delta',async()=>{const target=await message('advances during repair');const step=await repairStep([target]);
+    await db`UPDATE flightdeck_pg_messages SET body='advanced' WHERE id=${target}`;
+    const next=await adoptRecordCache(client(step.clientId),{cursor:step.response.cursor,repaired:step.receipts},db);expect(next.deferred).toBeUndefined();
+    const done=await finish(step.clientId,next);expect(done.response.status).toBe('adopted');
+    const delta=await readFlightDeckRecordPage({workspaceId,actorId,clientId:step.clientId,protocolVersion:2,cursor:done.response.checkpoint.checkpoint_cursor},db);
+    expect(delta.mode).toBe('delta');expect(delta.changes.map(change=>change.id)).toContain(target);
+  });
+
+  test('a cache downloaded by snapshot adopts without repairs despite boundary-labelled versions',async()=>{const clientId=randomUUID();
+    const registered=await registerRecordClient({workspaceId,actorId,clientId},db);const cached=new Map<string,{version:string;state:string}>();
+    let cursor=registered.initial_cursor,snapshotPages=0;
+    while(true){const page=await readFlightDeckRecordPage({workspaceId,actorId,clientId,protocolVersion:2,cursor},db);
+      for(const change of page.changes)cached.set(`${change.family}:${change.id}`,{version:change.version,state:change.operation==='delete'?'deleted':'active'});
+      if(page.mode!=='snapshot')break;snapshotPages++;cursor=page.next_cursor;}
+    expect(snapshotPages).toBeGreaterThan(0);
+    // Snapshot rows carry the boundary, never their own older journal position.
+    const manifest=await readRepairManifest({...viewer(),filters:normalizePriorityFilters({}),limit:200},db);
+    expect(manifest.entries.some(entry=>cached.has(`${entry.family}:${entry.id}`)&&cached.get(`${entry.family}:${entry.id}`)!.version!==entry.version)).toBe(true);
+    let {response}=await start(clientId,manifest.next_cursor);const repaired:any[]=[];
+    while(response.status!=='adopted'){
+      if(response.status==='repair_required'){repaired.push(...response.records);
+        const repair=await repairRecords({...viewer(),records:response.records},db);
+        response=await adoptRecordCache(client(clientId),{cursor:response.cursor,repaired:repair.changes.map(change=>({family:change.family,id:change.id,state:change.operation==='delete'?'deleted':'active',version:change.version}))},db);
+        expect(response.deferred).toBeUndefined();continue;}
+      const inventory=response.challenge.map((entry:any)=>{const local=cached.get(`${entry.family}:${entry.id}`);
+        return local?{family:entry.family,id:entry.id,...local}:{family:entry.family,id:entry.id,state:'missing'};});
+      response=await adoptRecordCache(client(clientId),{cursor:response.cursor,inventory},db);
+    }
+    // Only explicit tombstones, which snapshots never carry, need a repair.
+    expect(repaired.every(entry=>entry.state==='deleted')).toBe(true);expect(response.status).toBe('adopted');
+  },60_000);
+
+  test('the same device client re-adopts after losing its delta position',async()=>{const clientId=randomUUID();const first=await start(clientId);
+    const adopted=await finish(clientId,first.response);expect(adopted.response.status).toBe('adopted');
+    const again=await start(clientId);expect(again.checkpoint.checkpoint_revision).toBe(adopted.response.checkpoint.checkpoint_revision);
+    const readopted=await finish(clientId,again.response);expect(readopted.response.status).toBe('adopted');
+    expect(BigInt(readopted.response.checkpoint.checkpoint_revision)).toBeGreaterThan(BigInt(adopted.response.checkpoint.checkpoint_revision));
+    expect(readopted.response.checkpoint.client_id).toBe(clientId);
+  });
+
+  test('an idle-expired client re-registers in place while an epoch change stays an identity boundary',async()=>{const clientId=randomUUID();const first=await start(clientId);
+    await finish(clientId,first.response);
+    await db`UPDATE flightdeck_pg_record_clients SET last_active_at=now()-interval '91 days' WHERE client_id=${clientId}`;
+    await expect(readRecordCheckpoint({workspaceId,actorId,clientId},db)).rejects.toMatchObject({code:'client_expired'});
+    const restarted=await registerRecordClient({workspaceId,actorId,clientId},db);
+    expect(restarted).toMatchObject({client_id:clientId,checkpoint_revision:'0',checkpoint_cursor:null});
+    const readopted=await finish(clientId,(await start(clientId)).response);expect(readopted.response.status).toBe('adopted');
+
+    await db`UPDATE flightdeck_pg_record_clock SET epoch=${randomUUID()} WHERE workspace_id=${workspaceId}`;
+    await expect(registerRecordClient({workspaceId,actorId,clientId},db)).rejects.toMatchObject({code:'reset_required'});
   });
 
   test('large manifest work stays page-bounded and completes without body transfer',async()=>{for(let i=0;i<1200;i++)await message(`large cache ${i}`);
@@ -146,7 +212,8 @@ describe.skipIf(!port||port===5432)('existing cache adoption v1',()=>{
 });
 
 test('cache adoption is explicit in discovery, OpenAPI and NIP-98 route gating',async()=>{
-  expect(recordAdoptionDiscovery).toMatchObject({version:1,requires_unfiltered_manifest:true,max_inventory_rows:200,checkpoint_mode:'delta_at_captured_head'});
+  expect(recordAdoptionDiscovery).toMatchObject({version:1,requires_unfiltered_manifest:true,max_inventory_rows:200,checkpoint_mode:'delta_at_captured_head',
+    version_match:'at_least_authoritative',deferred_repairs:true,readopt_checkpointed_client:true});
   const api=buildOpenApiDocument('https://tower.example.test') as any;
   const path='/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/adoption';
   const operation=api.paths[path].post;expect(operation.summary).toMatch(/Adopt an existing/);expect(operation.requestBody.content['application/json'].schema.oneOf).toHaveLength(3);

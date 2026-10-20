@@ -63,25 +63,46 @@ async function checkpointTransaction<T>(input: RecordClientInput, operation: (sq
     }
   }
 }
+async function initialRecordState(input: RecordClientInput, clock: any, sql: Db): Promise<RecordSyncState> {
+  return { mode: 'snapshot', boundary: clock.position, after: clock.position,
+    family: '', id: '', snapshotId: randomUUID(),
+    access: await recordAccess(input.workspaceId, input.actorId, sql), accessRevision: clock.access_revision, progress: '0' };
+}
 export async function registerRecordClient(input: RecordClientInput, db: Db = getDb()): Promise<FlightDeckRecordCheckpoint> {
   return checkpointTransaction(input, async (sql, clock) => {
     await sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspaceId}),hashtext(${input.actorId}))`;
     const [existing] = await sql`SELECT 1 FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}`;
     if (existing) {
-      const client = await requireRecordClient(input, clock.epoch, sql, true);
-      await requireRecordHistory(input.workspaceId, (client.checkpoint_state ?? client.initial_state) as RecordSyncState, clock, sql);
-      const [renewed] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
+      try {
+        const client = await requireRecordClient(input, clock.epoch, sql, true);
+        await requireRecordHistory(input.workspaceId, (client.checkpoint_state ?? client.initial_state) as RecordSyncState, clock, sql);
+        const [renewed] = await sql`UPDATE flightdeck_pg_record_clients SET last_active_at=clock_timestamp()
+          WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
+        return serializeRecordCheckpoint({...renewed!,access_revision:clock.access_revision});
+      } catch (error) {
+        // An epoch change is an identity boundary and still requires a new cache.
+        if (!(error instanceof RecordSyncError) || !['client_expired', 'history_pruned'].includes(error.code)) throw error;
+      }
+      // Expiry is detected before epoch, so recheck the identity boundary here.
+      const [prior] = await sql`SELECT epoch FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}`;
+      if (prior!.epoch !== clock.epoch) throw new RecordSyncError(409, 'reset_required');
+      // The same device cache re-registers after a retention or idle boundary.
+      // Restart its checkpoint in place under current authority so it can adopt
+      // its retained rows instead of minting another device identity.
+      const state = await initialRecordState(input, clock, sql);
+      await sql`DELETE FROM flightdeck_pg_record_page_tokens WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}`;
+      await sql`DELETE FROM flightdeck_pg_record_adoptions WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}`;
+      const [restarted] = await sql`UPDATE flightdeck_pg_record_clients SET epoch=${clock.epoch},initial_cursor=gen_random_uuid(),initial_state=${sql.json(state)},
+        checkpoint_cursor=NULL,checkpoint_state=NULL,revision=0,last_active_at=clock_timestamp()
         WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} RETURNING *,revision::text`;
-      return serializeRecordCheckpoint({...renewed!,access_revision:clock.access_revision});
+      return serializeRecordCheckpoint({...restarted!,access_revision:clock.access_revision});
     }
     // Only abandoned clients are reclaimable, never evict another active cache.
     await sql`DELETE FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}
       AND last_active_at<=clock_timestamp()-interval '90 days'`;
     const [count] = await sql`SELECT count(*)::int AS n FROM flightdeck_pg_record_clients WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}`;
     if (count!.n >= RECORD_CLIENT_LIMIT) throw new RecordSyncError(409, 'client_capacity');
-    const state: RecordSyncState = { mode: 'snapshot', boundary: clock.position, after: clock.position,
-      family: '', id: '', snapshotId: randomUUID(),
-      access: await recordAccess(input.workspaceId, input.actorId, sql), accessRevision: clock.access_revision, progress: '0' };
+    const state = await initialRecordState(input, clock, sql);
     const [client] = await sql`INSERT INTO flightdeck_pg_record_clients(workspace_id,actor_id,client_id,epoch,initial_state)
       VALUES(${input.workspaceId},${input.actorId},${input.clientId},${clock.epoch},${sql.json(state)}) RETURNING *,revision::text`;
     return serializeRecordCheckpoint({...client!,access_revision:clock.access_revision});

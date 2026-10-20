@@ -194,12 +194,23 @@ describe.skipIf(!port || port === 5432)('durable device record checkpoints v2', 
     expect((await readRecordCheckpoint(input(a.client_id), db)).checkpoint_revision).toBe('0');
     await db`UPDATE flightdeck_pg_record_clients SET last_active_at=now()-interval '91 days' WHERE client_id=${a.client_id}`;
     await expect(readRecordCheckpoint(input(a.client_id), db)).rejects.toMatchObject({ code: 'client_expired' });
-    await expect(registerRecordClient(input(a.client_id), db)).rejects.toMatchObject({ code: 'client_expired' });
     await expect(readRecordCheckpoint(input(randomUUID()), db)).rejects.toMatchObject({ code: 'client_not_registered' });
-    const fresh = await register();
-    expect((await db`SELECT 1 FROM flightdeck_pg_record_clients WHERE client_id=${a.client_id}`).length).toBe(0);
+    // The same device re-registers in place, keeping its identity for adoption.
+    const restarted = await registerRecordClient(input(a.client_id), db);
+    expect(restarted).toMatchObject({ client_id: a.client_id, checkpoint_revision: '0', checkpoint_cursor: null });
+    expect(restarted.initial_cursor).not.toBe(a.initial_cursor);
     expect((await db`SELECT 1 FROM flightdeck_pg_record_page_tokens WHERE client_id=${a.client_id}`).length).toBe(0);
+    // Another abandoned client is still reclaimed by a different registration.
+    const b = await register(); await page(b.client_id, b.initial_cursor, 1);
+    await db`UPDATE flightdeck_pg_record_clients SET last_active_at=now()-interval '91 days' WHERE client_id=${b.client_id}`;
+    const fresh = await register();
+    expect((await db`SELECT 1 FROM flightdeck_pg_record_clients WHERE client_id=${b.client_id}`).length).toBe(0);
+    expect((await db`SELECT 1 FROM flightdeck_pg_record_page_tokens WHERE client_id=${b.client_id}`).length).toBe(0);
     expect(fresh.checkpoint_revision).toBe('0');
+    // An expired client from another authority epoch is still an identity boundary.
+    const c = await register();
+    await db`UPDATE flightdeck_pg_record_clients SET last_active_at=now()-interval '91 days',epoch=gen_random_uuid() WHERE client_id=${c.client_id}`;
+    await expect(registerRecordClient(input(c.client_id), db)).rejects.toMatchObject({ code: 'reset_required' });
   });
 
   test('client registration rejects capacity without evicting active state; concurrent last slot bounded', async () => {

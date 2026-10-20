@@ -17,12 +17,15 @@ type Db = ReturnType<typeof getDb>;
 type AdoptionInput = { workspaceId: string; actorId: string; appNpub: string; clientId: string };
 type InventoryEntry = { family: string; id: string; state: 'active'|'deleted'|'missing'; version?: string };
 type ReceiptEntry = { family: string; id: string; state: 'active'|'deleted'; version: string };
+type DeferredEntry = { family: string; id: string; version: string; state: 'active'|'deleted' };
 type AdoptionState = {
   challenge: FlightDeckRecordManifestEntry[];
   afterFamily: string;
   afterId: string;
   hasMore: boolean;
   mismatches?: FlightDeckRecordManifestEntry[];
+  deferred?: DeferredEntry[];
+  deferredTotal?: number;
 };
 type StartBody = { request_id: string; manifest_cursor: string; expected_checkpoint_revision: string };
 type InventoryBody = { cursor: string; inventory: InventoryEntry[] };
@@ -44,6 +47,12 @@ export const recordAdoptionDiscovery = {
   max_sessions_per_actor_workspace: RECORD_ADOPTION_LIMIT,
   continuation_idle_days: RECORD_ADOPTION_IDLE_DAYS,
   checkpoint_mode: 'delta_at_captured_head',
+  // Snapshot rows carry their snapshot boundary, never older than their content.
+  version_match: 'at_least_authoritative',
+  // Unconfirmed repairs never fail the session; the client fetches them lazily.
+  deferred_repairs: true,
+  // The same device cache may re-adopt after losing its delta position.
+  readopt_checkpointed_client: true,
 };
 
 function hashBody(body: unknown) {
@@ -101,18 +110,20 @@ async function challengeAfter(input: AdoptionInput, viewer: {npub:string;app_npu
   return { challenge, afterFamily:last?.family ?? afterFamily, afterId:last?.id ?? afterId, hasMore:candidates.length>scanned };
 }
 
-function common(row: any) {
+function common(row: any, state?: AdoptionState) {
   return { protocol_version:2 as const, adoption_id:String(row.adoption_id), captured_head:String(row.captured_head),
     authority_epoch:String(row.epoch), access_revision:String(row.access_revision), checkpoint_revision:String(row.base_revision),
-    bounds:{max_rows:RECORD_MAX_ROWS,max_bytes:RECORD_MAX_BYTES}, retention_policy:'retain_downloaded' as const };
+    bounds:{max_rows:RECORD_MAX_ROWS,max_bytes:RECORD_MAX_BYTES}, retention_policy:'retain_downloaded' as const,
+    ...(state?.deferred?.length ? { deferred:state.deferred } : {}),
+    ...(state?.deferredTotal ? { deferred_total:String(state.deferredTotal) } : {}) };
 }
 
 function inventoryResponse(row:any,state:AdoptionState,cursor:string) {
-  return {...common(row),status:'inventory_required' as const,cursor,challenge:state.challenge,has_more:state.hasMore};
+  return {...common(row,state),status:'inventory_required' as const,cursor,challenge:state.challenge,has_more:state.hasMore};
 }
 
 function repairResponse(row:any,state:AdoptionState,cursor:string) {
-  return {...common(row),status:'repair_required' as const,cursor,records:state.mismatches,
+  return {...common(row,state),status:'repair_required' as const,cursor,records:state.mismatches,
     repair_route:'/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair'};
 }
 
@@ -143,7 +154,7 @@ function validateCursorBody(body:any): asserts body is InventoryBody|RepairBody 
   }
 }
 
-async function commitAdoption(input:AdoptionInput,row:any,sql:Db,clock:any):Promise<any> {
+async function commitAdoption(input:AdoptionInput,row:any,adoption:AdoptionState,sql:Db,clock:any):Promise<any> {
   const [client]=await sql`SELECT *,revision::text FROM flightdeck_pg_record_clients
     WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId} FOR UPDATE`;
   if (!client || client.epoch!==row.epoch || client.revision!==String(row.base_revision)) throw new RecordSyncError(409,'adoption_checkpoint_conflict');
@@ -158,7 +169,7 @@ async function commitAdoption(input:AdoptionInput,row:any,sql:Db,clock:any):Prom
   if(!saved)throw new RecordSyncError(409,'adoption_checkpoint_conflict');
   await sql`DELETE FROM flightdeck_pg_record_page_tokens WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND client_id=${input.clientId}`;
   const checkpoint:FlightDeckRecordCheckpoint=serializeRecordCheckpoint({...saved,access_revision:clock.access_revision});
-  return {...common(row),status:'adopted' as const,checkpoint};
+  return {...common(row,adoption),status:'adopted' as const,checkpoint};
 }
 
 async function begin(input:AdoptionInput,body:StartBody,sql:Db,viewer:any,clock:any) {
@@ -179,8 +190,9 @@ async function begin(input:AdoptionInput,body:StartBody,sql:Db,viewer:any,clock:
   }
   await sql`DELETE FROM flightdeck_pg_record_adoptions WHERE last_used_at<=clock_timestamp()-interval '7 days'`;
   const client=await requireRecordClient(input,clock.epoch,sql,true);
+  // A delta checkpoint is no obstacle: the same device cache may have lost its
+  // local position. commitAdoption still compares-and-swaps this revision.
   if(client.revision!==body.expected_checkpoint_revision)throw new RecordSyncError(409,'adoption_checkpoint_conflict');
-  if((client.checkpoint_state as RecordSyncState|null)?.mode==='delta')throw new RecordSyncError(409,'client_already_checkpointed');
   const [manifest]=await sql`SELECT state FROM flightdeck_pg_record_aux_cursors WHERE token=${body.manifest_cursor}
     AND workspace_id=${input.workspaceId} AND actor_id=${input.actorId} AND app_npub=${input.appNpub} AND kind='manifest'
     AND last_used_at>statement_timestamp()-interval '7 days' FOR UPDATE`;
@@ -200,29 +212,43 @@ async function begin(input:AdoptionInput,body:StartBody,sql:Db,viewer:any,clock:
   return response;
 }
 
+// Snapshot pages label each row with their snapshot boundary, while journal
+// pages carry the row's own position. Either label is never older than the
+// content it accompanies, so a local version at or above the authoritative
+// position with the same state holds exactly that position's content (or a
+// later one, which the delta from the captured head delivers anyway).
+function versionCovers(local:string|undefined,authoritative:string){
+  return local!==undefined&&BigInt(local)>=BigInt(authoritative);
+}
+
 function exactInventory(challenge:FlightDeckRecordManifestEntry[],inventory:InventoryEntry[]){
   if(inventory.length!==challenge.length)throw new RecordSyncError(409,'adoption_inventory_incomplete');
   const mismatches:FlightDeckRecordManifestEntry[]=[];
   for(let i=0;i<challenge.length;i++){
     const expected=challenge[i]!,actual=inventory[i]!;
     if(actual.family!==expected.family||actual.id!==expected.id)throw new RecordSyncError(409,'adoption_inventory_invalid');
-    if(actual.state!==expected.state||actual.version!==expected.version)mismatches.push(expected);
+    if(actual.state!==expected.state||!versionCovers(actual.version,expected.version))mismatches.push(expected);
   }
   return mismatches;
 }
 
-async function exactRepairs(input:AdoptionInput,viewer:any,mismatches:FlightDeckRecordManifestEntry[],repaired:ReceiptEntry[],sql:Db){
-  if(repaired.length!==mismatches.length)throw new RecordSyncError(409,'adoption_repair_incomplete');
+// Receipts never fail the session. A head advanced beyond the captured head is
+// delivered by the adopted delta; any other unconfirmed key is returned as
+// deferred so the client repairs it lazily after committing the checkpoint.
+async function settleRepairs(input:AdoptionInput,viewer:any,capturedHead:string,mismatches:FlightDeckRecordManifestEntry[],repaired:ReceiptEntry[],sql:Db){
+  const receipts=new Map(repaired.map(entry=>[`${entry.family}:${entry.id}`,entry]));
   const visible=recordVisibility(input.workspaceId,input.actorId,viewer,sql);
-  for(let i=0;i<mismatches.length;i++){
-    const expected=mismatches[i]!,actual=repaired[i]!;
-    if(actual.family!==expected.family||actual.id!==expected.id)throw new RecordSyncError(409,'adoption_repair_incomplete');
+  const deferred:DeferredEntry[]=[];
+  for(const expected of mismatches){
+    const actual=receipts.get(`${expected.family}:${expected.id}`);
     const [entry]=await sql<RecordEntry[]>`SELECT family,id,operation,position::text,bytes,context AS row FROM flightdeck_pg_record_heads
       WHERE workspace_id=${input.workspaceId} AND family=${expected.family} AND id=${expected.id}`;
-    if(!entry||!await visible(entry)||actual.version!==entry.position||actual.state!==(entry.operation==='delete'?'deleted':'active')){
-      throw new RecordSyncError(409,'adoption_repair_incomplete');
-    }
+    if(entry&&BigInt(entry.position)>BigInt(capturedHead))continue;
+    const state=entry?.operation==='delete'?'deleted':'active';
+    if(entry&&actual&&actual.state===state&&versionCovers(actual.version,entry.position)&&await visible(entry))continue;
+    deferred.push({family:expected.family,id:expected.id,version:entry?.position??expected.version,state:entry?state:expected.state});
   }
+  return deferred;
 }
 
 export async function adoptRecordCache(input:AdoptionInput,body:RecordAdoptionBody,db:Db=getDb()):Promise<any>{
@@ -251,13 +277,16 @@ export async function adoptRecordCache(input:AdoptionInput,body:RecordAdoptionBo
       if(mismatches.length)state={...state,mismatches};
     }else if(row.phase==='repair'){
       if(!('repaired' in body))throw new RecordSyncError(409,'adoption_phase_invalid');
-      await exactRepairs(input,viewer,state.mismatches??[],body.repaired,sql);
-      state={...state,mismatches:undefined};
+      const deferred=await settleRepairs(input,viewer,String(row.captured_head),state.mismatches??[],body.repaired,sql);
+      state={...state,mismatches:undefined,deferred,deferredTotal:(state.deferredTotal??0)+deferred.length};
     }else return row.last_response;
+    // Deferred keys belong only to the response that immediately follows their repair step.
+    const carried=state;state={...state,deferred:undefined};
     let response:any;let phase:'inventory'|'repair'|'adopted';let nextCursor=randomUUID();
-    if(state.mismatches?.length){phase='repair';response=repairResponse(row,state,nextCursor);}
-    else if(state.hasMore){state=await challengeAfter(input,viewer,String(row.captured_head),state.afterFamily,state.afterId,sql);phase='inventory';response=inventoryResponse(row,state,nextCursor);}
-    else{phase='adopted';response=await commitAdoption(input,row,sql,clock);nextCursor=row.cursor;}
+    const deferredTotal=state.deferredTotal;
+    if(state.mismatches?.length){phase='repair';response=repairResponse(row,{...state,deferred:carried.deferred},nextCursor);}
+    else if(state.hasMore){state={...await challengeAfter(input,viewer,String(row.captured_head),state.afterFamily,state.afterId,sql),deferredTotal};phase='inventory';response=inventoryResponse(row,{...state,deferred:carried.deferred},nextCursor);}
+    else{phase='adopted';response=await commitAdoption(input,row,{...state,deferred:carried.deferred},sql,clock);nextCursor=row.cursor;}
     assertResponseBound(response);
     await sql`UPDATE flightdeck_pg_record_adoptions SET previous_cursor=cursor,cursor=${nextCursor},phase=${phase},state=${sql.json(state as any)},
       last_request_hash=${requestHash},last_response=${sql.json(response)},last_used_at=clock_timestamp(),committed_at=${phase==='adopted'?sql`clock_timestamp()`:sql`committed_at`}
