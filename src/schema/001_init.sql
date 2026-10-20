@@ -4353,6 +4353,45 @@ END $$;
 
 -- end_additive_record_access_v1
 
+-- priority_record_sync_v1
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_heads (
+ workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ family TEXT NOT NULL,id TEXT NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('upsert','delete')),
+ position BIGINT NOT NULL,bytes INTEGER NOT NULL,context JSONB NOT NULL,PRIMARY KEY(workspace_id,family,id)
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_heads_priority ON flightdeck_pg_record_heads(workspace_id,position DESC,family DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_fd_record_heads_channel_priority ON flightdeck_pg_record_heads
+ (workspace_id,(COALESCE(CASE WHEN family='channel' THEN id END,context->>'channel_id')),position DESC,family DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_fd_record_heads_scope_priority ON flightdeck_pg_record_heads
+ (workspace_id,(COALESCE(CASE WHEN family='scope' THEN id END,context->>'scope_id')),position DESC,family DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_fd_record_journal_manifest ON flightdeck_pg_record_journal(workspace_id,family,id,position DESC) INCLUDE(operation,bytes,context);
+INSERT INTO flightdeck_pg_record_heads(workspace_id,family,id,operation,position,bytes,context)
+SELECT DISTINCT ON (workspace_id,family,id) workspace_id,family,id,operation,position,bytes,context FROM flightdeck_pg_record_journal
+ORDER BY workspace_id,family,id,position DESC ON CONFLICT(workspace_id,family,id) DO UPDATE SET operation=EXCLUDED.operation,
+position=EXCLUDED.position,bytes=EXCLUDED.bytes,context=EXCLUDED.context WHERE flightdeck_pg_record_heads.position<EXCLUDED.position;
+CREATE TABLE IF NOT EXISTS flightdeck_pg_record_aux_cursors (
+ token UUID PRIMARY KEY DEFAULT gen_random_uuid(),workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+ actor_id UUID NOT NULL REFERENCES flightdeck_pg_actors(id) ON DELETE CASCADE,app_npub TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('priority','manifest')),state JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fd_record_aux_cursor_owner ON flightdeck_pg_record_aux_cursors(workspace_id,actor_id,created_at DESC,token);
+CREATE INDEX IF NOT EXISTS idx_fd_record_aux_cursor_activity ON flightdeck_pg_record_aux_cursors(last_used_at,token);
+CREATE OR REPLACE FUNCTION flightdeck_pg_record_emit(w UUID, f TEXT, r JSONB, op TEXT) RETURNS VOID
+LANGUAGE plpgsql AS $$ DECLARE p BIGINT; ident TEXT; BEGIN
+ IF NOT EXISTS (SELECT 1 FROM flightdeck_pg_workspaces WHERE id=w) THEN RETURN; END IF;
+ INSERT INTO flightdeck_pg_record_clock(workspace_id) VALUES(w) ON CONFLICT DO NOTHING;
+ UPDATE flightdeck_pg_record_clock SET position=position+1 WHERE workspace_id=w RETURNING position INTO p;
+ ident:=flightdeck_pg_record_identity(f,r);
+ INSERT INTO flightdeck_pg_record_journal(workspace_id,position,family,id,operation,row) VALUES(w,p,f,ident,op,r);
+ IF op='delete' THEN DELETE FROM flightdeck_pg_record_current WHERE workspace_id=w AND family=f AND id=ident;
+ ELSE INSERT INTO flightdeck_pg_record_current(workspace_id,family,id,row,position) VALUES(w,f,ident,r,p)
+ ON CONFLICT(workspace_id,family,id) DO UPDATE SET row=EXCLUDED.row,position=EXCLUDED.position; END IF;
+ INSERT INTO flightdeck_pg_record_heads(workspace_id,family,id,operation,position,bytes,context)
+ VALUES(w,f,ident,op,p,octet_length(r::text),flightdeck_pg_record_context(r))
+ ON CONFLICT(workspace_id,family,id) DO UPDATE SET operation=EXCLUDED.operation,position=EXCLUDED.position,bytes=EXCLUDED.bytes,context=EXCLUDED.context;
+END $$;
+-- end_priority_record_sync_v1
+
 -- Personal pins retain unpin tombstones; migration is insert-if-absent.
 CREATE TABLE IF NOT EXISTS flightdeck_pg_thread_pins (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

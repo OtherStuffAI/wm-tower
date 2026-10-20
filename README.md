@@ -93,6 +93,13 @@ the 1 MiB/200-entry limits. Existing v1, v2 and legacy sync remain compatible.
 record cursors/checkpoints through channel and permission changes, catches up
 newly readable history by partition, and retains prior downloads after access loss.
 
+## Priority sync and compact repair
+
+[Priority record sync and manifest repair v1](docs/contract/priority-record-sync-v1.md)
+adds an independent newest-first working-set feed, authorized context closure,
+stable compact repair manifests, and selective canonical body repair. These
+supplements never advance the v2 completeness checkpoint or delete by omission.
+
 ## Personal attention
 
 [Personal attention v1](docs/contract/personal-attention-v1.md) documents the

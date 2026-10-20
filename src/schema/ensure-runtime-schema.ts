@@ -4289,6 +4289,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     await tx.unsafe(recordDeltaSchema.split('-- flightdeck_record_delta_v1')[1]!.split('-- end_flightdeck_record_delta_v1')[0]!);
     await tx.unsafe(recordDeltaSchema.split('-- flightdeck_record_checkpoints_v2')[1]!.split('-- end_flightdeck_record_checkpoints_v2')[0]!);
     await tx.unsafe(readFileSync(new URL('./additive-record-access-v1.sql', import.meta.url), 'utf8'));
+    await tx.unsafe(recordDeltaSchema.split('-- priority_record_sync_v1')[1]!.split('-- end_priority_record_sync_v1')[0]!);
   });
   await sql.unsafe(recordDeltaSchema.split('-- personal_attention_v1')[1]!.split('-- end_personal_attention_v1')[0]!);
   await sql.unsafe(recordDeltaSchema.split('-- task_single_assignee_v1')[1]!.split('-- end_task_single_assignee_v1')[0]!);

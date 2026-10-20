@@ -96,6 +96,15 @@ describe('OpenAPI docs', () => {
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/sync'].get.parameters.map((param: any) => param.name)).toEqual(
       ['workspaceId', 'cursor', 'limit']
     );
+    for (const path of [
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority',
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/context',
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair-manifest',
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair',
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority/pages/{cursor}/large-records/{manifestId}/chunks/{index}',
+    ]) expect(body.paths[path]).toBeDefined();
+    expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority'].get.description).toContain('absence never deletes');
+    expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair'].post.requestBody).toBeDefined();
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/drive/tree'].get['x-flightdeck-pg-contract-fixture']).toBe(flightDeckPgContractFixturePaths['flightdeck_pg.drive.tree']);
     expect(body.paths['/api/v4/flightdeck-pg/workspaces/{workspaceId}/drive/tree'].get.parameters.map((param: any) => param.name)).toEqual(
       expect.arrayContaining(['workspaceId', 'scope_id', 'channel_id', 'parent_folder_id', 'cursor', 'limit'])

@@ -1,6 +1,6 @@
 import { mutateThreadPin, mutatePersonalPin, ThreadPinError } from '../services/thread-pins';
 import { traceFlightDeckRecordPage } from '../services/flightdeck-record-trace';
-import { readLargeRecordChunk } from '../services/flightdeck-record-large';
+import { readLargeRecordChunk, readPriorityLargeRecordChunk } from '../services/flightdeck-record-large';
 import { readScopeOrder, writeScopeOrder } from '../services/scope-order';
 import { registerOrgDataRoutes } from './org-data';
 import { getWorkspaceStorageUsage } from '../services/workspace-storage-usage';
@@ -13,6 +13,7 @@ import { registerContextTreeRoutes } from './context-tree';
 import { registerFeedReaderRoutes } from './feed-reader';
 import { registerRecordClient, readRecordCheckpoint, retireRecordClient, acknowledgeRecordCheckpoint, recordSyncDiscovery } from '../services/flightdeck-record-checkpoints';
 import { readFlightDeckRecordPage, RecordSyncError } from '../services/flightdeck-record-delta';
+import { normalizePriorityFilters, prioritySyncDiscovery, readContextClosure, readPriorityRecords, readRepairManifest, repairRecords } from '../services/flightdeck-record-priority';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { createHash } from 'crypto';
@@ -1510,7 +1511,7 @@ flightDeckPgRouter.get('/service', async (c) => {
       schema_version: 1,
     },
     capabilities: flightDeckPgCapabilities,
-    record_sync: recordSyncDiscovery,
+    record_sync: {...recordSyncDiscovery,...prioritySyncDiscovery},
     links: {
       workspace_descriptor_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor',
       me_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me',
@@ -2433,9 +2434,65 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/drive/delta', async (c) => {
 function recordSyncErrorResponse(c: Context, error: unknown, protocol: 1 | 2) {
   if (!(error instanceof RecordSyncError)) throw error;
   const discard = ['reset_required', 'history_pruned', 'client_expired', 'client_not_registered'].includes(error.code);
+  const repairable = [...(discard ? [error.code] : []), 'page_token_invalid', 'auxiliary_cursor_invalid'].includes(error.code);
   return c.json({ error: error.code, protocol_version: protocol,
-    ...(discard ? { reset: { discard_authoritative: false, preserve_pending: true, preserve_downloaded: true } } : {}) }, error.status);
+    ...(discard ? { reset: { discard_authoritative: false, preserve_pending: true, preserve_downloaded: true } } : {}),
+    ...(repairable ? { recovery: { reason_code: error.code, strategy: 'repair_manifest', full_snapshot_required: false,
+      manifest_route: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair-manifest' } } : {}) }, error.status);
 }
+
+function priorityFiltersFromRequest(c: Context) {
+  const url=new URL(c.req.url);
+  return normalizePriorityFilters({families:url.searchParams.getAll('family'),scopeId:c.req.query('scope_id'),channelId:c.req.query('channel_id'),
+    threadId:c.req.query('thread_id'),taskId:c.req.query('task_id'),documentId:c.req.query('document_id')});
+}
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/priority',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  try{return c.json(await readPriorityRecords({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+    appNpub:result.context.workspace.app_npub,cursor:c.req.query('cursor'),limit:c.req.query('limit')===undefined?undefined:Number(c.req.query('limit')),
+    largeRecords:c.req.query('large_records'),filters:priorityFiltersFromRequest(c)}));}
+  catch(error){return recordSyncErrorResponse(c,error,1);}
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/priority/pages/:cursor/large-records/:manifestId/chunks/:index',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  try{const raw=c.req.param('index');if(!/^(0|[1-9][0-9]*)$/.test(raw))throw new RecordSyncError(400,'invalid_chunk');
+    const bytes=await readPriorityLargeRecordChunk({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+      appNpub:result.context.workspace.app_npub,cursor:c.req.param('cursor'),manifestId:c.req.param('manifestId'),index:Number(raw)});
+    return new Response(bytes as BodyInit,{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}});}
+  catch(error){return recordSyncErrorResponse(c,error,1);}
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/repair-manifest',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  try{return c.json(await readRepairManifest({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+    appNpub:result.context.workspace.app_npub,cursor:c.req.query('cursor'),limit:c.req.query('limit')===undefined?undefined:Number(c.req.query('limit')),filters:priorityFiltersFromRequest(c)}));}
+  catch(error){return recordSyncErrorResponse(c,error,1);}
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync/context',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  const resourceType=c.req.query('resource_type');
+  if(!['channel','thread','task','document'].includes(resourceType??''))return c.json({error:'invalid_context',protocol_version:1},400);
+  try{return c.json(await readContextClosure({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+    appNpub:result.context.workspace.app_npub,resourceType:resourceType as 'channel'|'thread'|'task'|'document',resourceId:c.req.query('resource_id')??''}));}
+  catch(error){return recordSyncErrorResponse(c,error,1);}
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/record-sync/repair',async c=>{
+  const auth=await requireNip98AuthResolved(c);if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub);if('response' in result)return result.response;
+  try{let body:any;try{body=await c.req.json();}catch{throw new RecordSyncError(400,'invalid_body');}
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>key!=='records'))throw new RecordSyncError(400,'invalid_body');
+    return c.json(await repairRecords({workspaceId:result.context.workspace.id,actorId:result.context.actor.id,
+      appNpub:result.context.workspace.app_npub,records:body.records}));}
+  catch(error){return recordSyncErrorResponse(c,error,1);}
+});
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/record-sync', async (c) => {
   const auth = await requireNip98AuthResolved(c);

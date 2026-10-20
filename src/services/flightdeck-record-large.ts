@@ -45,7 +45,7 @@ export async function issueLargeRecordManifest(input: {workspaceId:string; entry
     sha256:bytes.sha256,total_bytes:bytes.total_bytes,chunk_bytes:RECORD_CHUNK_BYTES,chunk_count:Math.ceil(bytes.total_bytes/RECORD_CHUNK_BYTES)};
   return spec;
 }
-export async function validateLargeRecord(spec: LargeRecordState, input: RecordClientInput, sql: Db) {
+export async function validateLargeRecord(spec: LargeRecordState, input: Pick<RecordClientInput,'workspaceId'|'actorId'>, sql: Db) {
   await requireRecordMembership(input,sql);
   const [viewer] = await sql`SELECT a.npub,w.app_npub FROM flightdeck_pg_actors a CROSS JOIN flightdeck_pg_workspaces w WHERE a.id=${input.actorId} AND w.id=${input.workspaceId}`;
   const visible = recordVisibility(input.workspaceId,input.actorId,{npub:viewer!.npub,app_npub:viewer!.app_npub},sql);
@@ -94,4 +94,30 @@ export async function readLargeRecordChunk(input:RecordClientInput & {cursor:str
     }) as unknown as Uint8Array; }
     catch(error) { if(attempt>=2 || !['40001','40P01'].includes(String((error as {code?:string}).code))) throw error; }
   }
+}
+
+/** Chunk read for priority pages. The auxiliary token is still viewer/app/epoch bound,
+ * but it deliberately has no device checkpoint or acknowledgement semantics. */
+export async function readPriorityLargeRecordChunk(input:{workspaceId:string;actorId:string;appNpub:string;cursor:string;manifestId:string;index:number},db:Db=getDb()):Promise<Uint8Array>{
+  const id=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  if(!id.test(input.cursor)||!id.test(input.manifestId)||!Number.isSafeInteger(input.index)||input.index<0)throw new RecordSyncError(400,'invalid_chunk');
+  return db.begin('isolation level read committed',async transaction=>{const sql=transaction as unknown as Db;
+    const [clock]=await sql`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${input.workspaceId} FOR SHARE`;
+    const [viewer]=await sql`SELECT a.npub,w.app_npub FROM flightdeck_pg_workspace_memberships m JOIN flightdeck_pg_actors a ON a.id=m.actor_id
+      JOIN flightdeck_pg_workspaces w ON w.id=m.workspace_id WHERE m.workspace_id=${input.workspaceId} AND m.actor_id=${input.actorId}`;
+    if(!viewer)throw new RecordSyncError(403,'workspace_membership_required');
+    if(viewer.app_npub!==input.appNpub)throw new RecordSyncError(403,'workspace_app_required');
+    const [page]=await sql`SELECT state FROM flightdeck_pg_record_aux_cursors WHERE token=${input.cursor} AND workspace_id=${input.workspaceId}
+      AND actor_id=${input.actorId} AND app_npub=${input.appNpub} AND kind='priority' AND last_used_at>statement_timestamp()-interval '7 days'`;
+    const state=page?.state as {epoch?:string;largeRecords?:LargeRecordState[]}|undefined;
+    if(!clock||!state||state.epoch!==clock.epoch)throw new RecordSyncError(409,'auxiliary_cursor_invalid');
+    const spec=state.largeRecords?.find(item=>item.public.manifest_id===input.manifestId);
+    if(!spec||input.index>=spec.public.chunk_count)throw new RecordSyncError(400,'invalid_chunk');
+    await validateLargeRecord(spec,input,sql);
+    const [chunk]=await sql`SELECT substring(data FROM ${input.index*RECORD_CHUNK_BYTES+1} FOR ${RECORD_CHUNK_BYTES}) AS data FROM (${envelope(spec,input.workspaceId,sql)}) e
+      WHERE octet_length(data)=${spec.public.total_bytes} AND encode(sha256(data),'hex')=${spec.public.sha256}`;
+    if(!chunk)throw new RecordSyncError(409,'large_record_changed');
+    await sql`UPDATE flightdeck_pg_record_aux_cursors SET last_used_at=clock_timestamp() WHERE token=${input.cursor}`;
+    return chunk.data as Uint8Array;
+  }) as unknown as Uint8Array;
 }

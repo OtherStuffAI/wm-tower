@@ -2983,6 +2983,61 @@ export interface FlightDeckRecordPage {
   bounds: { max_rows: number; max_bytes: number };
 }
 
+export interface FlightDeckRecordAuxiliaryProgress {
+  scanned_rows: number;
+  returned_rows: number;
+  response_bytes: number;
+}
+export interface FlightDeckRecordPriorityPage {
+  protocol_version: 1;
+  captured_head: string;
+  changes: FlightDeckRecordChange[];
+  large_records?: FlightDeckLargeRecordManifest[];
+  next_cursor: string;
+  has_more: boolean;
+  progress: FlightDeckRecordAuxiliaryProgress;
+  bounds: { max_rows: number; max_bytes: number };
+  coverage: 'partial';
+  retention_policy: 'retain_downloaded';
+}
+export interface FlightDeckRecordManifestEntry {
+  family: string;
+  id: string;
+  version: string;
+  state: 'active' | 'deleted';
+  relationships: Record<string, string>;
+}
+export interface FlightDeckRecordManifestPage {
+  protocol_version: 1;
+  captured_head: string;
+  entries: FlightDeckRecordManifestEntry[];
+  next_cursor: string;
+  has_more: boolean;
+  progress: FlightDeckRecordAuxiliaryProgress;
+  bounds: { max_rows: number; max_bytes: number };
+  coverage: 'authorized_manifest';
+  retention_policy: 'retain_downloaded';
+  recovery: { reason_code: 'manifest_requested'; strategy: 'compare_then_repair'; full_snapshot_required: false };
+}
+export interface FlightDeckRecordContextPage {
+  protocol_version: 1;
+  captured_head: string;
+  resource: { type: 'channel' | 'thread' | 'task' | 'document'; id: string };
+  changes: FlightDeckRecordChange[];
+  dependencies: { family: string; id: string }[];
+  complete: boolean;
+  bounds: { max_rows: number; max_bytes: number };
+  retention_policy: 'retain_downloaded';
+}
+export interface FlightDeckRecordRepairPage {
+  protocol_version: 1;
+  captured_head: string;
+  changes: FlightDeckRecordChange[];
+  unresolved: { family: string; id: string; reason: 'not_available' }[];
+  bounds: { max_rows: number; max_bytes: number };
+  retention_policy: 'retain_downloaded';
+}
+
 /** Tower authenticates only; this challenge grants no Forgejo Git/API permissions. */
 export interface ForgejoLoginChallenge {
   request_id: string;

@@ -4,7 +4,9 @@ BEGIN READ ONLY;
 DO $$ DECLARE expected RECORD; installed TEXT; BEGIN
  FOR expected IN SELECT * FROM (VALUES
    ('flightdeck_pg_record_access','87dec756599e5b96ed4e9e9fa2fa36da'), -- gitleaks:allow public SQL function body fingerprint
-   ('flightdeck_pg_record_emit','5e16763ea1bc6c7a25659e50e5ef249b'), -- gitleaks:allow public SQL function body fingerprint
+   -- The priority-sync supplement extends emit with a compact record-head
+   -- projection while retaining the additive journal/current semantics.
+   ('flightdeck_pg_record_emit','b1c8b6ea1fcbb012df9a7fb0c590d007'), -- gitleaks:allow public SQL function body fingerprint
    ('flightdeck_pg_record_capture','06a60ee67226508f5f5843c903081c5a'), -- gitleaks:allow public SQL function body fingerprint
    ('flightdeck_pg_record_reset','c7c6b5dfec142a35d47696b454cdeaf4') -- gitleaks:allow public SQL function body fingerprint
  ) AS functions(name,digest) LOOP

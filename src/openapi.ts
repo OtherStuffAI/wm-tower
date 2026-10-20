@@ -4428,7 +4428,7 @@ export function buildOpenApiDocument(origin: string) {
               type: 'object',
               required: ['identity', 'service', 'capabilities', 'links'],
               properties: {
-                record_sync: { type: 'object', description: 'Opt-in record sync discovery: protocol_versions [1,2], extensions [bounded_snapshot_v1,chunked_v1], device_checkpoints true, additive_access true, targeted_catchup true, retention_policy retain_downloaded, UUID client IDs, 32 clients per actor/workspace, 512 page tokens per client, 7-day token idle expiry and 90-day client idle expiry.' },
+                record_sync: { type: 'object', description: 'Record sync discovery: v1/v2 completeness, bounded/chunked extensions, device checkpoints and additive access, plus independent priority_feed, context_closure, repair_manifest and selective_repair supplements. Auxiliary continuations are viewer/workspace/app/epoch/filter bound, expire after 7 idle days, and never advance completeness checkpoints or authorize omission-based deletion.' },
                 identity: { type: 'object' }, service: { type: 'object' }, capabilities: { type: 'array', items: { type: 'string' } }, links: { type: 'object' },
 
               },
@@ -5730,6 +5730,37 @@ export function buildOpenApiDocument(origin: string) {
           parameters: recordCheckpointParameters,
           responses: recordCheckpointResponses,
         },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority': {
+        get: {
+          tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Read authorized current records newest-first without advancing completeness',
+          description:'Captures a committed workspace head and returns full canonical current rows newest-first. The opaque continuation is independent of v1/v2 completeness and bound to the exact workspace, viewer, app, authority epoch and filters. This is partial coverage: absence never deletes retained content.',
+          parameters:[{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'cursor',in:'query',schema:{type:'string',format:'uuid'}},{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:200,default:200}},
+            {name:'family',in:'query',style:'form',explode:true,schema:{type:'array',items:{type:'string'}}},{name:'large_records',in:'query',schema:{type:'string',enum:['chunked_v1']}},{name:'scope_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'channel_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'thread_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'task_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'document_id',in:'query',schema:{type:'string',format:'uuid'}}],
+          responses:{'200':{description:'Newest-first partial canonical changes with captured_head, progress, bounds and opaque continuation'},'400':{description:'Invalid filter, cursor or limit'},'401':{description:'NIP-98 required'},'403':{description:'Workspace membership required'},'409':{description:'Cursor expired, foreign, rebound or reset'},'413':{description:'One canonical row exceeds the response bound; repeat with large_records=chunked_v1'}},
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/priority/pages/{cursor}/large-records/{manifestId}/chunks/{index}': {
+        get:{tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Read a viewer-bound priority large-record chunk',description:'Reads one <=256 KiB raw chunk from a chunked_v1 priority manifest. The auxiliary page token, current membership/access, app, authority epoch and source digest are revalidated. This does not acknowledge or advance the completeness checkpoint.',
+          parameters:[{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'cursor',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'manifestId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'index',in:'path',required:true,schema:{type:'integer',minimum:0}}],responses:{'200':{description:'Raw UTF-8 envelope chunk',content:{'application/octet-stream':{schema:{type:'string',format:'binary'}}}},'400':{description:'Invalid chunk'},'403':{description:'Current access denied'},'409':{description:'Expired/rebound page or changed source'}}},
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/context': {
+        get:{tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Read the minimal authorized parent closure for a resource',
+          description:'Returns canonical scope/channel parents and the requested channel, thread, task or document when each row is currently authorized. Empty results do not disclose whether an inaccessible resource exists.',
+          parameters:[{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'resource_type',in:'query',required:true,schema:{type:'string',enum:['channel','thread','task','document']}},{name:'resource_id',in:'query',required:true,schema:{type:'string',format:'uuid'}}],
+          responses:{'200':{description:'Bounded parent-first canonical closure'},'400':{description:'Invalid context selector'},'401':{description:'NIP-98 required'},'403':{description:'Workspace membership required'},'413':{description:'Canonical closure exceeds the response bound'}}},
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair-manifest': {
+        get:{tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Page a stable authorized identity/version/state repair manifest',
+          description:'Pages latest canonical state as of captured_head by family/id. Entries contain family, id, decimal canonical version, active/deleted state and relationship identifiers. Compare locally, then POST only mismatches to repair. Absence never deletes retained content.',
+          parameters:[{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'cursor',in:'query',schema:{type:'string',format:'uuid'}},{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:200,default:200}},{name:'family',in:'query',style:'form',explode:true,schema:{type:'array',items:{type:'string'}}},{name:'scope_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'channel_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'thread_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'task_id',in:'query',schema:{type:'string',format:'uuid'}},{name:'document_id',in:'query',schema:{type:'string',format:'uuid'}}],
+          responses:{'200':{description:'Stable authorized compact manifest page with recovery strategy'},'400':{description:'Invalid filter, cursor or limit'},'401':{description:'NIP-98 required'},'403':{description:'Workspace membership required'},'409':{description:'Cursor expired, foreign, rebound or reset'}}},
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/repair': {
+        post:{tags:['Flight Deck PG'],security:[{nip98:[]}],summary:'Fetch named missing or differing canonical records',
+          description:'Accepts at most 200 manifest identities and optional observed versions. Returns the latest currently authorized full canonical upsert or explicit delete. Unavailable identities use one non-disclosing reason.',
+          parameters:[{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}}],requestBody:{required:true,content:{'application/json':{schema:{type:'object',additionalProperties:false,required:['records'],properties:{records:{type:'array',minItems:1,maxItems:200,items:{type:'object',additionalProperties:false,required:['family','id'],properties:{family:{type:'string'},id:{type:'string'},version:{type:'string',pattern:'^(0|[1-9][0-9]{0,18})$'}}}}}}}}},
+          responses:{'200':{description:'Latest authorized canonical changes and non-disclosing unresolved list'},'400':{description:'Invalid body'},'401':{description:'NIP-98 required'},'403':{description:'Workspace membership required'},'413':{description:'Selected canonical bodies exceed the response bound'}}},
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/record-sync/clients/{clientId}/ack': {
         post: {

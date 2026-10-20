@@ -42,7 +42,7 @@ export async function requireRecordClient(input: RecordClientInput, epoch: strin
   if (client.epoch !== epoch) throw new RecordSyncError(409, 'reset_required');
   return client;
 }
-export async function requireRecordMembership(input: RecordClientInput, sql: Db) {
+export async function requireRecordMembership(input: Pick<RecordClientInput,'workspaceId'|'actorId'>, sql: Db) {
   const [member] = await sql`SELECT 1 FROM flightdeck_pg_workspace_memberships WHERE workspace_id=${input.workspaceId} AND actor_id=${input.actorId}`;
   if (!member) throw new RecordSyncError(403, 'workspace_membership_required');
 }
