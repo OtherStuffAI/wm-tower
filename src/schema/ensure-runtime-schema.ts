@@ -4292,6 +4292,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
     await tx.unsafe(recordDeltaSchema.split('-- priority_record_sync_v1')[1]!.split('-- end_priority_record_sync_v1')[0]!);
   });
   await sql.unsafe(recordDeltaSchema.split('-- personal_attention_v1')[1]!.split('-- end_personal_attention_v1')[0]!);
+  await sql.unsafe(recordDeltaSchema.split('-- flightdeck_pg_canvas_v1')[1]!.split('-- end_flightdeck_pg_canvas_v1')[0]!);
   await sql.unsafe(recordDeltaSchema.split('-- task_single_assignee_v1')[1]!.split('-- end_task_single_assignee_v1')[0]!);
   await sql.unsafe(`
     UPDATE flightdeck_pg_record_current current

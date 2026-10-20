@@ -3242,6 +3242,142 @@ CREATE TABLE IF NOT EXISTS tower_metadata (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- flightdeck_pg_canvas_v1
+CREATE TABLE IF NOT EXISTS flightdeck_pg_canvases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES flightdeck_pg_workspaces(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  visibility_mode TEXT NOT NULL DEFAULT 'workspace',
+  viewport JSONB NOT NULL DEFAULT '{"x":0,"y":0,"scale":1}'::jsonb,
+  created_by_actor_id UUID NOT NULL,
+  updated_by_actor_id UUID NOT NULL,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  CHECK (length(trim(title)) > 0),
+  CHECK (position >= 1),
+  CHECK (visibility_mode IN ('workspace', 'restricted')),
+  CHECK (row_version >= 1),
+  UNIQUE (workspace_id, id),
+  CONSTRAINT flightdeck_pg_canvases_created_by_membership_fkey
+    FOREIGN KEY (workspace_id, created_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE RESTRICT,
+  CONSTRAINT flightdeck_pg_canvases_updated_by_membership_fkey
+    FOREIGN KEY (workspace_id, updated_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvases_workspace_position
+  ON flightdeck_pg_canvases(workspace_id, position, id)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_visibility_principals (
+  workspace_id UUID NOT NULL,
+  canvas_id UUID NOT NULL,
+  principal_type TEXT NOT NULL,
+  principal_actor_id UUID,
+  principal_group_id UUID,
+  created_by_actor_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (workspace_id, canvas_id)
+    REFERENCES flightdeck_pg_canvases(workspace_id, id)
+    ON DELETE CASCADE,
+  CONSTRAINT flightdeck_pg_canvas_visibility_actor_membership_fkey
+    FOREIGN KEY (workspace_id, principal_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE CASCADE,
+  CONSTRAINT flightdeck_pg_canvas_visibility_group_fkey
+    FOREIGN KEY (workspace_id, principal_group_id)
+    REFERENCES flightdeck_pg_groups(workspace_id, id)
+    ON DELETE CASCADE,
+  CONSTRAINT flightdeck_pg_canvas_visibility_creator_membership_fkey
+    FOREIGN KEY (workspace_id, created_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE RESTRICT,
+  CHECK (principal_type IN ('actor', 'group')),
+  CHECK (
+    (principal_type = 'actor' AND principal_actor_id IS NOT NULL AND principal_group_id IS NULL)
+    OR (principal_type = 'group' AND principal_actor_id IS NULL AND principal_group_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_visibility_principals_unique
+  ON flightdeck_pg_canvas_visibility_principals(
+    workspace_id,
+    canvas_id,
+    principal_type,
+    COALESCE(principal_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(principal_group_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  );
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_visibility_actor
+  ON flightdeck_pg_canvas_visibility_principals(workspace_id, principal_actor_id, canvas_id)
+  WHERE principal_actor_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_visibility_group
+  ON flightdeck_pg_canvas_visibility_principals(workspace_id, principal_group_id, canvas_id)
+  WHERE principal_group_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_orders (
+  workspace_id UUID NOT NULL,
+  viewer_actor_id UUID NOT NULL,
+  canvas_id UUID NOT NULL,
+  position INTEGER NOT NULL,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, viewer_actor_id, canvas_id),
+  FOREIGN KEY (workspace_id, viewer_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id, canvas_id)
+    REFERENCES flightdeck_pg_canvases(workspace_id, id)
+    ON DELETE CASCADE,
+  CHECK (position >= 1),
+  CHECK (row_version >= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_orders_viewer_position
+  ON flightdeck_pg_canvas_orders(workspace_id, viewer_actor_id, position, canvas_id);
+
+CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL,
+  canvas_id UUID NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id UUID NOT NULL,
+  display_title TEXT,
+  layout JSONB NOT NULL DEFAULT '{"x":0,"y":0,"width":360,"height":280,"z":1}'::jsonb,
+  created_by_actor_id UUID NOT NULL,
+  updated_by_actor_id UUID NOT NULL,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  FOREIGN KEY (workspace_id, canvas_id)
+    REFERENCES flightdeck_pg_canvases(workspace_id, id)
+    ON DELETE CASCADE,
+  CONSTRAINT flightdeck_pg_canvas_naplets_created_by_membership_fkey
+    FOREIGN KEY (workspace_id, created_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE RESTRICT,
+  CONSTRAINT flightdeck_pg_canvas_naplets_updated_by_membership_fkey
+    FOREIGN KEY (workspace_id, updated_by_actor_id)
+    REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
+    ON DELETE RESTRICT,
+  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html')),
+  CHECK (display_title IS NULL OR length(trim(display_title)) > 0),
+  CHECK (row_version >= 1),
+  UNIQUE (workspace_id, canvas_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_naplets_canvas
+  ON flightdeck_pg_canvas_naplets(workspace_id, canvas_id, created_at, id)
+  WHERE deleted_at IS NULL;
+-- end_flightdeck_pg_canvas_v1
+
 -- flightdeck_autopilot_connections_v1
 CREATE TABLE IF NOT EXISTS flightdeck_pg_autopilot_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

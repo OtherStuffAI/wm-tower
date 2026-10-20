@@ -7123,9 +7123,51 @@ export async function listVisibleFlightDeckPgEvents(
           )
         )
         OR (
+          e.entity_type = 'canvas_order'
+          AND e.payload->>'viewer_actor_id' = ${input.actorId}
+        )
+        OR (
+          e.entity_type IN ('canvas', 'canvas_naplet')
+          AND EXISTS (
+            SELECT 1
+            FROM flightdeck_pg_canvases canvas
+            WHERE canvas.workspace_id = e.workspace_id
+              AND canvas.id = CASE
+                WHEN e.entity_type = 'canvas' THEN e.entity_id
+                ELSE NULLIF(e.payload->>'canvas_id', '')::uuid
+              END
+              AND canvas.deleted_at IS NULL
+              AND (
+                canvas.visibility_mode = 'workspace'
+                OR canvas.created_by_actor_id = ${input.actorId}
+                OR EXISTS (
+                  SELECT 1 FROM flightdeck_pg_canvas_visibility_principals visible
+                  WHERE visible.workspace_id = canvas.workspace_id
+                    AND visible.canvas_id = canvas.id
+                    AND (
+                      (visible.principal_type = 'actor' AND visible.principal_actor_id = ${input.actorId})
+                      OR (visible.principal_type = 'group' AND visible.principal_group_id IN ${sql(groupIds)})
+                    )
+                )
+                OR EXISTS (
+                  SELECT 1 FROM flightdeck_pg_permission_grants manage_grant
+                  WHERE manage_grant.workspace_id = canvas.workspace_id
+                    AND manage_grant.resource_type = 'workspace'
+                    AND manage_grant.permission = 'workspace.manage'
+                    AND manage_grant.revoked_at IS NULL
+                    AND (
+                      (manage_grant.principal_type = 'actor' AND manage_grant.principal_actor_id = ${input.actorId})
+                      OR (manage_grant.principal_type = 'group' AND manage_grant.principal_group_id IN ${sql(groupIds)})
+                    )
+                )
+              )
+          )
+        )
+        OR (
           e.channel_id IS NULL
           AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','org_data','feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
+          AND e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_order')
         )
       )
     ORDER BY e.row_version ASC, e.created_at ASC, e.id ASC

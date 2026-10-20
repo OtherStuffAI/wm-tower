@@ -691,6 +691,8 @@ export type FlightDeckPgReactionEmoji = 'thumbs_up' | 'smile' | 'heart' | 'eyes'
 export type FlightDeckPgAudioNoteTargetType = FlightDeckPgReactionTargetType;
 export type FlightDeckPgDailyNoteStatus = 'active' | 'archived';
 export type FlightDeckPgPersonalWappStatus = 'active' | 'archived';
+export type FlightDeckPgCanvasVisibilityMode = 'workspace' | 'restricted';
+export type FlightDeckPgCanvasSourceType = 'document' | 'task_list' | 'chat_thread' | 'html';
 export type FlightDeckPgResponseActivityTargetType = 'chat_thread' | 'task_comment' | 'doc_comment';
 export type FlightDeckPgResponseActivityStatus = 'queued' | 'thinking' | 'drafting' | 'publishing' | 'failed' | 'cleared';
 export type FlightDeckPgResponseActivitySeverity = 'info' | 'warning' | 'error';
@@ -887,6 +889,61 @@ export interface FlightDeckPgWorkspaceMembership {
   role: FlightDeckPgWorkspaceRole;
   created_by_actor_id: string | null;
   created_at: Date;
+}
+
+export interface FlightDeckPgCanvasViewport {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+export interface FlightDeckPgCanvasLayout {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z: number;
+}
+
+export interface FlightDeckPgCanvas {
+  id: string;
+  workspace_id: string;
+  title: string;
+  position: number;
+  visibility_mode: FlightDeckPgCanvasVisibilityMode;
+  viewport: FlightDeckPgCanvasViewport;
+  created_by_actor_id: string;
+  updated_by_actor_id: string;
+  row_version: number;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface FlightDeckPgCanvasVisibilityPrincipal {
+  workspace_id: string;
+  canvas_id: string;
+  principal_type: FlightDeckPgPrincipalType;
+  principal_actor_id: string | null;
+  principal_group_id: string | null;
+  created_by_actor_id: string;
+  created_at: Date;
+}
+
+export interface FlightDeckPgCanvasNaplet {
+  id: string;
+  workspace_id: string;
+  canvas_id: string;
+  source_type: FlightDeckPgCanvasSourceType;
+  source_id: string;
+  display_title: string | null;
+  layout: FlightDeckPgCanvasLayout;
+  created_by_actor_id: string;
+  updated_by_actor_id: string;
+  row_version: number;
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
 }
 
 export interface FlightDeckPgGroup {
