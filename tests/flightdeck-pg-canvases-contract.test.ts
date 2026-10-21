@@ -16,6 +16,7 @@ import {
   serializeFlightDeckPgCanvas,
   serializeFlightDeckPgCanvasComment,
 } from '../src/services/flightdeck-pg-canvases';
+import { HTML_ARTIFACT_MANIFEST_ID, HTML_ARTIFACT_MAX_ASSETS, htmlArtifactDigestMatches, parseHtmlArtifactManifest } from '../src/services/flightdeck-pg-html-artifacts';
 
 const uuid = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
@@ -139,6 +140,7 @@ describe('Flight Deck PG Canvas source contract', () => {
       ['post', '/workspaces/:workspaceId/canvases/:canvasId/naplets'],
       ['patch', '/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId'],
       ['delete', '/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId'],
+      ['get', '/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId/html'],
       ['post', '/workspaces/:workspaceId/canvases/:canvasId/elements'],
       ['patch', '/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId'],
       ['delete', '/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId'],
@@ -150,7 +152,7 @@ describe('Flight Deck PG Canvas source contract', () => {
     for (const [method, path] of expected) {
       expect(routes).toContain(`flightDeckPgRouter.${method}('${path}'`);
     }
-    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(16);
+    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(17);
   });
 
   test('bootstraps and runtime-migrates dedicated Canvas authority tables', () => {
@@ -187,20 +189,63 @@ describe('Flight Deck PG Canvas source contract', () => {
 
   test('source resolver independently applies every canonical family permission and immutable HTML version boundary', () => {
     const source = readFileSync(new URL('../src/services/flightdeck-pg-canvases.ts', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../src/services/flightdeck-pg-html-artifacts.ts', import.meta.url), 'utf8');
     expect(source).toContain("permission: 'doc.read'");
     expect(source).toContain("permission: 'task.read'");
     expect(source).toContain("permission: 'channel.read'");
-    expect(source).toContain("permission: 'file.read'");
-    expect(source).toContain('resolveFlightDeckPgFileVersion');
+    expect(source).toContain('resolveFlightDeckPgHtmlArtifact');
+    expect(html).toContain("permission: 'file.read'");
+    expect(html).toContain('resolveFlightDeckPgFileVersion');
     const bytes = new TextEncoder().encode('<main>safe</main>');
     expect(flightDeckPgCanvasDigestMatches(bytes, 'cca4aacf89195582f9ad39d3e635b268ae56b01281f51a64b2337148464e8b72')).toBe(true);
     expect(flightDeckPgCanvasDigestMatches(bytes, 'a'.repeat(64))).toBe(false);
     expect(flightDeckPgCanvasDigestMatches(bytes, 'not-a-digest')).toBe(false);
-    expect(source).toContain('flightDeckPgCanvasDigestMatches(packaged.bytes, digest)');
-    expect(source).toContain("content: { html: packaged.text, version: String(version.version_number), digest:");
-    expect(source).not.toContain('signed_url');
-    expect(source).not.toContain('download_url');
-    expect(source).not.toContain('signer_npub');
+    expect(htmlArtifactDigestMatches(bytes, 'cca4aacf89195582f9ad39d3e635b268ae56b01281f51a64b2337148464e8b72')).toBe(true);
+    expect(htmlArtifactDigestMatches(bytes, 'a'.repeat(64))).toBe(false);
+    expect(html).toContain('htmlArtifactDigestMatches(stored.bytes, digest)');
+    // Authorization precedes the version relation and byte read.
+    expect(html.indexOf('canReadFileChannel({ ...input, channelId: file.channel_id }')).toBeLessThan(html.indexOf('const targetVersionId'));
+    for (const text of [source, html]) {
+      expect(text).not.toContain('signed_url');
+      expect(text).not.toContain('download_url');
+      expect(text).not.toContain('signer_npub');
+    }
+  });
+
+  test('parses only an exact, bounded HTML asset manifest', () => {
+    const id = (n: string) => `00000000-0000-4000-8000-${n.padStart(12, '0')}`;
+    const entry = { name: 'hero.png', file_id: id('1'), version_id: id('2'), sha256: 'b'.repeat(64) };
+    const wrap = (value: unknown) => `<p>x</p><script type="application/json" id="${HTML_ARTIFACT_MANIFEST_ID}">${typeof value === 'string' ? value : JSON.stringify(value)}</script>`;
+    expect(parseHtmlArtifactManifest('<p>no manifest</p>')).toEqual({ entries: [], error: null });
+    expect(parseHtmlArtifactManifest(wrap({ version: 1, assets: [entry] }))).toEqual({ entries: [entry], error: null });
+    expect(parseHtmlArtifactManifest(wrap({ version: 1, assets: [{ ...entry, file_id: id('1').toUpperCase() }] })).entries[0]!.file_id).toBe(id('1'));
+    for (const bad of [
+      '{not json',
+      { version: 2, assets: [] },
+      { version: 1, assets: [entry, entry] },
+      { version: 1, assets: [{ ...entry, name: '../escape.png' }] },
+      { version: 1, assets: [{ ...entry, sha256: 'xyz' }] },
+      { version: 1, assets: [{ ...entry, version_id: 'nope' }] },
+      { version: 1, assets: Array.from({ length: HTML_ARTIFACT_MAX_ASSETS + 1 }, (_, i) => ({ ...entry, name: `a${i}.png` })) },
+    ]) {
+      const parsed = parseHtmlArtifactManifest(wrap(bad));
+      expect(parsed.entries).toEqual([]);
+      expect(parsed.error).toBeTruthy();
+    }
+    expect(parseHtmlArtifactManifest(wrap({ version: 1, assets: [] }) + wrap({ version: 1, assets: [] })).error).toBe('multiple asset manifests');
+  });
+
+  test('publishes the HTML version policy, browse route and typed immutable version byte route', async () => {
+    const spec = await (await createApp().request('/openapi.json')).json() as any;
+    const root = '/api/v4/flightdeck-pg/workspaces/{workspaceId}';
+    expect(spec.paths[`${root}/canvases/{canvasId}/naplets/{napletId}/html`].get.description).toMatch(/file\.read/);
+    expect(spec.paths[`${root}/files/{fileId}/versions/{versionId}/object`].get.description).toMatch(/file\.read.*sha256/s);
+    expect(spec.paths[`${root}/canvases/{canvasId}/naplets/{napletId}`].patch.requestBody.content['application/json'].schema.properties.source_version_id).toBeDefined();
+    expect(spec.components.schemas.FlightDeckPgCanvasNapletReady.properties.source.properties.version_id).toBeDefined();
+    expect(spec.components.schemas.FlightDeckPgHtmlArtifactAsset.properties.status.enum).toEqual(['ready', 'unavailable']);
+    const bootstrap = readFileSync(new URL('../src/schema/001_init.sql', import.meta.url), 'utf8');
+    const block = bootstrap.split('-- flightdeck_pg_canvas_v1')[1]!.split('-- end_flightdeck_pg_canvas_v1')[0]!;
+    expect(block).toContain('ALTER TABLE flightdeck_pg_canvas_naplets ADD COLUMN IF NOT EXISTS source_version_id UUID;');
   });
 
   test('filters Canvas outbox events before the generic workspace SSE branch', () => {

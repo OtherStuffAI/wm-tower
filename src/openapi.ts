@@ -3377,9 +3377,14 @@ export function buildOpenApiDocument(origin: string) {
           type: 'object', additionalProperties: false, required: ['id', 'access', 'layout', 'source', 'title', 'content', 'row_version'],
           properties: {
             id: { type: 'string', format: 'uuid' }, access: { type: 'string', const: 'ready' }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' },
-            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid' } } },
-            title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains only immutable package bytes plus version and digest; never credentials or URLs.' }, row_version: { type: 'integer', minimum: 1 },
+            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid', description: 'For html this is always the File id, including legacy naplets that stored a version id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: null follows the File current version; a version id pins it.' } } },
+            title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains immutable version bytes plus version/digest, file_id, version_id, version_number, current_version_id/number, follows_latest and a viewer-authorized asset list (FlightDeckPgHtmlArtifactAsset); never credentials or URLs.' }, row_version: { type: 'integer', minimum: 1 },
           },
+        },
+        FlightDeckPgHtmlArtifactAsset: {
+          type: 'object', required: ['name', 'status'],
+          description: 'One manifest entry from <script type="application/json" id="wingman-artifact-assets">. ready entries are same-workspace File versions the viewer can read via channel file.read, with matching sha256, an allowed image content type, at most 8 MiB each and 32 MiB in total. Every other entry is unavailable with no further metadata.',
+          properties: { name: { type: 'string' }, status: { type: 'string', enum: ['ready', 'unavailable'] }, file_id: { type: 'string', format: 'uuid' }, version_id: { type: 'string', format: 'uuid' }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' }, size_bytes: { type: 'integer', minimum: 1 }, content_type: { type: 'string' } },
         },
         FlightDeckPgCanvasElementLayout: {
           type: 'object', additionalProperties: false, required: ['x', 'y', 'width', 'height', 'z'],
@@ -5440,16 +5445,16 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Add an authorized source reference to a managed Canvas',
           description: 'Stores presentation title/layout plus an opaque canonical source reference only. The source must exist and be readable by the caller at placement time; later revocation produces the denied snapshot shape.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid', description: 'html: File id (preferred) or a legacy File version id, which is stored as File id plus pin.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: omit/null to follow latest, or pin a version of the same File.' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
           responses: { '201': { description: 'Naplet reference created' }, '400': { description: 'Source unavailable or invalid' }, '403': { description: 'Management denied' } },
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/naplets/{napletId}': {
         patch: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Update Canvas naplet presentation state',
-          description: 'Updates layout/title only; the canonical source reference is immutable. expected_row_version is mandatory compare-and-swap state.',
+          description: 'Updates layout/title and, for html naplets, the version policy. The canonical source File is immutable; source_version_id null follows latest and a UUID pins a version that must belong to the same File and be readable by the caller. expected_row_version is mandatory compare-and-swap state.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, title: { type: ['string', 'null'], minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, title: { type: ['string', 'null'], minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' }, source_version_id: { type: ['string', 'null'], format: 'uuid' } } } } } },
           responses: { '200': { description: 'Naplet presentation state updated' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
         },
         delete: {
@@ -5457,6 +5462,14 @@ export function buildOpenApiDocument(origin: string) {
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 } } } } } },
           responses: { '200': { description: 'Naplet deleted' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/naplets/{napletId}/html': {
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read one version of an HTML naplet File for browsing',
+          description: 'Viewer-local version browsing that does not change the naplet. Requires Canvas visibility and channel file.read on the File before any version metadata or bytes. version_id must belong to the naplet File; omitted uses the naplet policy. Returns the same HTML content projection as the snapshot plus the File version list. Forbidden, foreign and missing versions share one 404.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'version_id', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '200': { description: 'Authorized HTML version content and version list' }, '404': { description: 'Canvas or source unavailable' } },
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/canvases/{canvasId}/elements': {
@@ -6290,6 +6303,14 @@ export function buildOpenApiDocument(origin: string) {
             '403': { description: 'File/channel read permission required for explicit channel', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
             '404': { description: 'Workspace not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
           },
+        },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/object': {
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Read immutable bytes of one File version',
+          description: 'Raw bytes of an exact File version for private HTML artifact assets. Requires channel file.read on the File; the version must belong to that File in this workspace and its object to the workspace storage partition. Bytes are re-hashed and must match the recorded sha256. Bytes are immutable (ETag is the sha256) but private: Cache-Control private, no-store; nosniff; sandbox CSP. Denied, foreign and missing versions share one 404. No anonymous or Blossom access.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'fileId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '200': { description: 'Version bytes', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } }, '304': { description: 'Not modified' }, '404': { description: 'Version object unavailable' }, '409': { description: 'Stored bytes failed integrity verification' } },
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/files/{fileId}/object': {

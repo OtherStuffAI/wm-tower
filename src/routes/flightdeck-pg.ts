@@ -97,6 +97,7 @@ import {
   updateFlightDeckPgCanvasNaplet,
   setFlightDeckPgCanvasCommentResolved,
 } from '../services/flightdeck-pg-canvases';
+import { htmlArtifactDigestMatches, resolveFlightDeckPgFileVersionObject, resolveFlightDeckPgHtmlArtifact } from '../services/flightdeck-pg-html-artifacts';
 import {
   AGENT_INSTRUCTION_SIGNATURE_METADATA_KEY,
   validateFlightDeckPgMessageInstructionSignature,
@@ -8476,6 +8477,46 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/files/:fileId/versions', async
   }
 });
 
+flightDeckPgRouter.get('/workspaces/:workspaceId/files/:fileId/versions/:versionId/object', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const fileId = c.req.param('fileId'), versionId = c.req.param('versionId');
+  const notFound = () => jsonError(c, 404, 'file_version_object_not_found', 'Flight Deck PG file version object was not found', identity);
+  if (!isUuid(fileId) || !isUuid(versionId)) return notFound();
+  const file = await resolveFlightDeckPgFile(context.workspace.id, fileId);
+  if (!file) return notFound();
+  // Same channel file.read policy as HTML artifact naplets; checked before the
+  // version relation, storage metadata or bytes are disclosed.
+  const access = await authorizeFlightDeckPgOperation({ actorNpub: auth.userNpub, appNpub: context.workspace.app_npub, workspaceId: context.workspace.id, permission: 'file.read', resource: { type: 'channel', channelId: file.channel_id } });
+  // Denied and missing share one response so File identities are not probed.
+  if (!access.allowed) return notFound();
+  const resolved = await resolveFlightDeckPgFileVersionObject({ workspaceId: context.workspace.id, fileId: file.id, versionId });
+  if (!resolved) return notFound();
+  const content = await getStorageObjectContent(resolved.object.id);
+  const digest = String(resolved.object.sha256_hex || '').toLowerCase();
+  if (!content || !htmlArtifactDigestMatches(content.bytes, digest)) {
+    return jsonError(c, 409, 'file_version_object_integrity', 'Stored bytes do not match the recorded sha256', identity);
+  }
+  const etag = `"${digest}"`;
+  const headers: Record<string, string> = {
+    'Content-Type': resolved.object.content_type || 'application/octet-stream',
+    'Content-Length': String(content.bytes.byteLength),
+    // Version bytes are immutable (ETag = sha256) but private: never shared caches.
+    'Cache-Control': 'private, no-store',
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'inline',
+    ETag: etag,
+    'X-Wingman-Sha256': digest,
+    'X-Wingman-File-Version-Id': resolved.version.id,
+  };
+  if (c.req.header('if-none-match') === etag) return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': headers['Cache-Control']! } });
+  return new Response(Buffer.from(content.bytes), { status: 200, headers });
+});
+
 flightDeckPgRouter.get('/workspaces/:workspaceId/files/:fileId/object', async (c) => {
   const auth = await requireNip98AuthResolved(c);
   if (auth instanceof Response) return auth;
@@ -9805,20 +9846,25 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/naplets', a
   const source = body.source && typeof body.source === 'object' && !Array.isArray(body.source) ? body.source as Record<string, unknown> : {};
   const sourceType = String(source.type || '').trim() as FlightDeckPgCanvasSourceType;
   const sourceId = String(source.id || '').trim();
+  const sourceVersionId = source.version_id === undefined || source.version_id === null ? null : String(source.version_id).trim();
   const displayTitle = body.title === undefined ? null : String(body.title || '').trim();
   const fields: { path: string; code: string; message: string }[] = [];
   if (!canvasSourceTypes.has(sourceType)) fields.push({ path: 'source.type', code: 'invalid', message: 'source.type must be document, task_list, chat_thread, or html' });
   if (!isUuid(sourceId)) fields.push({ path: 'source.id', code: 'invalid', message: 'source.id must be a canonical record or package UUID' });
+  if (sourceVersionId !== null && (sourceType !== 'html' || !isUuid(sourceVersionId))) fields.push({ path: 'source.version_id', code: 'invalid', message: 'source.version_id must be null or a version UUID of the html File' });
   if (body.title !== undefined && !displayTitle) fields.push({ path: 'title', code: 'invalid', message: 'title must be non-empty when provided' });
   if (displayTitle && displayTitle.length > 200) fields.push({ path: 'title', code: 'too_long', message: 'title must be at most 200 characters' });
   if (!body.layout || typeof body.layout !== 'object' || Array.isArray(body.layout)) fields.push({ path: 'layout', code: 'invalid', message: 'layout must be an object' });
   if (fields.length) return validationError(c, identity, fields);
-  const authorizedSource = await resolveFlightDeckPgCanvasSource({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, sourceType, sourceId });
+  const authorizedSource = await resolveFlightDeckPgCanvasSource({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, sourceType, sourceId, sourceVersionId });
   if (!authorizedSource) return jsonError(c, 400, 'canvas_source_unavailable', 'Canvas source is unavailable', identity);
+  // HTML naplets always persist the File id; a legacy version id becomes a pin.
+  const storedSourceId = sourceType === 'html' ? authorizedSource.source!.id : sourceId;
+  const storedVersionId = sourceType === 'html' ? authorizedSource.source!.version_id ?? null : null;
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
-    const naplet = await createFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, actorId: context.actor.id, sourceType, sourceId, displayTitle, layout: normalizeFlightDeckPgCanvasLayout(body.layout) }, sql);
-    const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.create', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, source_type: sourceType, source_id: sourceId, row_version: naplet.row_version } }, sql);
+    const naplet = await createFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, actorId: context.actor.id, sourceType, sourceId: storedSourceId, sourceVersionId: storedVersionId, displayTitle, layout: normalizeFlightDeckPgCanvasLayout(body.layout) }, sql);
+    const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.create', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, source_type: sourceType, source_id: storedSourceId, source_version_id: storedVersionId, row_version: naplet.row_version } }, sql);
     const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_naplet.created', entityType: 'canvas_naplet', entityId: naplet.id, operation: 'created', entityRowVersion: naplet.row_version, payload: { canvas_id: canvasId, naplet_id: naplet.id } }, sql);
     return { naplet, auditId, outbox };
   });
@@ -9848,13 +9894,27 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/naplets/:n
   if (body.title !== undefined && body.title !== null && !displayTitle) fields.push({ path: 'title', code: 'invalid', message: 'title must be non-empty or null' });
   if (displayTitle && displayTitle.length > 200) fields.push({ path: 'title', code: 'too_long', message: 'title must be at most 200 characters' });
   if (body.layout !== undefined && (!body.layout || typeof body.layout !== 'object' || Array.isArray(body.layout))) fields.push({ path: 'layout', code: 'invalid', message: 'layout must be an object' });
-  if (body.layout === undefined && body.title === undefined) fields.push({ path: 'body', code: 'empty', message: 'layout or title is required' });
+  const versionPolicyProvided = body.source_version_id !== undefined;
+  const requestedPin = body.source_version_id === null || body.source_version_id === undefined ? null : String(body.source_version_id).trim();
+  if (requestedPin !== null && !isUuid(requestedPin)) fields.push({ path: 'source_version_id', code: 'invalid', message: 'source_version_id must be null (follow latest) or a version UUID' });
+  if (body.layout === undefined && body.title === undefined && !versionPolicyProvided) fields.push({ path: 'body', code: 'empty', message: 'layout, title or source_version_id is required' });
   if (fields.length) return validationError(c, identity, fields);
+  let htmlSource: { fileId: string; versionId: string | null } | undefined;
+  if (versionPolicyProvided) {
+    const current = (await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId)).find((row) => row.id === napletId);
+    if (!current) return jsonError(c, 409, 'stale_row_version', 'Canvas naplet row_version is stale', identity);
+    if (current.source_type !== 'html') return validationError(c, identity, [{ path: 'source_version_id', code: 'invalid', message: 'source_version_id applies only to html naplets' }]);
+    const existingSource = await resolveFlightDeckPgCanvasSource({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, sourceType: 'html', sourceId: current.source_id, sourceVersionId: current.source_version_id ?? null });
+    const fileId = existingSource?.source?.id;
+    const nextSource = fileId ? await resolveFlightDeckPgCanvasSource({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, sourceType: 'html', sourceId: fileId, sourceVersionId: requestedPin }) : null;
+    if (!fileId || !nextSource) return jsonError(c, 400, 'canvas_source_unavailable', 'Canvas source is unavailable', identity);
+    htmlSource = { fileId, versionId: requestedPin };
+  }
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
-      const naplet = await updateFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, napletId, actorId: context.actor.id, expectedRowVersion, displayTitle, displayTitleProvided: body.title !== undefined, layout: body.layout === undefined ? undefined : normalizeFlightDeckPgCanvasLayout(body.layout) }, sql);
-      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.update', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, row_version: naplet.row_version } }, sql);
+      const naplet = await updateFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, napletId, actorId: context.actor.id, expectedRowVersion, displayTitle, displayTitleProvided: body.title !== undefined, layout: body.layout === undefined ? undefined : normalizeFlightDeckPgCanvasLayout(body.layout), htmlSource }, sql);
+      const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.update', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, row_version: naplet.row_version, ...(htmlSource ? { source_id: htmlSource.fileId, source_version_id: htmlSource.versionId } : {}) } }, sql);
       const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_naplet.updated', entityType: 'canvas_naplet', entityId: naplet.id, operation: 'updated', entityRowVersion: naplet.row_version, payload: { canvas_id: canvasId, naplet_id: naplet.id } }, sql);
       return { naplet, auditId, outbox };
     });
@@ -9864,6 +9924,43 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/naplets/:n
     if (error instanceof FlightDeckPgCanvasConflictError) return jsonError(c, 409, 'stale_row_version', error.message, identity);
     throw error;
   }
+});
+
+flightDeckPgRouter.get('/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId/html', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const { context, identity } = result;
+  const canvasId = c.req.param('canvasId'), napletId = c.req.param('napletId');
+  const requestedVersionId = String(c.req.query('version_id') || '').trim() || null;
+  const unavailable = () => jsonError(c, 404, 'canvas_source_unavailable', 'Canvas source is unavailable', identity);
+  const canvas = isUuid(canvasId) ? await resolveVisibleFlightDeckPgCanvas({ ...(await canvasViewerInput(context, auth.userNpub)), canvasId }) : null;
+  if (!canvas) return jsonError(c, 404, 'canvas_unavailable', 'Canvas unavailable', identity);
+  if (!isUuid(napletId) || (requestedVersionId && !isUuid(requestedVersionId))) return unavailable();
+  const naplet = (await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId)).find((row) => row.id === napletId);
+  if (!naplet || naplet.source_type !== 'html') return unavailable();
+  // The resolver authorizes the File before reading versions, metadata or bytes,
+  // and rejects versions that belong to another File or workspace.
+  const artifact = await resolveFlightDeckPgHtmlArtifact({ workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, actorNpub: auth.userNpub, sourceId: naplet.source_id, sourceVersionId: naplet.source_version_id ?? null, requestedVersionId });
+  if (!artifact) return unavailable();
+  const versions = await listFlightDeckPgFileVersions({ workspaceId: context.workspace.id, fileId: artifact.fileId, limit: 200 });
+  return c.json({
+    workspace_id: context.workspace.id,
+    identity,
+    naplet_id: naplet.id,
+    title: naplet.display_title || artifact.title,
+    source: { type: 'html', id: artifact.fileId, version_id: artifact.pinnedVersionId },
+    content: artifact.content,
+    versions: versions.filter((version) => version.operation !== 'deleted').map((version) => ({
+      id: version.id,
+      version_number: Number(version.version_number),
+      created_at: version.created_at,
+      created_by_actor_npub: version.created_by_actor_npub ?? null,
+      content_type: version.content_type ?? null,
+      size_bytes: version.size_bytes === undefined || version.size_bytes === null ? null : Number(version.size_bytes),
+    })),
+  });
 });
 
 flightDeckPgRouter.delete('/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId', async (c) => {

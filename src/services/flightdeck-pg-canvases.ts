@@ -17,10 +17,9 @@ import {
   listFlightDeckPgChannelMessages,
   listFlightDeckPgChannelTasks,
   resolveFlightDeckPgDoc,
-  resolveFlightDeckPgFile,
-  resolveFlightDeckPgFileVersion,
   resolveFlightDeckPgThread,
 } from './flightdeck-pg-api';
+import { resolveFlightDeckPgHtmlArtifact } from './flightdeck-pg-html-artifacts';
 import { getStorageObjectContent } from './storage';
 
 type DbClient = ReturnType<typeof getDb>;
@@ -37,11 +36,15 @@ export type FlightDeckPgCanvasView = FlightDeckPgCanvas & {
   can_manage: boolean;
 };
 
+export type CanvasNapletSource = { type: FlightDeckPgCanvasSourceType; id: string; version_id?: string | null };
+
+export type CanvasResolvedSource = { title: string; content: Record<string, unknown>; source?: CanvasNapletSource };
+
 export type CanvasReadyNaplet = {
   id: string;
   access: 'ready';
   layout: FlightDeckPgCanvasLayout;
-  source: { type: FlightDeckPgCanvasSourceType; id: string };
+  source: CanvasNapletSource;
   title: string;
   content: Record<string, unknown>;
   row_version: number;
@@ -393,6 +396,7 @@ export async function createFlightDeckPgCanvasNaplet(
     actorId: string;
     sourceType: FlightDeckPgCanvasSourceType;
     sourceId: string;
+    sourceVersionId?: string | null;
     displayTitle?: string | null;
     layout: FlightDeckPgCanvasLayout;
   },
@@ -400,9 +404,9 @@ export async function createFlightDeckPgCanvasNaplet(
 ): Promise<FlightDeckPgCanvasNaplet> {
   const [naplet] = await sql<FlightDeckPgCanvasNaplet[]>`
     INSERT INTO flightdeck_pg_canvas_naplets
-      (workspace_id, canvas_id, source_type, source_id, display_title, layout, created_by_actor_id, updated_by_actor_id)
+      (workspace_id, canvas_id, source_type, source_id, source_version_id, display_title, layout, created_by_actor_id, updated_by_actor_id)
     VALUES (
-      ${input.workspaceId}, ${input.canvasId}, ${input.sourceType}, ${input.sourceId}, ${input.displayTitle ?? null},
+      ${input.workspaceId}, ${input.canvasId}, ${input.sourceType}, ${input.sourceId}, ${input.sourceVersionId ?? null}, ${input.displayTitle ?? null},
       ${sql.json(input.layout as any)}, ${input.actorId}, ${input.actorId}
     )
     RETURNING *
@@ -420,6 +424,8 @@ export async function updateFlightDeckPgCanvasNaplet(
     displayTitle?: string | null;
     displayTitleProvided?: boolean;
     layout?: FlightDeckPgCanvasLayout;
+    /** HTML version policy; applied together with the normalized File source id. */
+    htmlSource?: { fileId: string; versionId: string | null };
   },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgCanvasNaplet> {
@@ -427,6 +433,8 @@ export async function updateFlightDeckPgCanvasNaplet(
     UPDATE flightdeck_pg_canvas_naplets SET
       display_title = CASE WHEN ${input.displayTitleProvided === true} THEN ${input.displayTitle ?? null} ELSE display_title END,
       layout = COALESCE(${input.layout ? sql.json(input.layout as any) : null}::jsonb, layout),
+      source_id = CASE WHEN ${Boolean(input.htmlSource)} AND source_type = 'html' THEN ${input.htmlSource?.fileId ?? null}::uuid ELSE source_id END,
+      source_version_id = CASE WHEN ${Boolean(input.htmlSource)} AND source_type = 'html' THEN ${input.htmlSource?.versionId ?? null}::uuid ELSE source_version_id END,
       updated_by_actor_id = ${input.actorId},
       row_version = row_version + 1,
       updated_at = NOW()
@@ -686,9 +694,11 @@ export async function resolveFlightDeckPgCanvasSource(
     actorNpub: string;
     sourceType: FlightDeckPgCanvasSourceType;
     sourceId: string;
+    sourceVersionId?: string | null;
+    requestedVersionId?: string | null;
   },
   sql: DbClient = getDb(),
-): Promise<{ title: string; content: Record<string, unknown> } | null> {
+): Promise<CanvasResolvedSource | null> {
   if (input.sourceType === 'document') {
     const doc = await resolveFlightDeckPgDoc(input.workspaceId, input.sourceId, sql);
     if (!doc || doc.archived_at) return null;
@@ -730,19 +740,19 @@ export async function resolveFlightDeckPgCanvasSource(
     };
   }
 
-  const version = await resolveFlightDeckPgFileVersion({ workspaceId: input.workspaceId, versionId: input.sourceId }, sql);
-  if (!version) return null;
-  const file = await resolveFlightDeckPgFile(input.workspaceId, version.file_id, sql);
-  if (!file || file.archived_at) return null;
-  const access = await authorizeFlightDeckPgOperation({ actorNpub: input.actorNpub, appNpub: input.appNpub, workspaceId: input.workspaceId, permission: 'file.read', resource: { type: 'channel', channelId: file.channel_id } }, sql);
-  if (!access.allowed) return null;
-  const packaged = await readableStorageText(version.storage_object_id, 2 * 1024 * 1024);
-  if (!packaged || !['text/html', 'application/xhtml+xml'].includes(packaged.row.content_type.toLowerCase())) return null;
-  const digest = packaged.row.sha256_hex;
-  if (!flightDeckPgCanvasDigestMatches(packaged.bytes, digest)) return null;
+  const artifact = await resolveFlightDeckPgHtmlArtifact({
+    workspaceId: input.workspaceId,
+    appNpub: input.appNpub,
+    actorNpub: input.actorNpub,
+    sourceId: input.sourceId,
+    sourceVersionId: input.sourceVersionId ?? null,
+    requestedVersionId: input.requestedVersionId ?? null,
+  }, sql);
+  if (!artifact) return null;
   return {
-    title: file.display_name || 'HTML',
-    content: { html: packaged.text, version: String(version.version_number), digest: digest.toLowerCase() },
+    title: artifact.title,
+    content: artifact.content,
+    source: { type: 'html', id: artifact.fileId, version_id: artifact.pinnedVersionId },
   };
 }
 
@@ -758,13 +768,14 @@ export async function serializeAuthorizedFlightDeckPgCanvasNaplet(
       actorNpub: input.actorNpub,
       sourceType: input.naplet.source_type,
       sourceId: input.naplet.source_id,
+      sourceVersionId: input.naplet.source_version_id ?? null,
     }, sql);
     if (!source) return deniedFlightDeckPgCanvasNaplet(input.naplet);
     return {
       id: input.naplet.id,
       access: 'ready',
       layout: normalizeFlightDeckPgCanvasLayout(input.naplet.layout),
-      source: { type: input.naplet.source_type, id: input.naplet.source_id },
+      source: source.source ?? { type: input.naplet.source_type, id: input.naplet.source_id },
       title: input.naplet.display_title || source.title,
       content: source.content,
       row_version: Number(input.naplet.row_version),

@@ -3348,6 +3348,7 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
   canvas_id UUID NOT NULL,
   source_type TEXT NOT NULL,
   source_id UUID NOT NULL,
+  source_version_id UUID,
   display_title TEXT,
   layout JSONB NOT NULL DEFAULT '{"x":0,"y":0,"width":360,"height":280,"z":1}'::jsonb,
   created_by_actor_id UUID NOT NULL,
@@ -3376,6 +3377,9 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
 CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_naplets_canvas
   ON flightdeck_pg_canvas_naplets(workspace_id, canvas_id, created_at, id)
   WHERE deleted_at IS NULL;
+-- HTML naplets name a File; NULL source_version_id follows its current version.
+-- Older HTML naplets store a version id in source_id and remain pinned.
+ALTER TABLE flightdeck_pg_canvas_naplets ADD COLUMN IF NOT EXISTS source_version_id UUID;
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_elements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

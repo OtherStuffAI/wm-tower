@@ -938,6 +938,8 @@ export interface FlightDeckPgCanvasNaplet {
   canvas_id: string;
   source_type: FlightDeckPgCanvasSourceType;
   source_id: string;
+  /** HTML only: NULL follows the File's current version; a version id pins it. */
+  source_version_id?: string | null;
   display_title: string | null;
   layout: FlightDeckPgCanvasLayout;
   created_by_actor_id: string;
