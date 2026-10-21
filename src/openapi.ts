@@ -4881,6 +4881,10 @@ export function buildOpenApiDocument(origin: string) {
         },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}': {
+        delete: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Archive a channel or direct conversation for all participants',
+          description: 'Requires channel.manage, rechecked inside the serialized transaction. Global soft archive retains messages, tasks, documents, files and grants. System channels and channels with metadata.system_key remain protected. Authorized retries return the archived row without duplicate audit/outbox. Existing journal tombstones reconcile active lists and retained clients; this is not personal hide.',
+          parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { '200': { description: 'Archived channel and audit metadata' }, '401': { description: 'Invalid NIP-98 authentication' }, '403': { description: 'Missing management permission' }, '404': { description: 'Missing, foreign-workspace or protected channel' } } },
         get: {
           tags: ['Flight Deck PG'],
           summary: 'Read a single visible channel',

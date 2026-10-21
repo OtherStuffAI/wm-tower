@@ -147,9 +147,47 @@ describe.skipIf(!port || port===5432)('isolated personal order and lifecycle del
   const p=await readFlightDeckRecordPage({workspaceId:w,actorId:a,cursor},db);expect(p.mode).toBe('delta');expect(p.changes.map(r=>[r.family,r.operation])).toEqual([['channel','delete']]);
   expect((await db`SELECT * FROM flightdeck_pg_scopes WHERE id=${scope!.id}`)[0]).toEqual(scope);
  });
- test('protected DM/system channels and DM scopes cannot be archived',async()=>{
+ test('protected system channels and DM scopes cannot be archived',async()=>{
   const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},'DM fixture','dm') RETURNING id`;
   const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name,kind) VALUES(${w},${scope!.id},'System','system') RETURNING id`;
   expect(await archiveFlightDeckPgScope({workspaceId:w,scopeId:scope!.id},db)).toBeNull();expect(await archiveFlightDeckPgChannel({workspaceId:w,channelId:channel!.id},db)).toBeNull();
  });
+ test('signed DM archive requires manage, retains content, publishes tombstones and retries without duplicate events',async()=>{
+  const [scope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},'Removal DMs','dm') RETURNING *`;
+  const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name,kind) VALUES(${w},${scope!.id},'Disposable DM','dm') RETURNING *`;
+  await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_scope_id,permission) VALUES(${w},'actor',${a},'scope',${scope!.id},'scope.read')`;
+  for(const permission of ['channel.read','channel.manage'])await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${channel!.id},${permission})`;
+  await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${b},'channel',${channel!.id},'channel.read')`;
+  const [message]=await db`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,created_by_actor_id,updated_by_actor_id) VALUES(${w},${scope!.id},${channel!.id},'Retained DM content',${a},${a}) RETURNING *`;
+  const cursors=await Promise.all([synced(a),synced(b)]);
+  const path=`/api/v4/flightdeck-pg/workspaces/${w}/channels/${channel!.id}`;
+  expect((await req(path,'DELETE',1)).status).toBe(403);
+  expect((await db`SELECT archived_at FROM flightdeck_pg_channels WHERE id=${channel!.id}`)[0]!.archived_at).toBeNull();
+  const wrong=await req(`/api/v4/flightdeck-pg/workspaces/${crypto.randomUUID()}/channels/${channel!.id}`,'DELETE');
+  expect([403,404]).toContain(wrong.status);
+  const removed=await req(path,'DELETE');expect(removed.status).toBe(200);expect((await db`SELECT archived_at FROM flightdeck_pg_channels WHERE id=${channel!.id}`)[0]!.archived_at).toBeTruthy();
+  expect((await req(path,'DELETE')).status).toBe(200);
+  const active=await req(`/api/v4/flightdeck-pg/workspaces/${w}/scopes/${scope!.id}/channels`);
+  expect(active.status).toBe(200);expect(active.body.channels.some((row:any)=>row.id===channel!.id)).toBe(false);
+  expect([403,404]).toContain((await req(path)).status);
+  for(const [index,actorId] of [a,b].entries()){
+   const page=await readFlightDeckRecordPage({workspaceId:w,actorId,cursor:cursors[index]},db);
+   expect(page.mode).toBe('delta');expect(page.changes.map(r=>[r.family,r.operation,r.id])).toEqual([['channel','delete',channel!.id]]);
+  }
+  expect((await db`SELECT * FROM flightdeck_pg_messages WHERE id=${message!.id}`)[0]).toEqual(message);
+  expect((await db`SELECT * FROM flightdeck_pg_scopes WHERE id=${scope!.id}`)[0]).toEqual(scope);
+  expect((await db`SELECT count(*)::int n FROM flightdeck_pg_audit_events WHERE resource_id=${channel!.id} AND action='channel.delete'`)[0]!.n).toBe(1);
+  expect((await db`SELECT count(*)::int n FROM flightdeck_pg_outbox_events WHERE entity_id=${channel!.id} AND event_type='channel.archived'`)[0]!.n).toBe(1);
+ });
+ test('signed managed system and system-key DM removal stays refused without lifecycle events',async()=>{
+  const [protectedScope]=await db`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${w},'Protected removal','project') RETURNING id`;
+  for(const kind of ['system','dm']){
+   const [channel]=await db`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name,kind,metadata) VALUES(${w},${protectedScope!.id},${'Protected '+kind},${kind},${db.json(kind==='dm'?{system_key:'protected'}:{})}) RETURNING id`;
+   await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${channel!.id},'channel.manage')`;
+   expect((await req(`/api/v4/flightdeck-pg/workspaces/${w}/channels/${channel!.id}`,'DELETE')).status).toBe(404);
+   expect((await db`SELECT archived_at FROM flightdeck_pg_channels WHERE id=${channel!.id}`)[0]!.archived_at).toBeNull();
+   expect((await db`SELECT count(*)::int n FROM flightdeck_pg_outbox_events WHERE entity_id=${channel!.id} AND event_type='channel.archived'`)[0]!.n).toBe(0);
+  }
+ });
+
 });

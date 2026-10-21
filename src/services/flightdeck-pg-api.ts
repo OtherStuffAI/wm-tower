@@ -3151,7 +3151,7 @@ export async function archiveFlightDeckPgChannel(
         updated_at = NOW()
     WHERE workspace_id = ${input.workspaceId}
       AND id = ${input.channelId}
-      AND kind NOT IN ('dm','system') AND COALESCE(metadata->>'system_key','') = ''
+      AND kind <> 'system' AND COALESCE(metadata->>'system_key','') = ''
       AND archived_at IS NULL
     RETURNING *
   `;

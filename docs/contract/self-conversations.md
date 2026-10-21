@@ -35,3 +35,13 @@ in the designated workspace. Keep the agent conversation separate from the
 human's notes. A health response without a commit stamp is insufficient version
 evidence. Phone/browser acceptance additionally requires the human to configure
 the same identity and workspace, then verify both directions, replies and images.
+
+## Conversation removal
+
+DELETE /api/v4/flightdeck-pg/workspaces/:workspaceId/channels/:channelId
+supports ordinary and self DMs with channel.manage permission. It globally
+archives the conversation for all participants, retaining its content and grants;
+it is not a personal hide. System kind and metadata.system_key channels remain
+protected, as do DM scopes. Reopening a self conversation after archival creates
+a new active conversation. Audit, outbox and canonical journal tombstones use
+the existing channel lifecycle; authorized retries do not duplicate events.
