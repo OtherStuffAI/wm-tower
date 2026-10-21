@@ -3322,8 +3322,8 @@ export interface HostingBillingStatus { can_top_up?: boolean; version: 1; billin
 /** Actor/workspace personal selection; false rows are durable unpin tombstones. */
 export interface FlightDeckPgPersonalPin {
  id: string; workspace_id: string; actor_id: string; thread_id: string | null;
- resource_type: 'thread' | 'task' | 'document'; resource_id: string;
- channel_id: string | null; root_record_id: string | null; pinned: boolean;
+ resource_type: 'thread' | 'task' | 'document' | 'channel'; resource_id: string;
+ channel_id: string | null; scope_id?: string | null; root_record_id: string | null; pinned: boolean;
  pinned_at: string | null; row_version: number; updated_at: string;
 }
 

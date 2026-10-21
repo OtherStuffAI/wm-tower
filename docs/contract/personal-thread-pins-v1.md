@@ -1,12 +1,12 @@
 # Personal pins v1
 
-Personal thread, task and document selections synchronize for the authenticated actor in one
+Personal thread, task, document and channel selections synchronize for the authenticated actor in one
 workspace. Tower owns state; Ambulando owns its Dexie projection and UI. This
 adds a typed operation rather than extending unrelated resource view states,
 notification preferences, personal agent settings or WApp preferences.
 
 `PUT /api/v4/flightdeck-pg/workspaces/:workspaceId/me/pins/:resourceType/:resourceId`
-(`resourceType` is `thread`, `task` or `document`). The thread checkpoint route
+(`resourceType` is `thread`, `task`, `document` or `channel`). The thread checkpoint route
 `PUT .../me/thread-pins/:threadId` remains an alias. The typed route
 accepts only `pinned`, `expected_row_version`, `mutation_id`, optional
 `import_only`, and optional import-only `pinned_at`. The NIP-98 signer resolves
@@ -77,3 +77,30 @@ Membership revocation denies reads/writes but retains private selections and
 tombstones. Rejoining as the same canonical actor cannot revive stale pins.
 Only deleting the workspace or canonical actor cascades this personal state;
 those are identity lifetime boundaries, rather than tombstone expiry.
+
+## Channel selections
+
+Channel pins use the same typed PUT with `resourceType=channel` and require the
+existing `channel.read` authorization for an active channel in this workspace.
+No thread participation requirement applies to channel selections. The actor
+cannot supply routing metadata: Tower returns canonical `channel_id=resource_id`,
+`scope_id` and `root_record_id=resource_id`, with `thread_id=null`. Titles come
+from authorized canonical channel rows. New mutations also capture scope metadata
+for existing types; historical rows and immutable acknowledgements may omit it
+or have null scope. Consumers must tolerate that and resolve canonical parents.
+
+`channel-pins-v1.sql` runs after the existing personal-pin migration on fresh
+and upgraded databases. It adds nullable scope metadata and replaces the old
+type constraint without rewriting rows, versions, receipts, journals or epochs.
+Repeat application is safe. No channel imports are accepted. Missing/archived
+channels return the existing `404 thread_not_found` error; forbidden targets
+return `403 thread_pin_target_forbidden`. Unpin requires membership and CAS but
+no target access, preserving removable unavailable selections and metadata.
+
+Channel unread presentation uses existing authorized channel/thread read state;
+pinning changes no read watermark, channel activity, notification or lease.
+All four types use independent type/UUID keys, private `personal_pin` recovery
+and actor-only SSE. Ambulando must extend its existing outbox/projection and
+TowerSyncService rather than add direct component networking or a new poller.
+Source delivery requires a later approved Tower rebuild/restart and authenticated
+smoke checks before the frontend can rely on the new type in the running API.

@@ -29,6 +29,19 @@ test.skipIf(!port||port===5432)('upgrades the real thread-only schema without lo
   expect((await db`SELECT epoch FROM flightdeck_pg_record_clock WHERE workspace_id=${w}`)[0]!.epoch).toBe(clock!.epoch);
   const recovered=await readFlightDeckRecordPage({workspaceId:w,actorId:a,cursor:page.next_cursor},db);expect(recovered.mode).toBe('delta');expect(recovered.changes.some(c=>c.family==='personal_pin'&&c.row?.pinned===false)).toBe(true);
   const retried=await mutateThreadPin(w,a,t,body,db);expect(retried.id).toBe(old!.id);expect(retried.pinned).toBe(false);expect(retried.row_version).toBe(3);
+  // Recreate the deployed three-type contract, then exercise the actual additive runtime migration.
+  await db`ALTER TABLE flightdeck_pg_thread_pins DROP CONSTRAINT fd_personal_pin_type`;
+  await db`ALTER TABLE flightdeck_pg_thread_pins ADD CONSTRAINT fd_personal_pin_type CHECK(resource_type IN ('thread','task','document') AND ((resource_type='thread' AND thread_id=resource_id) OR (resource_type<>'thread' AND thread_id IS NULL)))`;
+  await db`ALTER TABLE flightdeck_pg_thread_pins DROP COLUMN scope_id`;
+  await db`INSERT INTO flightdeck_pg_thread_pins(workspace_id,actor_id,resource_type,resource_id,thread_id,pinned,row_version) VALUES(${w},${a},'task',${t},NULL,false,7),(${w},${a},'document',${t},NULL,true,2)`;
+  const beforePins=[...(await db`SELECT * FROM flightdeck_pg_thread_pins ORDER BY id`)];
+  const beforeReceipts=[...(await db`SELECT * FROM flightdeck_pg_thread_pin_mutations`)];
+  const beforeJournal=[...(await db`SELECT * FROM flightdeck_pg_record_journal WHERE workspace_id=${w} ORDER BY position`)];
+  await ensureRuntimeSchema();await ensureRuntimeSchema();
+  expect([...(await db`SELECT * FROM flightdeck_pg_thread_pins ORDER BY id`)].map(({scope_id,...row})=>row)).toEqual(beforePins);
+  expect([...(await db`SELECT * FROM flightdeck_pg_thread_pin_mutations`)]).toEqual(beforeReceipts);
+  expect([...(await db`SELECT * FROM flightdeck_pg_record_journal WHERE workspace_id=${w} ORDER BY position`)]).toEqual(beforeJournal);
+  await db`INSERT INTO flightdeck_pg_thread_pins(workspace_id,actor_id,resource_type,resource_id,thread_id,pinned) VALUES(${w},${a},'channel',${t},NULL,false)`;
   const imported=await mutateThreadPin(w,a,t,{pinned:true,expected_row_version:0,mutation_id:crypto.randomUUID(),import_only:true},db);expect(imported.pinned).toBe(false);
  }finally{await db.end();const cleanup=postgres({...options,database:'postgres'});await cleanup.unsafe(`DROP DATABASE IF EXISTS ${name}`);await cleanup.end();}
 },30000);

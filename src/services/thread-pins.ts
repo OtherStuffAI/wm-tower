@@ -13,7 +13,7 @@ export async function mutateThreadPin(workspaceId: string, actorId: string, thre
 }
 export async function mutatePersonalPin(workspaceId: string, actorId: string, resourceType: string, resourceId: string, value: unknown, db: Db = getDb()): Promise<FlightDeckPgPersonalPin> {
  const b = value as { pinned: boolean; expected_row_version: number; mutation_id: string; import_only?: boolean; pinned_at?: string };
- if (!uuid.test(resourceId) || !['thread','task','document'].includes(resourceType) || !b || typeof b !== 'object' || Array.isArray(b)
+ if (!uuid.test(resourceId) || !['thread','task','document','channel'].includes(resourceType) || !b || typeof b !== 'object' || Array.isArray(b)
   || Object.keys(b).some(k=>!['pinned','expected_row_version','mutation_id','import_only','pinned_at'].includes(k))
   || typeof b.pinned !== 'boolean' || typeof b.mutation_id !== 'string' || !uuid.test(b.mutation_id)
   || !Number.isSafeInteger(b.expected_row_version) || b.expected_row_version<0 || b.expected_row_version>=2147483647
@@ -38,16 +38,18 @@ export async function mutatePersonalPin(workspaceId: string, actorId: string, re
    return current;
   }
   if((current?.row_version??0)!==b.expected_row_version)throw new ThreadPinError(409,'thread_pin_conflict');
-  let channelId=current?.channel_id??null,rootId=current?.root_record_id??null;
+  let channelId=current?.channel_id??null,rootId=current?.root_record_id??null,scopeId=current?.scope_id??null;
   if(b.pinned){
-   const target=await resolveFlightDeckPgResourceActivity(workspaceId,resourceType as 'thread'|'task'|'document',resourceId,sql);
+   const target=resourceType==='channel'
+    ? (await sql`SELECT id AS channel_id,scope_id FROM flightdeck_pg_channels WHERE workspace_id=${workspaceId} AND id=${resourceId} AND archived_at IS NULL FOR SHARE`)[0]
+    : await resolveFlightDeckPgResourceActivity(workspaceId,resourceType as 'thread'|'task'|'document',resourceId,sql);
    if(target){
-    const permission=resourceType==='thread'?'channel.read':resourceType==='task'?'task.read':'doc.read';
+    const permission=(resourceType==='thread'||resourceType==='channel')?'channel.read':resourceType==='task'?'task.read':'doc.read';
     const access=await authorizeFlightDeckPgOperation({actorNpub:member.npub,appNpub:member.app_npub,workspaceId,permission,resource:{type:'channel',channelId:target.channel_id}},sql);
     const participant=resourceType!=='thread'||member.kind==='human'||await isFlightDeckPgThreadParticipant({workspaceId,threadId:resourceId,actorId,actorNpub:member.npub},sql);
     if(!access.allowed||!participant){if(!b.import_only)throw new ThreadPinError(403,'thread_pin_target_forbidden');}
     else {
-     channelId=target.channel_id;rootId=resourceId;
+     channelId=target.channel_id;rootId=resourceId;scopeId=target.scope_id;
      if(resourceType==='thread') {
       const [thread]=await sql`SELECT parent_thread_id,source_message_id FROM flightdeck_pg_threads WHERE workspace_id=${workspaceId} AND id=${resourceId} FOR SHARE`;
       rootId=thread?.parent_thread_id?resourceId:thread?.source_message_id??resourceId;
@@ -55,9 +57,9 @@ export async function mutatePersonalPin(workspaceId: string, actorId: string, re
     }
    } else if(!b.import_only)throw new ThreadPinError(404,'thread_not_found');
   }
-  const [row]=await sql<FlightDeckPgPersonalPin[]>`INSERT INTO flightdeck_pg_thread_pins(workspace_id,actor_id,resource_type,resource_id,thread_id,channel_id,root_record_id,pinned,pinned_at)
-    VALUES(${workspaceId},${actorId},${resourceType},${resourceId},${resourceType==='thread'?resourceId:null},${channelId},${rootId},${b.pinned},${b.pinned ? (b.pinned_at ? new Date(b.pinned_at).toISOString() : new Date().toISOString()) : null})
-    ON CONFLICT(workspace_id,actor_id,resource_type,resource_id) DO UPDATE SET pinned=EXCLUDED.pinned,channel_id=EXCLUDED.channel_id,root_record_id=EXCLUDED.root_record_id,
+  const [row]=await sql<FlightDeckPgPersonalPin[]>`INSERT INTO flightdeck_pg_thread_pins(workspace_id,actor_id,resource_type,resource_id,thread_id,channel_id,scope_id,root_record_id,pinned,pinned_at)
+    VALUES(${workspaceId},${actorId},${resourceType},${resourceId},${resourceType==='thread'?resourceId:null},${channelId},${scopeId},${rootId},${b.pinned},${b.pinned ? (b.pinned_at ? new Date(b.pinned_at).toISOString() : new Date().toISOString()) : null})
+    ON CONFLICT(workspace_id,actor_id,resource_type,resource_id) DO UPDATE SET pinned=EXCLUDED.pinned,channel_id=EXCLUDED.channel_id,scope_id=EXCLUDED.scope_id,root_record_id=EXCLUDED.root_record_id,
     pinned_at=CASE WHEN EXCLUDED.pinned AND flightdeck_pg_thread_pins.pinned THEN flightdeck_pg_thread_pins.pinned_at ELSE EXCLUDED.pinned_at END,
     row_version=flightdeck_pg_thread_pins.row_version+1,updated_at=now() RETURNING *`;
   await sql`INSERT INTO flightdeck_pg_thread_pin_mutations VALUES(${workspaceId},${actorId},${b.mutation_id},${hash},${sql.json(row as any)})`;

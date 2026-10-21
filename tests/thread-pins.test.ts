@@ -116,4 +116,55 @@ describe.skipIf(!port || port===5432)('personal pin contract against isolated Po
   for(const type of ['task','document'])await expect(mutatePersonalPin(w,b,type,t,mutation(true),db)).rejects.toMatchObject({code:'thread_pin_conflict'});
  });
 
+ test('channel pins enforce signed read authority, canonical routing, private recovery and independent typed CAS',async()=>{
+  // Equal UUID across all four resource tables must remain four independent selections.
+  const [source]=await db`SELECT scope_id FROM flightdeck_pg_channels WHERE id=${c}`;
+  await db`INSERT INTO flightdeck_pg_channels(id,workspace_id,scope_id,name) VALUES(${t},${w},${source!.scope_id},'Same UUID channel')`;
+  await db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w},'actor',${a},'channel',${t},'channel.read')`;
+  const path=`/api/v4/flightdeck-pg/workspaces/${w}/me/pins/channel/${t}`;
+  for(const extra of [{actor_id:b},{scope_id:source!.scope_id},{channel_id:t},{import_only:true}])expect((await request(path,'PUT',0,mutation(true,0,extra))).status).toBe(400);
+  expect((await request(path,'PUT',1,mutation(true))).status).toBe(403);
+  const cursor=await synchronized(),hiddenCursor=await synchronized(b);
+  const before=[...(await db`SELECT * FROM flightdeck_pg_channels WHERE id=${t}`)];
+  const reads=[...(await db`SELECT * FROM flightdeck_pg_resource_view_states WHERE workspace_id=${w}`)];
+  const input=mutation(true),result=await request(path,'PUT',0,input);
+  expect(result.status).toBe(200);const pin=result.body.pin;
+  expect(pin).toMatchObject({resource_type:'channel',resource_id:t,channel_id:t,scope_id:source!.scope_id,root_record_id:t,thread_id:null,pinned:true,row_version:1});
+  expect([...(await db`SELECT * FROM flightdeck_pg_channels WHERE id=${t}`)]).toEqual(before);
+  expect([...(await db`SELECT * FROM flightdeck_pg_resource_view_states WHERE workspace_id=${w}`)]).toEqual(reads);
+  const rows=await db`SELECT resource_type FROM flightdeck_pg_thread_pins WHERE workspace_id=${w} AND actor_id=${a} AND resource_id=${t}`;
+  expect(rows.map(r=>r.resource_type).sort()).toEqual(['channel','document','task','thread']);
+  expect((await readFlightDeckRecordPage({workspaceId:w,actorId:a,cursor},db)).changes.some(r=>r.family==='personal_pin'&&r.row?.resource_type==='channel'&&r.row?.scope_id===source!.scope_id)).toBe(true);
+  expect((await readFlightDeckRecordPage({workspaceId:w,actorId:b,cursor:hiddenCursor},db)).changes.some(r=>r.family==='personal_pin')).toBe(false);
+  const ownEvents=await listVisibleFlightDeckPgEvents({workspaceId:w,actorId:a,groupIds:[],afterRowVersion:0,limit:200,includeWorkspaceEvents:true},db);
+  expect(ownEvents.some(e=>e.entity_id===pin.id)).toBe(true);
+  expect((await listVisibleFlightDeckPgEventsForAudience({workspaceId:w,afterRowVersion:0,limit:200,audience:[{actorId:a,npub:'reader',groupIds:[],includeWorkspaceEvents:true}]},db)).events.some(({event})=>event.entity_id===pin.id)).toBe(false);
+  const race=await Promise.all([0,1].map(()=>request(path,'PUT',0,mutation(false,1))));
+  expect(race.map(r=>r.status).sort()).toEqual([200,409]);
+  expect((await request(path,'PUT',0,input)).body.pin).toEqual(pin);
+  expect((await request(path,'PUT',0,{...input,pinned:false})).body.error).toBe('mutation_id_reused');
+  expect((await request(path,'PUT',0,mutation(true,1))).status).toBe(409);
+  // An authorized non-human channel reader needs no unrelated thread participation.
+  await db`UPDATE flightdeck_pg_actors SET kind='agent' WHERE id=${a}`;
+  const repin=await request(path,'PUT',0,mutation(true,2));expect(repin.status).toBe(200);
+  await db`UPDATE flightdeck_pg_actors SET kind='human' WHERE id=${a}`;
+  const [other]=await db`SELECT workspace_id FROM flightdeck_pg_workspace_memberships WHERE actor_id=${a} AND workspace_id<>${w}`;
+  expect((await request(`/api/v4/flightdeck-pg/workspaces/${other!.workspace_id}/me/pins/channel/${t}`,'PUT',0,mutation(true))).status).toBe(404);
+  await db`DELETE FROM flightdeck_pg_permission_grants WHERE workspace_id=${w} AND principal_actor_id=${a} AND resource_channel_id=${t}`;
+  expect((await request(path,'PUT',0,mutation(true,3))).status).toBe(403);
+  expect((await request(path,'PUT',0,input)).body.pin).toEqual(pin);
+  // Unavailable removals are actor-owned operations, not target reads.
+  await db`UPDATE flightdeck_pg_channels SET archived_at=now() WHERE id=${t}`;
+  expect((await request(path,'PUT',0,mutation(true,3))).status).toBe(404);
+  expect((await request(path,'PUT',0,mutation(false,3))).status).toBe(200);
+  await db`DELETE FROM flightdeck_pg_channels WHERE id=${t}`;
+  expect((await request(path,'PUT',0,mutation(false,4))).status).toBe(200);
+  const missing=crypto.randomUUID();await expect(mutatePersonalPin(w,a,'channel',missing,mutation(true),db)).rejects.toMatchObject({status:404});
+  await db`DELETE FROM flightdeck_pg_workspace_memberships WHERE workspace_id=${w} AND actor_id=${b}`;
+  expect((await request(path,'PUT',1,mutation(false))).status).toBe(403);
+  await db`INSERT INTO flightdeck_pg_workspace_memberships(workspace_id,actor_id,role) VALUES(${w},${b},'member')`;
+  await ensureRuntimeSchema();await ensureRuntimeSchema();
+  expect((await db`SELECT * FROM flightdeck_pg_thread_pins WHERE id=${pin.id}`)[0]).toMatchObject({pinned:false,row_version:5,scope_id:source!.scope_id});
+ });
+
 });
