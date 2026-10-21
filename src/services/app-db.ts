@@ -750,8 +750,60 @@ async function isGroupMember(
   return membership?.ok === 1;
 }
 
-async function assertWorkspaceMember(sql: DbClient, workspaceOwnerNpub: string, userNpub: string) {
-  if (!(await isWorkspaceMember(sql, workspaceOwnerNpub, userNpub))) {
+/**
+ * Which membership model gates access to a workspace app-row namespace.
+ *
+ * - `legacy_workspace_owner`: owner-npub-addressed routes; membership comes from
+ *   `v4_workspaces` / `v4_groups` / `v4_group_members`.
+ * - `flightdeck_pg_membership`: Flight Deck PG workspace-scoped routes; membership
+ *   comes from `flightdeck_pg_workspace_memberships` for the stable workspace UUID
+ *   and actor. The service re-verifies the membership row and that the PG
+ *   workspace maps to the addressed `workspace_owner_npub`.
+ *
+ * Only the namespace gate (and the private-row visibility check) changes with the
+ * authority. Row ownership, group visibility, and the audience of
+ * `workspace`-visible rows stay on the legacy model because rows are keyed by
+ * `workspace_owner_npub` and `group_id` references `v4_groups`.
+ */
+export type WorkspaceAppRowAccess =
+  | { authority: 'legacy_workspace_owner' }
+  | { authority: 'flightdeck_pg_membership'; flightdeckPgWorkspaceId: string; actorId: string };
+
+const LEGACY_WORKSPACE_APP_ROW_ACCESS: WorkspaceAppRowAccess = { authority: 'legacy_workspace_owner' };
+
+async function isFlightDeckPgWorkspaceMember(
+  sql: DbClient,
+  workspaceOwnerNpub: string,
+  userNpub: string,
+  flightdeckPgWorkspaceId: string,
+  actorId: string,
+): Promise<boolean> {
+  const [membership] = await sql<{ ok: number }[]>`
+    SELECT 1 AS ok
+    FROM flightdeck_pg_workspace_memberships m
+    JOIN flightdeck_pg_workspaces w
+      ON w.id = m.workspace_id
+    JOIN flightdeck_pg_actors a
+      ON a.id = m.actor_id
+    WHERE m.workspace_id = ${flightdeckPgWorkspaceId}
+      AND m.actor_id = ${actorId}
+      AND a.npub = ${userNpub}
+      AND w.workspace_owner_npub = ${workspaceOwnerNpub}
+    LIMIT 1
+  `;
+  return membership?.ok === 1;
+}
+
+async function assertWorkspaceMember(
+  sql: DbClient,
+  workspaceOwnerNpub: string,
+  userNpub: string,
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
+) {
+  const isMember = access.authority === 'flightdeck_pg_membership'
+    ? await isFlightDeckPgWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access.flightdeckPgWorkspaceId, access.actorId)
+    : await isWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  if (!isMember) {
     throw new AppDbError('workspace_forbidden', 403, 'not a current member of this workspace');
   }
 }
@@ -762,6 +814,7 @@ async function assertCanUseVisibility(
   userNpub: string,
   visibility: WorkspaceAppRowVisibility,
   groupId: string | null | undefined,
+  access: WorkspaceAppRowAccess,
 ) {
   if (visibility === 'group') {
     if (!groupId) throw new AppDbError('group_id_required', 400, 'group_id required for group visibility');
@@ -771,7 +824,14 @@ async function assertCanUseVisibility(
     return;
   }
 
-  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  if (visibility === 'workspace') {
+    // The audience of workspace-visible rows is the legacy owner-npub membership
+    // (see visibleRowCondition), so sharing to it requires that membership.
+    await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+    return;
+  }
+
+  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access);
 }
 
 async function canWriteRow(sql: DbClient, row: WorkspaceAppRow, userNpub: string): Promise<boolean> {
@@ -819,6 +879,7 @@ export async function createWorkspaceAppRow(
   collectionInput: string,
   input: CreateWorkspaceAppRowInput,
   userNpub: string,
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
 ): Promise<WorkspaceAppRowResponse> {
   const sql = getDb();
   const collection = normalizeCollection(collectionInput);
@@ -834,7 +895,7 @@ export async function createWorkspaceAppRow(
 
   const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
   assertAppRowVisibilityAllowed(app, visibility);
-  await assertCanUseVisibility(sql, workspaceOwnerNpub, userNpub, visibility, groupId);
+  await assertCanUseVisibility(sql, workspaceOwnerNpub, userNpub, visibility, groupId, access);
 
   try {
     const [row] = await sql<WorkspaceAppRow[]>`
@@ -888,6 +949,7 @@ export async function listWorkspaceAppRows(
     visibility?: WorkspaceAppRowVisibility;
     group_id?: string;
   } = {},
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
 ): Promise<WorkspaceAppRowResponse[]> {
   const sql = getDb();
   const collection = normalizeCollection(collectionInput);
@@ -898,7 +960,7 @@ export async function listWorkspaceAppRows(
   const groupId = String(options.group_id || '').trim();
 
   const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
-  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access);
 
   const rows = await sql<WorkspaceAppRow[]>`
     SELECT r.*
@@ -924,13 +986,14 @@ export async function getWorkspaceAppRow(
   collectionInput: string,
   rowIdInput: string,
   userNpub: string,
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
 ): Promise<WorkspaceAppRowResponse | null> {
   const sql = getDb();
   const collection = normalizeCollection(collectionInput);
   const rowId = normalizeRowId(rowIdInput);
 
   const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
-  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access);
 
   const [row] = await sql<WorkspaceAppRow[]>`
     SELECT r.*
@@ -953,13 +1016,14 @@ export async function updateWorkspaceAppRow(
   rowIdInput: string,
   input: UpdateWorkspaceAppRowInput,
   userNpub: string,
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
 ): Promise<WorkspaceAppRowResponse | null> {
   const sql = getDb();
   const collection = normalizeCollection(collectionInput);
   const rowId = normalizeRowId(rowIdInput);
 
   const app = await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
-  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access);
 
   const [current] = await sql<WorkspaceAppRow[]>`
     SELECT *
@@ -978,7 +1042,7 @@ export async function updateWorkspaceAppRow(
   const nextGroupId = nextVisibility === 'group'
     ? String(input.group_id === undefined ? current.group_id || '' : input.group_id || '').trim()
     : null;
-  await assertCanUseVisibility(sql, workspaceOwnerNpub, userNpub, nextVisibility, nextGroupId);
+  await assertCanUseVisibility(sql, workspaceOwnerNpub, userNpub, nextVisibility, nextGroupId, access);
 
   const nextData = input.data === undefined ? current.data : normalizeJsonValue(input.data);
   const nextMetadata = input.metadata === undefined ? current.metadata || {} : normalizeJsonObject(input.metadata, 'metadata');
@@ -1003,13 +1067,14 @@ export async function deleteWorkspaceAppRow(
   collectionInput: string,
   rowIdInput: string,
   userNpub: string,
+  access: WorkspaceAppRowAccess = LEGACY_WORKSPACE_APP_ROW_ACCESS,
 ): Promise<boolean> {
   const sql = getDb();
   const collection = normalizeCollection(collectionInput);
   const rowId = normalizeRowId(rowIdInput);
 
   await requireRegisteredApp(sql, workspaceOwnerNpub, appNpub);
-  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub);
+  await assertWorkspaceMember(sql, workspaceOwnerNpub, userNpub, access);
 
   const [current] = await sql<WorkspaceAppRow[]>`
     SELECT *

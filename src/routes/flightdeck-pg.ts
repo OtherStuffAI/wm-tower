@@ -40,6 +40,7 @@ import {
   getWorkspaceAppRow,
   listWorkspaceAppRows,
   updateWorkspaceAppRow,
+  type WorkspaceAppRowAccess,
 } from '../services/app-db';
 import {
   authorizeFlightDeckPgOperation,
@@ -1019,6 +1020,14 @@ async function requireFlightDeckPgContext(
       groupIds: context.groupIds,
     },
     identity,
+  };
+}
+
+function flightDeckPgAppRowAccess(context: FlightDeckPgRequiredRequestContext): WorkspaceAppRowAccess {
+  return {
+    authority: 'flightdeck_pg_membership',
+    flightdeckPgWorkspaceId: context.workspace.id,
+    actorId: context.actor.id,
   };
 }
 
@@ -2203,6 +2212,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/apps/:appNpub/db/:collection/ro
         visibility: c.req.query('visibility') as WorkspaceAppRowVisibility | undefined,
         group_id: c.req.query('group_id'),
       },
+      flightDeckPgAppRowAccess(context),
     );
     return c.json({
       identity,
@@ -2236,6 +2246,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/apps/:appNpub/db/:collection/r
       collection,
       body,
       auth.userNpub,
+      flightDeckPgAppRowAccess(context),
     );
     return c.json({
       identity,
@@ -2268,6 +2279,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/apps/:appNpub/db/:collection/ro
       collection,
       rowId,
       auth.userNpub,
+      flightDeckPgAppRowAccess(context),
     );
     if (!row) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
     return c.json({
@@ -2304,6 +2316,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/apps/:appNpub/db/:collection/
       rowId,
       body,
       auth.userNpub,
+      flightDeckPgAppRowAccess(context),
     );
     if (!row) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
     return c.json({
@@ -2337,6 +2350,7 @@ flightDeckPgRouter.delete('/workspaces/:workspaceId/apps/:appNpub/db/:collection
       collection,
       rowId,
       auth.userNpub,
+      flightDeckPgAppRowAccess(context),
     );
     if (!deleted) return jsonError(c, 404, 'row_not_found', 'row not found', identity);
     return c.json({
