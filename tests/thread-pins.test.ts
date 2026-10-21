@@ -89,6 +89,8 @@ describe.skipIf(!port || port===5432)('personal pin contract against isolated Po
   const cursors=await Promise.all([synchronized(),synchronized()]);
   await Promise.all(['thread','task','document'].map(type=>mutatePersonalPin(w,a,type,t,mutation(true,type==='thread'?4:0),db)));
   for(const cursor of cursors){const p=await readFlightDeckRecordPage({workspaceId:w,actorId:a,cursor},db);expect(p.changes.filter(r=>r.family==='personal_pin').map(r=>r.row?.resource_type).sort()).toEqual(['document','task','thread']);}
+  const routing=await db`SELECT resource_type,scope_id FROM flightdeck_pg_thread_pins WHERE workspace_id=${w} AND actor_id=${a} AND resource_id=${t}`;
+  expect(routing).toHaveLength(3);expect(routing.every(row=>row.scope_id===channel!.scope_id)).toBe(true);
   const route=(type:string)=>`/api/v4/flightdeck-pg/workspaces/${w}/me/pins/${type}/${t}`;
   for(const type of ['task','document']){
    expect((await request(route(type),'PUT',1,mutation(true))).status).toBe(403);

@@ -49,7 +49,7 @@ export async function mutatePersonalPin(workspaceId: string, actorId: string, re
     const participant=resourceType!=='thread'||member.kind==='human'||await isFlightDeckPgThreadParticipant({workspaceId,threadId:resourceId,actorId,actorNpub:member.npub},sql);
     if(!access.allowed||!participant){if(!b.import_only)throw new ThreadPinError(403,'thread_pin_target_forbidden');}
     else {
-     channelId=target.channel_id;rootId=resourceId;scopeId=target.scope_id;
+     channelId=target.channel_id;rootId=resourceId;scopeId=target.scope_id??null;
      if(resourceType==='thread') {
       const [thread]=await sql`SELECT parent_thread_id,source_message_id FROM flightdeck_pg_threads WHERE workspace_id=${workspaceId} AND id=${resourceId} FOR SHARE`;
       rootId=thread?.parent_thread_id?resourceId:thread?.source_message_id??resourceId;
