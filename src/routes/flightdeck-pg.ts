@@ -483,7 +483,7 @@ const agentActivityStates = new Set<FlightDeckPgAgentActivityState>(['accepted',
 const invocationRecipientTypes = new Set(['person', 'agent']);
 const invocationTargetTypes = new Set<FlightDeckPgInvocationTargetType>(['document', 'task', 'file']);
 const invocationStatuses = new Set<FlightDeckPgInvocationStatus>(['open', 'closed']);
-const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html']);
+const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html', 'excalidraw']);
 const canvasElementKinds = new Set<FlightDeckPgCanvasElementKind>(['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame']);
 
 function canvasVisibilityFromBody(value: unknown) {
@@ -1185,6 +1185,23 @@ function optionalObject(value: unknown) {
   if (value === undefined) return undefined;
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   return null;
+}
+
+const FILE_VERSION_SUMMARY_MAX_CHARS = 280;
+
+/** Optional File version summary: trimmed; blank means none; at most 280 characters (code points, as Postgres counts). */
+function fileVersionSummaryField(body: Record<string, unknown>, fields: { path: string; code: string; message: string }[]) {
+  if (body.summary === undefined || body.summary === null) return null;
+  if (typeof body.summary !== 'string') {
+    fields.push({ path: 'summary', code: 'invalid', message: 'summary must be a string when provided' });
+    return null;
+  }
+  const summary = body.summary.trim();
+  if ([...summary].length > FILE_VERSION_SUMMARY_MAX_CHARS) {
+    fields.push({ path: 'summary', code: 'too_long', message: `summary must be at most ${FILE_VERSION_SUMMARY_MAX_CHARS} characters` });
+    return null;
+  }
+  return summary || null;
 }
 
 const forbiddenConnectionKeys = /(^|_)(nsec|private_key|secret|token|credential|password|bearer|bunker_uri)($|_)/i;
@@ -7944,6 +7961,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
     fields.push({ path: 'description', code: 'invalid', message: 'description must be a string when provided' });
   }
   if (metadata === null) fields.push({ path: 'metadata', code: 'invalid', message: 'metadata must be an object when provided' });
+  const versionSummary = fileVersionSummaryField(body, fields);
   if (fields.length) return validationError(c, identity, fields);
 
   const access = await authorizeFlightDeckPgStorageAttach({
@@ -7977,6 +7995,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
         description,
         metadata: metadata ?? undefined,
         actorId: context.actor.id,
+        versionSummary,
       }, sql);
       const link = await createFlightDeckPgStorageLink({
         workspaceId: context.workspace.id,
@@ -8359,6 +8378,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/files/:fileId/versions', async
   if (body.client_mutation_id !== undefined && (typeof body.client_mutation_id !== 'string' || !body.client_mutation_id.trim())) {
     fields.push({ path: 'client_mutation_id', code: 'invalid', message: 'client_mutation_id must be a non-empty string when provided' });
   }
+  const summary = fileVersionSummaryField(body, fields);
   if (fields.length) return validationError(c, identity, fields);
 
   const access = await authorizeFlightDeckPgStorageAttach({
@@ -8379,6 +8399,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/files/:fileId/versions', async
         actorId: context.actor.id,
         baseVersionId,
         storageObjectId,
+        summary,
       }, sql);
       if (replacement.status !== 'replaced') return replacement;
 
@@ -9849,7 +9870,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/naplets', a
   const sourceVersionId = source.version_id === undefined || source.version_id === null ? null : String(source.version_id).trim();
   const displayTitle = body.title === undefined ? null : String(body.title || '').trim();
   const fields: { path: string; code: string; message: string }[] = [];
-  if (!canvasSourceTypes.has(sourceType)) fields.push({ path: 'source.type', code: 'invalid', message: 'source.type must be document, task_list, chat_thread, or html' });
+  if (!canvasSourceTypes.has(sourceType)) fields.push({ path: 'source.type', code: 'invalid', message: 'source.type must be document, task_list, chat_thread, html, or excalidraw' });
   if (!isUuid(sourceId)) fields.push({ path: 'source.id', code: 'invalid', message: 'source.id must be a canonical record or package UUID' });
   if (sourceVersionId !== null && (sourceType !== 'html' || !isUuid(sourceVersionId))) fields.push({ path: 'source.version_id', code: 'invalid', message: 'source.version_id must be null or a version UUID of the html File' });
   if (body.title !== undefined && !displayTitle) fields.push({ path: 'title', code: 'invalid', message: 'title must be non-empty when provided' });

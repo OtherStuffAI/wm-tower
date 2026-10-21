@@ -2044,6 +2044,23 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   `);
 
   await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_file_versions
+    ADD COLUMN IF NOT EXISTS summary TEXT
+  `);
+
+  await sql.unsafe(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'flightdeck_pg_file_versions_summary_check') THEN
+        ALTER TABLE flightdeck_pg_file_versions
+        ADD CONSTRAINT flightdeck_pg_file_versions_summary_check
+        CHECK (summary IS NULL OR char_length(summary) BETWEEN 1 AND 280);
+      END IF;
+    END
+    $$;
+  `);
+
+  await sql.unsafe(`
     INSERT INTO flightdeck_pg_file_versions (
       workspace_id,
       file_id,

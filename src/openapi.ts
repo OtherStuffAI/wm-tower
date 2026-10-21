@@ -3377,8 +3377,18 @@ export function buildOpenApiDocument(origin: string) {
           type: 'object', additionalProperties: false, required: ['id', 'access', 'layout', 'source', 'title', 'content', 'row_version'],
           properties: {
             id: { type: 'string', format: 'uuid' }, access: { type: 'string', const: 'ready' }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' },
-            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid', description: 'For html this is always the File id, including legacy naplets that stored a version id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: null follows the File current version; a version id pins it.' } } },
-            title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains immutable version bytes plus version/digest, file_id, version_id, version_number, current_version_id/number, follows_latest and a viewer-authorized asset list (FlightDeckPgHtmlArtifactAsset); never credentials or URLs.' }, row_version: { type: 'integer', minimum: 1 },
+            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html', 'excalidraw'] }, id: { type: 'string', format: 'uuid', description: 'For html and excalidraw this is always the File id, including legacy html naplets that stored a version id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: null follows the File current version; a version id pins it.' } } },
+            title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains immutable version bytes plus version/digest, file_id, version_id, version_number, current_version_id/number, follows_latest and a viewer-authorized asset list (FlightDeckPgHtmlArtifactAsset); never credentials or URLs. Excalidraw contains board metadata only (FlightDeckPgExcalidrawBoardContent), never scene bytes.' }, row_version: { type: 'integer', minimum: 1 },
+          },
+        },
+        FlightDeckPgExcalidrawBoardContent: {
+          type: 'object', additionalProperties: false,
+          required: ['file_id', 'current_version_id', 'current_version_number', 'content_type', 'size_bytes', 'sha256', 'updated_at', 'updated_by_actor_npub', 'can_write'],
+          description: 'Ready projection of an excalidraw naplet. The board is a File in a channel the viewer can read via file.read whose current version is application/vnd.excalidraw+json. Metadata only: read scene bytes with GET /files/{fileId}/versions/{versionId}/object and save with POST /files/{fileId}/versions using base_version_id. updated_at/updated_by_actor_npub describe the current version. can_write is a UX hint (file.write or channel.write); the version POST stays authoritative.',
+          properties: {
+            file_id: { type: 'string', format: 'uuid' }, current_version_id: { type: 'string', format: 'uuid' }, current_version_number: { type: 'integer', minimum: 1 },
+            content_type: { type: 'string', const: 'application/vnd.excalidraw+json' }, size_bytes: { type: 'integer', minimum: 0 }, sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+            updated_at: { type: 'string', format: 'date-time' }, updated_by_actor_npub: { type: ['string', 'null'] }, can_write: { type: 'boolean' },
           },
         },
         FlightDeckPgHtmlArtifactAsset: {
@@ -5445,7 +5455,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Add an authorized source reference to a managed Canvas',
           description: 'Stores presentation title/layout plus an opaque canonical source reference only. The source must exist and be readable by the caller at placement time; later revocation produces the denied snapshot shape.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html'] }, id: { type: 'string', format: 'uuid', description: 'html: File id (preferred) or a legacy File version id, which is stored as File id plus pin.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: omit/null to follow latest, or pin a version of the same File.' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html', 'excalidraw'] }, id: { type: 'string', format: 'uuid', description: 'html: File id (preferred) or a legacy File version id, which is stored as File id plus pin. excalidraw: board File id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: omit/null to follow latest, or pin a version of the same File. Must be omitted or null for excalidraw, which always follows latest.' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
           responses: { '201': { description: 'Naplet reference created' }, '400': { description: 'Source unavailable or invalid' }, '403': { description: 'Management denied' } },
         },
       },
@@ -6443,12 +6453,51 @@ export function buildOpenApiDocument(origin: string) {
         put: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Publish selected file version to Blossom', description: 'Requires file.write or channel.write and workspace-owned completed verified bytes. Idempotently creates this actor’s version/hash-pinned public reference. No upload, move or replication.', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'fileId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Publication status, versions and verified public URLs; changed indicates an actual reference mutation' }, '400': { description: 'Invalid UUID or missing version' }, '401': { description: 'Invalid NIP-98 authentication' }, '403': { description: 'Workspace membership and file/channel permission required' }, '404': { description: 'Missing, deleted or inaccessible file/version/storage object' }, '409': { description: 'Incomplete, unavailable bytes or publication hash changed' } } },
         delete: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Unpublish your selected version reference', description: 'Requires file.write or channel.write. Idempotently revokes only the calling actor’s reference. Independent publications and existing public objects stay public. External copies cannot be recalled.', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'fileId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Publication status, versions and verified public URLs; changed indicates an actual reference mutation' }, '400': { description: 'Invalid UUID or missing version' }, '401': { description: 'Invalid NIP-98 authentication' }, '403': { description: 'Workspace membership and file/channel permission required' }, '404': { description: 'Missing, deleted or inaccessible file/version/storage object' }, '409': { description: 'Incomplete, unavailable bytes or publication hash changed' } } },
       },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/files': {
+        post: {
+          tags: ['Flight Deck PG'],
+          security: [{ nip98: [] }],
+          summary: 'Create a Flight Deck PG channel File from a completed storage object',
+          description: 'Creates the File and its immutable version 1 (current_version_id). Requires file.write or channel.write on the channel. summary is stored on version 1 and returned by the versions list.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['storage_object_id'],
+                  properties: {
+                    storage_object_id: { type: 'string', format: 'uuid' },
+                    display_name: { type: 'string', minLength: 1 },
+                    description: { type: 'string' },
+                    folder_id: { type: ['string', 'null'], format: 'uuid' },
+                    metadata: { type: 'object' },
+                    summary: { type: ['string', 'null'], maxLength: 280, description: 'Optional author note for version 1; trimmed, blank means none.' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '201': { description: 'File created', content: { 'application/json': { schema: { type: 'object' } } } },
+            '400': { description: 'Invalid body, storage object or folder', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '401': { description: 'Invalid NIP-98 auth', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '403': { description: 'File or channel write permission required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '404': { description: 'Workspace or channel not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '409': { description: 'Storage object already attached', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/files/{fileId}/versions': {
         get: {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'List Flight Deck PG file versions',
-          description: 'Returns newest-first immutable version metadata for an active or tombstoned file. Each version includes its storage object reference, byte size, content type, SHA-256/ETag, creating actor, base version, and operation. Version 1 accepts a limit and returns next_cursor as null.',
+          description: 'Returns newest-first immutable version metadata for an active or tombstoned file. Each version includes its storage object reference, byte size, content type, SHA-256/ETag, creating actor, base version, operation, and optional summary. Version 1 accepts a limit and returns next_cursor as null.',
           'x-flightdeck-pg-contract-fixture': flightDeckPgContractFixturePaths['flightdeck_pg.files.versions.list'],
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6466,7 +6515,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Replace Flight Deck PG file content with optimistic base version',
-          description: 'Creates a new file version and advances the file current storage object only when base_version_id matches the current version. Stale clients receive 409 stale_base_version with current file/version metadata.',
+          description: 'Creates a new file version and advances the file current storage object only when base_version_id matches the current version (checked under a row lock). Stale clients receive 409 stale_base_version with current file/version metadata. Versions carry an optional summary.',
           'x-flightdeck-pg-contract-fixture': flightDeckPgContractFixturePaths['flightdeck_pg.files.versions.create'],
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6483,6 +6532,7 @@ export function buildOpenApiDocument(origin: string) {
                     base_version_id: { type: 'string', format: 'uuid' },
                     storage_object_id: { type: 'string', format: 'uuid' },
                     client_mutation_id: { type: 'string' },
+                    summary: { type: ['string', 'null'], maxLength: 280, description: 'Optional author note stored on the new version; trimmed, blank means none. Returned as version.summary.' },
                   },
                 },
               },

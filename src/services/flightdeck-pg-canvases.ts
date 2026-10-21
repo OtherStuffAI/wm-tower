@@ -19,6 +19,7 @@ import {
   resolveFlightDeckPgDoc,
   resolveFlightDeckPgThread,
 } from './flightdeck-pg-api';
+import { resolveFlightDeckPgExcalidrawBoard } from './flightdeck-pg-excalidraw-boards';
 import { resolveFlightDeckPgHtmlArtifact } from './flightdeck-pg-html-artifacts';
 import { getStorageObjectContent } from './storage';
 
@@ -738,6 +739,14 @@ export async function resolveFlightDeckPgCanvasSource(
         created_at: message.created_at.toISOString(),
       })) },
     };
+  }
+
+  if (input.sourceType === 'excalidraw') {
+    // Boards always follow the File's current version; pins are not supported.
+    if (input.sourceVersionId) return null;
+    const board = await resolveFlightDeckPgExcalidrawBoard({ workspaceId: input.workspaceId, appNpub: input.appNpub, actorNpub: input.actorNpub, sourceId: input.sourceId }, sql);
+    if (!board) return null;
+    return { title: board.title, content: board.content, source: { type: 'excalidraw', id: board.fileId } };
   }
 
   const artifact = await resolveFlightDeckPgHtmlArtifact({

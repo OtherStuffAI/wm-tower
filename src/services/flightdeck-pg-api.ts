@@ -1514,6 +1514,7 @@ export function serializeFlightDeckPgFileVersion(
     created_by_actor_id: version.created_by_actor_id,
     created_by_actor_npub: listedVersion.created_by_actor_npub ?? null,
     created_at: version.created_at,
+    summary: version.summary ?? null,
   };
 }
 
@@ -4895,6 +4896,7 @@ export async function createFlightDeckPgFile(
     description?: string | null;
     metadata?: Record<string, unknown>;
     actorId: string;
+    versionSummary?: string | null;
   },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgFileRow> {
@@ -4933,7 +4935,8 @@ export async function createFlightDeckPgFile(
       storage_object_id,
       base_version_id,
       operation,
-      created_by_actor_id
+      created_by_actor_id,
+      summary
     )
     VALUES (
       ${input.workspaceId},
@@ -4942,7 +4945,8 @@ export async function createFlightDeckPgFile(
       ${input.storageObjectId},
       NULL,
       'created',
-      ${input.actorId}
+      ${input.actorId},
+      ${input.versionSummary ?? null}
     )
     RETURNING *
   `;
@@ -4982,6 +4986,7 @@ export async function replaceFlightDeckPgFileContent(
     actorId: string;
     baseVersionId: string;
     storageObjectId: string;
+    summary?: string | null;
   },
   sql: DbClient = getDb(),
 ): Promise<ReplaceFlightDeckPgFileContentResult> {
@@ -5011,7 +5016,8 @@ export async function replaceFlightDeckPgFileContent(
       storage_object_id,
       base_version_id,
       operation,
-      created_by_actor_id
+      created_by_actor_id,
+      summary
     )
     VALUES (
       ${input.workspaceId},
@@ -5025,7 +5031,8 @@ export async function replaceFlightDeckPgFileContent(
       ${input.storageObjectId},
       ${input.baseVersionId},
       'replaced',
-      ${input.actorId}
+      ${input.actorId},
+      ${input.summary ?? null}
     )
     RETURNING *
   `;

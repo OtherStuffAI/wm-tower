@@ -692,7 +692,7 @@ export type FlightDeckPgAudioNoteTargetType = FlightDeckPgReactionTargetType;
 export type FlightDeckPgDailyNoteStatus = 'active' | 'archived';
 export type FlightDeckPgPersonalWappStatus = 'active' | 'archived';
 export type FlightDeckPgCanvasVisibilityMode = 'workspace' | 'restricted';
-export type FlightDeckPgCanvasSourceType = 'document' | 'task_list' | 'chat_thread' | 'html';
+export type FlightDeckPgCanvasSourceType = 'document' | 'task_list' | 'chat_thread' | 'html' | 'excalidraw';
 export type FlightDeckPgCanvasElementKind = 'text' | 'rectangle' | 'diamond' | 'ellipse' | 'arrow' | 'line' | 'draw' | 'frame';
 export type FlightDeckPgCanvasCommentAnchorType = 'canvas' | 'naplet';
 export type FlightDeckPgResponseActivityTargetType = 'chat_thread' | 'task_comment' | 'doc_comment';
@@ -1259,6 +1259,8 @@ export interface FlightDeckPgFileVersion {
   operation: 'created' | 'replaced' | 'deleted' | 'restored';
   created_by_actor_id: string;
   created_at: Date;
+  /** Optional author note for this version (trimmed, at most 280 characters). */
+  summary?: string | null;
 }
 
 export interface FlightDeckPgFileFolder {

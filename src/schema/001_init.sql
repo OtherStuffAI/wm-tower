@@ -1118,6 +1118,18 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_file_versions (
 CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_file_versions_file
   ON flightdeck_pg_file_versions(workspace_id, file_id, version_number DESC);
 
+-- Optional author note recorded with a saved version (e.g. Excalidraw boards).
+ALTER TABLE flightdeck_pg_file_versions ADD COLUMN IF NOT EXISTS summary TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'flightdeck_pg_file_versions_summary_check') THEN
+    ALTER TABLE flightdeck_pg_file_versions
+      ADD CONSTRAINT flightdeck_pg_file_versions_summary_check
+      CHECK (summary IS NULL OR char_length(summary) BETWEEN 1 AND 280);
+  END IF;
+END
+$$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -3368,7 +3380,7 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
     FOREIGN KEY (workspace_id, updated_by_actor_id)
     REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
     ON DELETE RESTRICT,
-  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html')),
+  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw')),
   CHECK (display_title IS NULL OR length(trim(display_title)) > 0),
   CHECK (row_version >= 1),
   UNIQUE (workspace_id, canvas_id, id)
@@ -3380,6 +3392,15 @@ CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_naplets_canvas
 -- HTML naplets name a File; NULL source_version_id follows its current version.
 -- Older HTML naplets store a version id in source_id and remain pinned.
 ALTER TABLE flightdeck_pg_canvas_naplets ADD COLUMN IF NOT EXISTS source_version_id UUID;
+-- Excalidraw naplets name a board File and always follow its current version.
+ALTER TABLE flightdeck_pg_canvas_naplets DROP CONSTRAINT IF EXISTS flightdeck_pg_canvas_naplets_source_type_check;
+ALTER TABLE flightdeck_pg_canvas_naplets
+  ADD CONSTRAINT flightdeck_pg_canvas_naplets_source_type_check
+  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw'));
+ALTER TABLE flightdeck_pg_canvas_naplets DROP CONSTRAINT IF EXISTS flightdeck_pg_canvas_naplets_version_pin_check;
+ALTER TABLE flightdeck_pg_canvas_naplets
+  ADD CONSTRAINT flightdeck_pg_canvas_naplets_version_pin_check
+  CHECK (source_version_id IS NULL OR source_type = 'html');
 
 CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_elements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
