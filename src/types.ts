@@ -969,7 +969,7 @@ export interface FlightDeckPgCanvasComment {
   canvas_id: string;
   anchor_type: FlightDeckPgCanvasCommentAnchorType;
   anchor_naplet_id: string | null;
-  anchor: { x: number; y: number };
+  anchor: { x: number; y: number; positioned?: boolean };
   parent_comment_id: string | null;
   body: string;
   resolved_at: Date | null;

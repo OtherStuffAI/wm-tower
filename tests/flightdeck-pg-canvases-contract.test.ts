@@ -145,11 +145,12 @@ describe('Flight Deck PG Canvas source contract', () => {
       ['get', '/workspaces/:workspaceId/canvases/:canvasId/comments'],
       ['post', '/workspaces/:workspaceId/canvases/:canvasId/comments'],
       ['patch', '/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId'],
+      ['delete', '/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId'],
     ];
     for (const [method, path] of expected) {
       expect(routes).toContain(`flightDeckPgRouter.${method}('${path}'`);
     }
-    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(15);
+    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(16);
   });
 
   test('bootstraps and runtime-migrates dedicated Canvas authority tables', () => {
