@@ -12,7 +12,7 @@ import type {
   FlightDeckPgCanvasVisibilityMode,
   FlightDeckPgWorkspaceRole,
 } from '../types';
-import { authorizeFlightDeckPgOperation } from './flightdeck-pg-authorization';
+import { authorizeFlightDeckPgOperation, resolveFlightDeckPgActorByNpub, resolveFlightDeckPgWorkspace, getFlightDeckPgWorkspaceMembership, getEffectiveFlightDeckPgGroupIds } from './flightdeck-pg-authorization';
 import {
   listFlightDeckPgChannelMessages,
   listFlightDeckPgChannelTasks,
@@ -700,6 +700,19 @@ export async function resolveFlightDeckPgCanvasSource(
   },
   sql: DbClient = getDb(),
 ): Promise<CanvasResolvedSource | null> {
+  if (input.sourceType === 'canvas') {
+    if (input.sourceVersionId || input.requestedVersionId) return null;
+    const actor = await resolveFlightDeckPgActorByNpub(input.actorNpub, sql);
+    const workspace = await resolveFlightDeckPgWorkspace(input.workspaceId, sql);
+    if (!actor || !workspace || workspace.app_npub !== input.appNpub) return null;
+    const membership = await getFlightDeckPgWorkspaceMembership(workspace.id, actor.id, sql);
+    if (!membership) return null;
+    const groupIds = await getEffectiveFlightDeckPgGroupIds(workspace.id, actor.id, sql);
+    const management = await authorizeFlightDeckPgOperation({ actorNpub: input.actorNpub, appNpub: input.appNpub, workspaceId: workspace.id, permission: 'workspace.manage', resource: { type: 'workspace' } }, sql);
+    // Resolve definition visibility only. Never traverse the destination's naplets.
+    const destination = await resolveVisibleFlightDeckPgCanvas({ workspaceId: workspace.id, actorId: actor.id, groupIds, workspaceRole: membership.role, canManageWorkspace: management.allowed, canvasId: input.sourceId }, sql);
+    return destination ? { title: destination.title, content: { title: destination.title } } : null;
+  }
   if (input.sourceType === 'document') {
     const doc = await resolveFlightDeckPgDoc(input.workspaceId, input.sourceId, sql);
     if (!doc || doc.archived_at) return null;
@@ -771,6 +784,7 @@ export async function serializeAuthorizedFlightDeckPgCanvasNaplet(
   sourceResolver: typeof resolveFlightDeckPgCanvasSource = resolveFlightDeckPgCanvasSource,
 ): Promise<CanvasReadyNaplet | CanvasDeniedNaplet> {
   try {
+    if (input.naplet.source_type === 'canvas' && input.naplet.source_id === input.naplet.canvas_id) return deniedFlightDeckPgCanvasNaplet(input.naplet);
     const source = await sourceResolver({
       workspaceId: input.workspaceId,
       appNpub: input.appNpub,

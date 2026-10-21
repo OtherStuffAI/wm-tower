@@ -484,7 +484,7 @@ const agentActivityStates = new Set<FlightDeckPgAgentActivityState>(['accepted',
 const invocationRecipientTypes = new Set(['person', 'agent']);
 const invocationTargetTypes = new Set<FlightDeckPgInvocationTargetType>(['document', 'task', 'file']);
 const invocationStatuses = new Set<FlightDeckPgInvocationStatus>(['open', 'closed']);
-const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html', 'excalidraw']);
+const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas']);
 const canvasElementKinds = new Set<FlightDeckPgCanvasElementKind>(['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame']);
 
 function canvasVisibilityFromBody(value: unknown) {
@@ -9887,7 +9887,8 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/canvases/:canvasId/naplets', a
   const sourceVersionId = source.version_id === undefined || source.version_id === null ? null : String(source.version_id).trim();
   const displayTitle = body.title === undefined ? null : String(body.title || '').trim();
   const fields: { path: string; code: string; message: string }[] = [];
-  if (!canvasSourceTypes.has(sourceType)) fields.push({ path: 'source.type', code: 'invalid', message: 'source.type must be document, task_list, chat_thread, html, or excalidraw' });
+  if (!canvasSourceTypes.has(sourceType)) fields.push({ path: 'source.type', code: 'invalid', message: 'source.type must be document, task_list, chat_thread, html, excalidraw, or canvas' });
+  if (sourceType === 'canvas' && sourceId.toLowerCase() === canvasId.toLowerCase()) fields.push({ path: 'source.id', code: 'invalid', message: 'Choose another accessible canvas' });
   if (!isUuid(sourceId)) fields.push({ path: 'source.id', code: 'invalid', message: 'source.id must be a canonical record or package UUID' });
   if (sourceVersionId !== null && (sourceType !== 'html' || !isUuid(sourceVersionId))) fields.push({ path: 'source.version_id', code: 'invalid', message: 'source.version_id must be null or a version UUID of the html File' });
   if (body.title !== undefined && !displayTitle) fields.push({ path: 'title', code: 'invalid', message: 'title must be non-empty when provided' });

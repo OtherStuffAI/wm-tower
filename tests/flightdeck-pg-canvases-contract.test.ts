@@ -79,7 +79,7 @@ describe('Flight Deck PG Canvas source contract', () => {
   });
 
   test('projects every source type when authorized and redacts access revoked after placement', async () => {
-    const types = ['document', 'task_list', 'chat_thread', 'html', 'excalidraw'] as const;
+    const types = ['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas'] as const;
     for (const [index, sourceType] of types.entries()) {
       const naplet = {
         id: uuid(String(30 + index)), workspace_id: uuid('11'), canvas_id: uuid('10'), source_type: sourceType,
@@ -123,7 +123,7 @@ describe('Flight Deck PG Canvas source contract', () => {
     expect(spec.paths[`${root}/{canvasId}/comments`].get.description).toMatch(/agent/i);
     expect(spec.paths[`${root}/{canvasId}/comments`].post).toBeDefined();
     expect(spec.paths[`${root}/{canvasId}/comments/{commentId}`].patch.responses['409']).toBeDefined();
-    expect(spec.components.schemas.FlightDeckPgCanvasNapletReady.properties.source.properties.type.enum).toEqual(['document', 'task_list', 'chat_thread', 'html', 'excalidraw']);
+    expect(spec.components.schemas.FlightDeckPgCanvasNapletReady.properties.source.properties.type.enum).toEqual(['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas']);
     expect(spec.components.schemas.FlightDeckPgCanvasNapletDenied.additionalProperties).toBe(false);
     expect(spec.components.schemas.FlightDeckPgCanvasElement.properties.kind.enum).toContain('text');
   });
@@ -161,7 +161,7 @@ describe('Flight Deck PG Canvas source contract', () => {
     for (const table of ['flightdeck_pg_canvases', 'flightdeck_pg_canvas_visibility_principals', 'flightdeck_pg_canvas_orders', 'flightdeck_pg_canvas_naplets', 'flightdeck_pg_canvas_elements', 'flightdeck_pg_canvas_comments']) {
       expect(bootstrap).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
     }
-    expect(bootstrap).toContain("CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw'))");
+    expect(bootstrap).toContain("CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas'))");
     expect(bootstrap).toContain("CHECK (source_version_id IS NULL OR source_type = 'html')");
     expect(bootstrap).toContain('REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)');
     expect(bootstrap).toContain('REFERENCES flightdeck_pg_groups(workspace_id, id)');

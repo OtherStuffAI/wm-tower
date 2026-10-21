@@ -106,3 +106,21 @@ Schema exists in bootstrap SQL and the additive runtime schema path. Source and
 contract tests do not activate a running Tower. After an authorized rebuild and
 restart, validation must include signed two-actor tests for visible, restricted,
 revoked and missing sources plus immutable HTML retrieval.
+
+## Canvas Link source
+
+`source.type = "canvas"` names another visible canvas UUID in this same workspace.
+Creation rejects self-links and version pins. The existing optional `title` is a
+display label; the source projection is exactly `{ title: <destination title> }`.
+The resolver uses the same membership, app namespace, workspace management,
+creator, actor and effective-group visibility checks as direct canvas reads.
+Missing, deleted and denied destinations collapse to the existing four-field
+redacted naplet envelope, including the label. No source canvas visibility grants
+access to a target. Destination snapshots/naplets are never loaded or traversed;
+cycles are ordinary references. There is no screenshot/preview storage contract.
+
+Bootstrap and `ensureRuntimeSchema` replay the Canvas SQL block, widening the
+named source-type CHECK to admit `canvas`; the HTML-only version-pin constraint
+is retained. Existing source payloads and generic record-family schemas are
+unchanged. Activate Tower before the matching Ambulando picker and perform a
+signed allowed/denied/revoked/deleted smoke pass after restart.
