@@ -3328,3 +3328,12 @@ export interface FlightDeckPgPersonalPin {
 }
 
 export type FlightDeckPgThreadPin = FlightDeckPgPersonalPin;
+
+/** Private actor/workspace scalar setting. Meaning and URL policy belong to the client. */
+export interface FlightDeckPgPrivatePreference {
+ id: string; workspace_id: string; actor_id: string; preference_key: string;
+ value: string; row_version: number; updated_at: string;
+}
+export interface FlightDeckPgPrivatePreferenceWrite {
+ value: string; expected_row_version: number; mutation_id: string; import_only?: boolean;
+}

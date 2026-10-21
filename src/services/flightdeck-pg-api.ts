@@ -6982,7 +6982,7 @@ export async function listVisibleFlightDeckPgEvents(
           AND ((g.principal_type='actor' AND g.principal_actor_id=${input.actorId}) OR (g.principal_type='group' AND g.principal_group_id IN ${sql(groupIds)}))
           AND ((g.resource_type='scope' AND g.resource_scope_id=e.scope_id AND g.permission IN ('scope.read','scope.manage','context.edit')) OR (g.resource_type='channel' AND g.permission='channel.read' AND EXISTS (SELECT 1 FROM flightdeck_pg_channels c WHERE c.workspace_id=g.workspace_id AND c.id=g.resource_channel_id AND c.scope_id=e.scope_id))))
         ) OR (
-          e.entity_type IN ('scope_order','thread_pin','personal_pin') AND e.actor_id = ${input.actorId}
+          e.entity_type IN ('scope_order','thread_pin','personal_pin','private_preference') AND e.actor_id = ${input.actorId}
         )
         OR (
           e.entity_type IN ('feed_subscription', 'feed_item_state')
@@ -7165,7 +7165,7 @@ export async function listVisibleFlightDeckPgEvents(
         )
         OR (
           e.channel_id IS NULL
-          AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','org_data','feed_subscription','feed_item_state','context_component','context_reference')
+          AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','private_preference','org_data','feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
           AND e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment', 'canvas_order')
         )
@@ -7272,7 +7272,7 @@ export async function listVisibleFlightDeckPgEventsForAudience(
     }, sql);
     for (const event of events) {
       // Managed audiences never delegate personal navigation or feed preferences.
-      if (['scope_order', 'thread_pin', 'personal_pin', 'feed_subscription', 'feed_item_state'].includes(event.entity_type)) continue;
+      if (['scope_order', 'thread_pin', 'personal_pin', 'private_preference', 'feed_subscription', 'feed_item_state'].includes(event.entity_type)) continue;
       const existing = visibleByEvent.get(event.id) ?? { event, npubs: new Set<string>() };
       existing.npubs.add(member.npub);
       visibleByEvent.set(event.id, existing);

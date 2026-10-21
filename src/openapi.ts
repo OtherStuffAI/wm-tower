@@ -2473,6 +2473,14 @@ export function buildOpenApiDocument(origin: string) {
 
       },
       schemas: {
+        FlightDeckPgPrivatePreference: {
+          type:'object', required:['id','workspace_id','actor_id','preference_key','value','row_version','updated_at'],
+          properties:{id:{type:'string',format:'uuid'},workspace_id:{type:'string',format:'uuid'},actor_id:{type:'string',format:'uuid'},preference_key:{type:'string',pattern:'^[a-z][a-z0-9_.-]{0,95}$'},value:{type:'string',maxLength:2048,description:'At most 2048 UTF-8 bytes; no ASCII control characters'},row_version:{type:'integer',minimum:1},updated_at:{type:'string',format:'date-time'}},
+        },
+        FlightDeckPgPrivatePreferenceResponse: {
+          type:'object',required:['identity','preference'],properties:{identity:{type:'object'},preference:{anyOf:[{$ref:'#/components/schemas/FlightDeckPgPrivatePreference'},{type:'null'}]}},
+        },
+
         ...hostingSchemas,
         ...feedReaderSchemas,
         ...contextTreeSchemas,
@@ -4362,6 +4370,11 @@ export function buildOpenApiDocument(origin: string) {
           parameters: ['workspaceId','resourceType','resourceId'].map(name => ({name,in:'path',required:true,schema:name==='resourceType'?{type:'string',enum:['thread','task','document']}:{type:'string',format:'uuid'}})),
           requestBody: {required:true,content:{'application/json':{schema:{type:'object',additionalProperties:false,required:['pinned','expected_row_version','mutation_id'],properties:{pinned:{type:'boolean'},expected_row_version:{type:'integer',minimum:0,maximum:2147483646},mutation_id:{type:'string',format:'uuid'},import_only:{type:'boolean'},pinned_at:{type:'string',format:'date-time'}}}}}},
           responses: {'200':{description:'Canonical pin row (including tombstone), or original acknowledgement on exact retry'},'400':{description:'Invalid body or actor override'},'403':{description:'Membership or thread read/participation required'},'404':{description:'Explicit pin target unavailable'},'409':{description:'thread_pin_conflict or mutation_id_reused; do not silently rebase'}} },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me/preferences/{preferenceKey}': {
+        parameters: [{ name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'} },{name:'preferenceKey',in:'path',required:true,schema:{type:'string',pattern:'^[a-z][a-z0-9_.-]{0,95}$'}}],
+        get: { tags:['Flight Deck PG'],summary:'Read one private current-actor scalar preference (null when absent)',responses:{'200':{description:'Private preference, identity and row version; Cache-Control private, no-store',content:{'application/json':{schema:{$ref:'#/components/schemas/FlightDeckPgPrivatePreferenceResponse'}}}},'403':{description:'Membership required'}} },
+        put: { tags:['Flight Deck PG'],summary:'Write one private current-actor preference with CAS and idempotency',requestBody:{required:true,content:{'application/json':{schema:{type:'object',additionalProperties:false,required:['value','expected_row_version','mutation_id'],properties:{value:{type:'string',maxLength:2048},expected_row_version:{type:'integer',minimum:0},mutation_id:{type:'string',format:'uuid'},import_only:{type:'boolean',description:'Insert only if absent; never overwrite an authoritative reset'}}}}}},responses:{'200':{description:'Acknowledged private preference',content:{'application/json':{schema:{$ref:'#/components/schemas/FlightDeckPgPrivatePreferenceResponse'}}}},'400':{description:'Invalid scalar preference'},'403':{description:'Membership required'},'409':{description:'preference_conflict or mutation_id_reused'}} },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/me/scope-order': {
         get: { tags: ['Flight Deck PG'], summary: 'Read the authenticated actor’s personal scope order', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Actor/workspace scope_order, empty at revision 0 before first save' }, '403': { description: 'Workspace membership required' } } },

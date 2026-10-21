@@ -1,3 +1,4 @@
+import { readPrivatePreference, writePrivatePreference, PrivatePreferenceError } from '../services/private-preferences';
 import { mutateThreadPin, mutatePersonalPin, ThreadPinError } from '../services/thread-pins';
 import { traceFlightDeckRecordPage } from '../services/flightdeck-record-trace';
 import { readLargeRecordChunk, readPriorityLargeRecordChunk } from '../services/flightdeck-record-large';
@@ -1917,6 +1918,25 @@ flightDeckPgRouter.put('/workspaces/:workspaceId/me/pins/:resourceType/:resource
     throw error;
   }
 });
+
+for (const method of ['get','put'] as const) {
+ flightDeckPgRouter[method]('/workspaces/:workspaceId/me/preferences/:preferenceKey', async c => {
+  c.header('Cache-Control','private, no-store');
+  const auth=await requireNip98AuthResolved(c); if(auth instanceof Response)return auth;
+  const result=await requireFlightDeckPgContext(c,auth.userNpub); if('response' in result)return result.response;
+  try {
+   let body;
+   if(method==='put') { const raw=await c.req.text(); if(Buffer.byteLength(raw)>8192)throw new PrivatePreferenceError(400,'invalid_preference'); body=JSON.parse(raw); }
+   const args=[result.context.workspace.id,result.context.actor.id,c.req.param('preferenceKey')] as const;
+   const preference=method==='get'?await readPrivatePreference(...args):await writePrivatePreference(...args,body);
+   return c.json({identity:result.identity,preference});
+  } catch(error) {
+   if(error instanceof PrivatePreferenceError)return jsonError(c,error.status,error.code,error.code,result.identity);
+   if(error instanceof SyntaxError)return jsonError(c,400,'invalid_preference','Invalid JSON',result.identity);
+   throw error;
+  }
+ });
+}
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/me/scope-order', async (c) => {
   const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;

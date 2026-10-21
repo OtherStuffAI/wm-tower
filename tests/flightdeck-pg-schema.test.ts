@@ -288,6 +288,8 @@ describe('Flight Deck PG schema foundation', () => {
       'flightdeck_pg_permission_grants',
       'flightdeck_pg_personal_agent_settings',
       'flightdeck_pg_personal_wapps',
+      'flightdeck_pg_private_preference_mutations',
+      'flightdeck_pg_private_preferences',
       'flightdeck_pg_push_subscriptions',
       'flightdeck_pg_reactions',
       'flightdeck_pg_record_clients',
