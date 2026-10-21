@@ -119,8 +119,11 @@ services:
     tmpfs:
       - /tmp:size=256m,mode=1777
       # Deno may materialize architecture-specific native npm bindings here on
-      # first boot; keep the image filesystem read-only and the cache ephemeral.
-      - /deno-dir:size=256m,mode=1777
+      # first boot; 256 MiB is insufficient for the pinned image's dependencies.
+      # Bound the ephemeral cache to 1 GiB within the 2 GiB container limit,
+      # leaving room for /tmp and the server. Native modules require exec on
+      # this mount; keep the image filesystem read-only.
+      - /deno-dir:size=1g,mode=1777,exec
     security_opt:
       - no-new-privileges:true
     cap_drop: ["ALL"]

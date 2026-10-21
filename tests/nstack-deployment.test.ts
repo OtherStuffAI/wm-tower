@@ -91,6 +91,6 @@ describe('supported Nstack deployment contract', () => {
     expect(blossom).not.toContain('requirePubkeyInRule: false');
     expect(compose).toContain('BLOSSOM_REQUIRE_CONFIG: "1"');
     expect(compose).toContain('cap_drop: ["ALL"]');
-    expect(compose).toContain('/deno-dir:size=256m,mode=1777');
+    expect(compose).toContain('/deno-dir:size=1g,mode=1777,exec');
   });
 });
