@@ -147,3 +147,9 @@ Docker builds from source directly.
 - Use `feat` for new features and `fix` for bug fixes. Other suitable types include `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`, `style`, and `revert`.
 - Mark breaking changes with `!` before `:` and/or a `BREAKING CHANGE: <description>` footer.
 - Keep unrelated changes in separate commits whenever practical.
+
+## Active session queue handling
+
+When running in an Autopilot session, inspect your own pending prompt queue at meaningful milestones during active work, when new work is reported, and before final handoff, using `bun /Users/mini/code/wm/autopilot/clis/wingman.ts session queue list`. Read each complete item and any referenced authoritative thread/task. Incorporate applicable steering; immediately consume only the exact item and revision actually incorporated using `bun /Users/mini/code/wm/autopilot/clis/wingman.ts session queue consume <id> --revision <read-revision> --reason <incorporation-reason>`. Consumption removes pending work while preserving history; merely listing or reading is not consumption. Keep unfinished/unrelated work and concurrent newer arrivals pending. Never clear the queue blindly or consume solely to suppress a follow-up turn. Recheck before handoff.
+
+Supervised worker callbacks are separate: inspect `bun /Users/mini/code/wm/autopilot/clis/wingman.ts dispatch inbox`, review actual evidence and report/take necessary follow-up, then acknowledge and close only reviewed callbacks. Do not apply these commands to another session or imply monitoring after the process stops. Follow `/Users/mini/.codex/skills/wingman-sessions/SKILL.md` for revision conflicts and uncertain delivery, with Pete's explicit consume-on-incorporation policy taking precedence over older completion-only acknowledgement guidance.
