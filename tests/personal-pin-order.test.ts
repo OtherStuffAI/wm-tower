@@ -45,11 +45,20 @@ describe.skipIf(!port || port===5432)('personal pin ordering against isolated Po
   const two=await mutateThreadPin(w,a,t2,mutation(true,0,{import_only:true,pinned_at:'2026-10-02T00:00:00Z'}),db);
   const dead=await mutateThreadPin(w,a,crypto.randomUUID(),mutation(false),db);
   await db`ALTER TABLE flightdeck_pg_thread_pins DROP COLUMN order_position`;
+  // Real pre-upgrade canonical bodies omit the field. Capture those bodies with
+  // the old table shape, then retain the already-synced browser cursor.
+  await db`UPDATE flightdeck_pg_thread_pins SET pinned=pinned WHERE workspace_id=${w}`;
+  const oldSnapshot=await readFlightDeckRecordPage({workspaceId:w,actorId:a},db);
+  expect(oldSnapshot.changes.filter(r=>r.family==='personal_pin').every(r=>!Object.hasOwn(r.row!,'order_position'))).toBe(true);
+  const oldCursor=await synchronized();
   const before=[...(await db`SELECT * FROM flightdeck_pg_thread_pins WHERE workspace_id=${w} ORDER BY id`)];
   const receipts=[...(await db`SELECT * FROM flightdeck_pg_thread_pin_mutations WHERE workspace_id=${w} ORDER BY mutation_id`)];
   const clock=[...(await db`SELECT * FROM flightdeck_pg_record_clock WHERE workspace_id=${w}`)];
   const migration=readFileSync(new URL('../src/schema/personal-pin-order-v1.sql',import.meta.url),'utf8');
   await db.unsafe(migration);await db.unsafe(migration);
+  const quiet=await request(`/api/v4/flightdeck-pg/workspaces/${w}/record-sync?protocol_version=1&cursor=${oldCursor}`);
+  expect(quiet.status).toBe(200);expect(quiet.body.mode).toBe('delta');expect(quiet.body.changes).toEqual([]);
+  expect(quiet.body.personal_pin_order_version).toBe(1);
   expect((await current()).map(r=>r.resource_id)).toEqual([t2,t]);
   const after=await db`SELECT * FROM flightdeck_pg_thread_pins WHERE workspace_id=${w} ORDER BY id`;
   expect(after.map(({order_position,...r})=>r)).toEqual(before);expect(after.every(r=>r.order_position===null)).toBe(true);
