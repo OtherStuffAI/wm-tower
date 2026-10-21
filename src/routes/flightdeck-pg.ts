@@ -1,3 +1,4 @@
+import { movePersonalPin } from '../services/personal-pin-order';
 import { readPrivatePreference, writePrivatePreference, PrivatePreferenceError } from '../services/private-preferences';
 import { canvasSpatialContext } from '../services/canvas-spatial-context';
 import { mutateThreadPin, mutatePersonalPin, ThreadPinError } from '../services/thread-pins';
@@ -1908,6 +1909,22 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/me', async (c) => {
       channels: channels.map(serializeFlightDeckPgChannel),
     },
   });
+});
+
+flightDeckPgRouter.post('/workspaces/:workspaceId/me/pin-order', async (c) => {
+  c.header('Cache-Control','private, no-store');
+  const auth = await requireNip98AuthResolved(c); if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub); if ('response' in result) return result.response;
+  try {
+    const raw = await c.req.text();
+    if (Buffer.byteLength(raw)>4096) throw new ThreadPinError(400,'invalid_pin_order');
+    const pins = await movePersonalPin(result.context.workspace.id,result.context.actor.id,JSON.parse(raw));
+    return c.json({identity:result.identity,pins});
+  } catch (error) {
+    if (error instanceof ThreadPinError) return jsonError(c,error.status,error.code,error.code,result.identity);
+    if (error instanceof SyntaxError) return jsonError(c,400,'invalid_pin_order','Invalid JSON',result.identity);
+    throw error;
+  }
 });
 
 flightDeckPgRouter.put('/workspaces/:workspaceId/me/thread-pins/:threadId', async (c) => {

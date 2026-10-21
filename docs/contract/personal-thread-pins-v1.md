@@ -104,3 +104,57 @@ and actor-only SSE. Ambulando must extend its existing outbox/projection and
 TowerSyncService rather than add direct component networking or a new poller.
 Source delivery requires a later approved Tower rebuild/restart and authenticated
 smoke checks before the frontend can rely on the new type in the running API.
+
+## Personal ordering v1
+
+`POST .../workspaces/:workspaceId/me/pin-order` accepts a strict immutable body:
+
+```json
+{"resource_type":"channel","resource_id":"UUID","expected_row_version":3,"before":{"resource_type":"thread","resource_id":"UUID","expected_row_version":2},"mutation_id":"UUID"}
+```
+
+`before: null` means move to end. Target and anchor must be currently pinned
+rows belonging to the authenticated workspace actor. Both versions are positive
+CAS integers. A self-anchor or extra fields returns `400 invalid_pin_order`.
+Absent/unpinned targets or anchors and stale versions return `409 pin_order_conflict`.
+Moving an unavailable resource selection needs membership, without reading its
+resource body or granting target access. The workspace fixes the app identity; caller app hints cannot switch the
+authoritative workspace app or actor partition.
+
+The response is `{identity, pins}` with all current active canonical pin rows in
+result order. Each row has optional nullable `order_position`. Missing and null
+positions sort first, by `pinned_at DESC` then ASCII `resource_type:resource_id`
+ascending; positioned rows follow, by position ascending and the same typed key.
+This retains legacy timestamp ordering. New selections and explicit repins use
+null, appearing at the top; an already-pinned `pinned:true` retains its position.
+
+A move normalizes all current active pins to contiguous integers, changing only
+positions that differ. Changed rows advance their existing row version and
+updated timestamp. The existing capture trigger delivers the complete changes
+as actor-private `personal_pin` record deltas; one actor-only SSE hint wakes sync.
+The transaction shares the workspace record clock with pin/unpin and lifecycle
+writes. Selection booleans, timestamps, routing, resource activity, read state,
+leases and tombstones remain unchanged. Concurrent additions are included and
+never lost. A concurrent move or unpin may invalidate versions: clients recover
+and offer a new user action, without silently rebasing the immutable request.
+
+The existing actor/workspace mutation receipt namespace includes moves, with an
+operation-tagged hash. Exact retries replay the original pins acknowledgement
+even after later unpins; changed payload or cross-operation ID reuse returns
+`409 mutation_id_reused`. Historical acknowledgements never overwrite current
+Tower state. Clients materialize them monotonically by row version, queue moves
+through the existing private outbox/TowerSyncService, and discard conflicted
+moves and dependent requests visibly before canonical recovery. Keep backend,
+app, workspace and canonical actor partitions. No UI networking or new poller.
+
+`personal-pin-order-v1.sql` runs after channel pins in bootstrap and runtime
+upgrade. It adds one nullable checked integer without rewriting rows, versions,
+receipts, journal history or cursor epochs. Old snapshots/receipts may omit the
+field; consumers treat it as null. Applying the migration repeatedly is safe.
+Authenticated HTTP `record-sync` pages (v1 and v2) advertise
+`personal_pin_order_version: 1`, independent of old row bodies. Clients should
+use that response capability for old-server negotiation; absence means support
+is unknown/unavailable. Canonical history and content hashes remain untouched.
+
+The frontend integration and coordinated runtime activation are separate from
+source validation; the supervising manager owns activation and live smoke checks.

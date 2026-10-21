@@ -3062,6 +3062,8 @@ export interface FlightDeckRecordAccessChange extends FlightDeckRecordAccessPart
   status: 'granted' | 'lost';
 }
 export interface FlightDeckRecordPage {
+  /** HTTP record-sync capability; absent on older Tower versions. */
+  personal_pin_order_version?: 1;
   protocol_version: 1;
   access_revision?: string;
   access_changes?: FlightDeckRecordAccessChange[];
@@ -3328,6 +3330,8 @@ export interface FlightDeckPgPersonalPin {
  id: string; workspace_id: string; actor_id: string; thread_id: string | null;
  resource_type: 'thread' | 'task' | 'document' | 'channel'; resource_id: string;
  channel_id: string | null; scope_id?: string | null; root_record_id: string | null; pinned: boolean;
+ /** Missing/null positions precede positioned rows in legacy timestamp/type-ID order. */
+ order_position?: number | null;
  pinned_at: string | null; row_version: number; updated_at: string;
 }
 

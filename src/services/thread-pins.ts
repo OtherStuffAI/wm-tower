@@ -61,6 +61,7 @@ export async function mutatePersonalPin(workspaceId: string, actorId: string, re
     VALUES(${workspaceId},${actorId},${resourceType},${resourceId},${resourceType==='thread'?resourceId:null},${channelId},${scopeId},${rootId},${b.pinned},${b.pinned ? (b.pinned_at ? new Date(b.pinned_at).toISOString() : new Date().toISOString()) : null})
     ON CONFLICT(workspace_id,actor_id,resource_type,resource_id) DO UPDATE SET pinned=EXCLUDED.pinned,channel_id=EXCLUDED.channel_id,scope_id=EXCLUDED.scope_id,root_record_id=EXCLUDED.root_record_id,
     pinned_at=CASE WHEN EXCLUDED.pinned AND flightdeck_pg_thread_pins.pinned THEN flightdeck_pg_thread_pins.pinned_at ELSE EXCLUDED.pinned_at END,
+    order_position=CASE WHEN EXCLUDED.pinned AND NOT flightdeck_pg_thread_pins.pinned THEN NULL ELSE flightdeck_pg_thread_pins.order_position END,
     row_version=flightdeck_pg_thread_pins.row_version+1,updated_at=now() RETURNING *`;
   await sql`INSERT INTO flightdeck_pg_thread_pin_mutations VALUES(${workspaceId},${actorId},${b.mutation_id},${hash},${sql.json(row as any)})`;
   // No channel/scope event routing: personal pins must never enter shared audiences.

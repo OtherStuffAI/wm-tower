@@ -126,6 +126,7 @@ export async function readFlightDeckRecordPage(input: PageInput & { protocolVers
       access_revision: clock!.access_revision, access_changes: accessChanges, catchup: partition,
       retention_policy: 'retain_downloaded',
       next_cursor: nextToken, has_more: entries.length > scanLimit, snapshot_id: state.snapshotId,
+      personal_pin_order_version: 1,
       snapshot_complete: false, partitions_complete: [], bounds: { max_rows: RECORD_MAX_ROWS, max_bytes: RECORD_MAX_BYTES },
     };
     if (bounded) (response as FlightDeckRecordPageV2).handover = { target_position: next.target ?? null, through_position: next.after, complete: false, authority_epoch: clock!.epoch, access_revision: clock!.access_revision };
