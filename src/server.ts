@@ -1,3 +1,5 @@
+import { consoleAsset } from './nstack-console';
+import { buildAdvancedDashboardHtml } from './openapi';
 import { requireNip98AuthResolved } from './auth';
 import { hostingBillingRouter } from './routes/hosting-billing';
 import { hostingWriteBlock, stripeAvailability } from './services/hosting-billing';
@@ -76,7 +78,14 @@ export function createApp() {
     const origin = new URL(c.req.url).origin;
     return c.html(buildTableViewerHtml(origin));
   });
+  app.get('/ui/assets/:name', (c) => {
+    const file = consoleAsset(c.req.param('name'));
+    if (!file) return c.notFound();
+    return new Response(file, { headers: { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=3600' } });
+  });
+  app.get('/ui/advanced', (c) => c.html(buildAdvancedDashboardHtml(new URL(c.req.url).origin)));
   app.get('/ui', (c) => {
+    c.header('Cache-Control', 'no-store');
     const origin = new URL(c.req.url).origin;
     return c.html(buildSuperbasedDashboardHtml(origin));
   });

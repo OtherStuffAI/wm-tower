@@ -292,16 +292,17 @@ describe('OpenAPI docs', () => {
     expect(res.headers.get('content-type')).toContain('text/html');
 
     const html = await res.text();
-    expect(html).toContain('Superbased Tower');
-    expect(html).toContain('/api/v4/billing/workspaces');
-    expect(html).toContain('/records/metadata');
-    expect(html).toContain('/records/families');
+    expect(html).toContain('NStack · Workspace console');
+    expect(html).toContain('Active workspace');
+    expect(html).toContain('/api/v4/workspaces?member_npub=');
+    expect(html).toContain('window.nostr.nip44.encrypt');
     expect(html).toContain('/storage/metadata');
-    expect(html).toContain('Total record storage');
-    expect(html).toContain('Total S3/object storage');
-    expect(html).toContain('Observed App Spaces');
-    expect(html).toContain('/app-schemas');
-    expect(html).toContain('Schema manifest');
+    expect(html).toContain('/ui/advanced');
+    expect(html).not.toContain('window.NStack');
+    const advanced = await app.request('/ui/advanced');
+    expect(await advanced.text()).toContain('Observed App Spaces');
+    expect((await app.request('/ui/assets/crypto.js')).status).toBe(200);
+    expect((await app.request('/ui/assets/not-allowed')).status).toBe(404);
   });
 });
 

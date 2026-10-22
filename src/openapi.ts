@@ -1,3 +1,4 @@
+import { buildNstackConsoleHtml } from './nstack-console';
 import { hostingPaths, hostingSchemas } from './hosting-openapi';
 import { orgDataPaths, orgDataSchemas } from './org-data-openapi';
 import { contextTreePaths, contextTreeSchemas } from './context-tree-openapi';
@@ -2417,6 +2418,10 @@ export function buildTableViewerHtml(origin: string) {
 }
 
 export function buildSuperbasedDashboardHtml(origin: string) {
+  return buildNstackConsoleHtml(preferredOrigin(origin));
+}
+
+export function buildAdvancedDashboardHtml(origin: string) {
   return superbasedDashboardHtml(preferredOrigin(origin));
 }
 
@@ -4510,14 +4515,16 @@ export function buildOpenApiDocument(origin: string) {
         get: {
           tags: ['Billing'],
           security: [],
-          summary: 'Open the Tower-hosted Superbased workspace dashboard',
+          summary: 'Open the NStack workspace console',
           responses: {
             '200': {
-              description: 'Superbased dashboard HTML',
+              description: 'NStack workspace console HTML',
             },
           },
         },
       },
+      '/ui/advanced': { get: { tags: ['Admin'], security: [], summary: 'Open the preserved developer dashboard and billing tools', responses: { '200': { description: 'Advanced dashboard HTML; data operations require NIP-98' } } } },
+      '/ui/assets/{name}': { get: { tags: ['Admin'], security: [], summary: 'Read a bundled NStack console asset', parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string', enum: ['nstack-horizontal-white.svg', 'InterVariable.ttf', 'Inter-OFL.txt', 'crypto.js', 'crypto-LICENSE.txt'] } }], responses: { '200': { description: 'Approved static console asset' }, '404': { description: 'Asset not found' } } } },
       '/api/v4/flightdeck-pg/service': {
         get: {
           tags: ['Flight Deck PG'],

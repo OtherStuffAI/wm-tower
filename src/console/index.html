@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NStack · Workspace console</title>
+<style>/* CONSOLE_STYLE */</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to workspace content</a>
+<header class="masthead"><a href="/ui" aria-label="NStack home"><img src="/ui/assets/nstack-horizontal-white.svg" width="176" height="60" alt="NStack"></a><span>Workspace console</span><div class="account"><button id="connect" class="light">Connect with Nostr</button><button id="disconnect" class="light" hidden>Disconnect</button></div></header>
+<div class="shell">
+<aside aria-label="Workspace navigation">
+<p class="eyebrow">Your backend</p><p id="backend" class="identifier"></p>
+<label for="workspace">Active workspace</label><select id="workspace" disabled><option value="">Connect to choose a workspace</option></select>
+<p id="workspaceCoverage" class="hint"></p>
+<button id="newWorkspace" class="primary" disabled>＋ Create workspace</button>
+<nav aria-label="Console sections">
+<button data-view="overview" aria-current="page">Workspace overview</button>
+<button data-view="apps">Connected apps</button>
+<button data-view="storage">Storage</button>
+<button data-view="allApps">Apps across workspaces</button>
+</nav>
+<details class="advanced"><summary>Advanced tools</summary><a href="/ui/advanced">Developer dashboard & billing</a><a href="/docs">API reference</a><a href="/admin">Server administration</a><a href="/table-viewer">Database tables</a><p>Tools keep their existing access checks.</p></details>
+<p class="footnote">NStack manages shared data and access. Apps keep their own experience.</p>
+</aside>
+<main id="main" tabindex="-1">
+<div id="status" role="status" aria-live="polite">Connect your Nostr signer to see workspaces you can access.</div>
+<div class="page-head"><div><p id="context" class="eyebrow">Welcome to NStack</p><h1 id="heading">A workspace for your apps.</h1></div><button id="refresh" disabled>Refresh</button></div>
+<section id="view-overview" class="view">
+<div id="welcome" class="intro"><span class="step">01 — Get started</span><h2>Keep apps and data together.</h2><p>Choose a workspace, connect an app, and inspect its stored files. Each workspace has its own identity and access boundary.</p><p>Use a Nostr browser signer to approve requests. Your personal private key stays with your signer.</p></div>
+<div id="overview" hidden><div class="intro"><span class="step">Your active workspace</span><h2 id="workspaceName"></h2><p id="workspaceDescription"></p><details><summary>Workspace identity</summary><dl id="workspaceIdentity"></dl></details></div>
+<div class="cards"><article><span class="step">01</span><h2>Connect an app</h2><p>Review the app’s public identity and register its namespace in this workspace.</p><button data-go="apps">Manage apps →</button></article><article><span class="step">02</span><h2>Inspect storage</h2><p>See object metadata, inspect access groups and download files your identity may read.</p><button data-go="storage">Open storage →</button></article></div>
+<div class="panel"><h2>Stored data</h2><div id="usage"><p class="hint">Choose a workspace to load measurements.</p></div><p class="hint">Encrypted-record workspaces show legacy ciphertext and completed registered object bytes. Typed workspaces show their supported category report, including estimates and unavailable stores. Coverage differs by workspace type; neither report is physical disk usage.</p></div><div class="panel"><h2>Workspace details</h2><p id="manageHint" class="hint">Checking workspace management access…</p><form id="editWorkspace" hidden><label for="editName">Name</label><input id="editName" required maxlength="120"><label for="editDescription">Description</label><textarea id="editDescription" maxlength="2000"></textarea><button type="submit">Save details</button><p class="hint">Only the creator or workspace administrators can save changes.</p></form></div></div>
+</section>
+<section id="view-apps" class="view" hidden><div class="section-head"><p>Registered app namespaces for the active workspace. Registration does not grant access to private data.</p><button id="addApp" class="primary" disabled>Connect an app</button></div><div id="apps" class="cards"><p class="empty">Choose a workspace to see its apps.</p></div></section>
+<section id="view-storage" class="view" hidden><div class="panel"><h2>Files and objects</h2><p>Inspect Tower object metadata for this workspace. Downloading checks each object’s access rules. Encrypted files stay encrypted.</p><p class="hint">This view covers registered objects, not all backend disk usage. Publishing, deleting and changing access belong in the app that owns the file; this API does not offer those operations.</p><div class="filters"><div><label for="visibility">Visibility</label><select id="visibility"><option value="">All visibility</option><option value="false">Private</option><option value="true">Public</option></select></div><div><label for="completion">Upload state</label><select id="completion"><option value="">All uploads</option><option value="true">Completed</option><option value="false">Pending</option></select></div></div></div><div id="storage" class="stack"><p class="empty">Choose a workspace to see its storage.</p></div><div class="pager"><button id="previous" disabled>Previous</button><span id="pageLabel"></span><button id="next" disabled>Next</button></div></section>
+<section id="view-allApps" class="view" hidden><p>Compare app namespaces across workspaces you can access. Workspaces whose app list requires administrator access are shown explicitly.</p><div id="allApps" class="stack"><p class="empty">Connect to load accessible workspaces.</p></div></section>
+<noscript><p>This console needs JavaScript and a Nostr browser signer. <a href="/docs">Read the API reference</a>.</p></noscript>
+<footer>NStack workspace console · <span id="build">workspace-console-v1</span></footer>
+</main></div>
+<dialog id="setupDialog" aria-labelledby="setupTitle"><form id="setupForm"><div class="dialog-head"><span class="eyebrow">New workspace · 1 of 2</span><button type="button" data-close aria-label="Close workspace setup">×</button></div><h2 id="setupTitle">Give your workspace a name.</h2><p>A workspace keeps app namespaces and shared data separate from your other workspaces.</p><label for="newName">Workspace name</label><input id="newName" required maxlength="120" placeholder="e.g. Studio projects"><label for="newDescription">Description (optional)</label><textarea id="newDescription" maxlength="2000" placeholder="What will you use this workspace for?"></textarea><p class="hint">Creates an encrypted-record workspace with shared, administrator and private groups. A typed app such as Flight Deck may require its own setup afterwards.</p><p id="setupError" role="alert"></p><button type="submit" class="primary">Review workspace</button></form></dialog>
+<dialog id="appDialog" aria-labelledby="appTitle"><form id="appForm"><div class="dialog-head"><span class="eyebrow">Connect an app · 1 of 2</span><button type="button" data-close aria-label="Close app setup">×</button></div><h2 id="appTitle">Which app are you connecting?</h2><p>Get the app’s public Nostr identity from its own setup screen. A matching name alone does not verify an app.</p><label for="appName">App name</label><input id="appName" required maxlength="120" placeholder="e.g. Your notes app"><label for="appIdentity">App public identity (npub)</label><input id="appIdentity" required spellcheck="false" autocomplete="off" placeholder="npub1…"><p class="hint">Never paste a private key or recovery phrase.</p><p id="appError" role="alert"></p><button type="submit" class="primary">Review connection</button></form></dialog>
+<dialog id="reviewDialog" aria-labelledby="reviewTitle"><div class="dialog-head"><span class="eyebrow">Review before approving</span><button type="button" data-close aria-label="Cancel review">×</button></div><h2 id="reviewTitle"></h2><div id="reviewBody"></div><p id="reviewError" role="alert"></p><div class="actions"><button id="cancelReview" type="button">Cancel</button><button id="approveReview" type="button" class="primary">Approve</button></div></dialog>
+<dialog id="objectDialog" aria-labelledby="objectTitle"><div class="dialog-head"><h2 id="objectTitle">Object details</h2><button type="button" data-close aria-label="Close object details">×</button></div><div id="objectDetails"></div></dialog>
+<script type="module">/* CONSOLE_SCRIPT */</script>
+</body></html>
