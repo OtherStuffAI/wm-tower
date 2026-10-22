@@ -1,3 +1,4 @@
+import { taskRequestIdentity, taskRequestHash, hasTaskRelationships, validateTaskRelationships } from '../services/task-relationships';
 import { movePersonalPin } from '../services/personal-pin-order';
 import { readPrivatePreference, writePrivatePreference, PrivatePreferenceError } from '../services/private-preferences';
 import { canvasSpatialContext } from '../services/canvas-spatial-context';
@@ -484,7 +485,7 @@ const agentActivityStates = new Set<FlightDeckPgAgentActivityState>(['accepted',
 const invocationRecipientTypes = new Set(['person', 'agent']);
 const invocationTargetTypes = new Set<FlightDeckPgInvocationTargetType>(['document', 'task', 'file']);
 const invocationStatuses = new Set<FlightDeckPgInvocationStatus>(['open', 'closed']);
-const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas']);
+const canvasSourceTypes = new Set<FlightDeckPgCanvasSourceType>(['document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas']);
 const canvasElementKinds = new Set<FlightDeckPgCanvasElementKind>(['text', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'draw', 'frame']);
 
 function canvasVisibilityFromBody(value: unknown) {
@@ -1288,6 +1289,8 @@ function taskMetadataFromBody(body: Record<string, unknown>, baseMetadata: Recor
     metadata.assigned_to_npub = raw.map(value => String(value || '').trim()).find(Boolean) || null;
   }
   delete metadata.assigned_to_npubs;
+  if(typeof metadata.parent_task_id === 'string')metadata.parent_task_id=metadata.parent_task_id.trim().toLowerCase()||null;
+  if(Array.isArray(metadata.predecessor_task_ids))metadata.predecessor_task_ids=metadata.predecessor_task_ids.map(value=>typeof value==='string'?value.trim().toLowerCase():value);
   return metadata;
 }
 
@@ -9936,8 +9939,15 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/naplets/:n
   const versionPolicyProvided = body.source_version_id !== undefined;
   const requestedPin = body.source_version_id === null || body.source_version_id === undefined ? null : String(body.source_version_id).trim();
   if (requestedPin !== null && !isUuid(requestedPin)) fields.push({ path: 'source_version_id', code: 'invalid', message: 'source_version_id must be null (follow latest) or a version UUID' });
-  if (body.layout === undefined && body.title === undefined && !versionPolicyProvided) fields.push({ path: 'body', code: 'empty', message: 'layout, title or source_version_id is required' });
+  if (body.layout === undefined && body.title === undefined && !versionPolicyProvided && body.tree_channel_id === undefined) fields.push({ path: 'body', code: 'empty', message: 'layout, title or source_version_id is required' });
   if (fields.length) return validationError(c, identity, fields);
+  let treeChannelId: string | undefined;
+  if (body.tree_channel_id !== undefined) {
+    const current = (await listFlightDeckPgCanvasNaplets(context.workspace.id,canvasId)).find(row=>row.id===napletId);
+    treeChannelId = String(body.tree_channel_id);
+    if (current?.source_type !== 'task_tree' || !isUuid(treeChannelId) || !await resolveFlightDeckPgCanvasSource({workspaceId:context.workspace.id,appNpub:context.workspace.app_npub,actorNpub:auth.userNpub,sourceType:'task_tree',sourceId:treeChannelId})) return jsonError(c,400,'canvas_source_unavailable','Task destination unavailable',identity);
+    body.layout = {...current.layout,...(body.layout as object || {}),task_tree:{root_task_id:null,collapsed:[],upstream:[],viewport:{x:0,y:0,scale:1}}};
+  }
   let htmlSource: { fileId: string; versionId: string | null } | undefined;
   if (versionPolicyProvided) {
     const current = (await listFlightDeckPgCanvasNaplets(context.workspace.id, canvasId)).find((row) => row.id === napletId);
@@ -9952,7 +9962,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/canvases/:canvasId/naplets/:n
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
-      const naplet = await updateFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, napletId, actorId: context.actor.id, expectedRowVersion, displayTitle, displayTitleProvided: body.title !== undefined, layout: body.layout === undefined ? undefined : normalizeFlightDeckPgCanvasLayout(body.layout), htmlSource }, sql);
+      const naplet = await updateFlightDeckPgCanvasNaplet({ workspaceId: context.workspace.id, canvasId, napletId, actorId: context.actor.id, expectedRowVersion, displayTitle, displayTitleProvided: body.title !== undefined, layout: body.layout === undefined ? undefined : normalizeFlightDeckPgCanvasLayout(body.layout), htmlSource, treeChannelId }, sql);
       const auditId = await writeFlightDeckPgAudit({ workspaceId: context.workspace.id, actorId: context.actor.id, action: 'canvas_naplet.update', resourceType: 'canvas_naplet', resourceId: naplet.id, metadata: { canvas_id: canvasId, row_version: naplet.row_version, ...(htmlSource ? { source_id: htmlSource.fileId, source_version_id: htmlSource.versionId } : {}) } }, sql);
       const outbox = await createFlightDeckPgCanvasOutboxEvent({ workspaceId: context.workspace.id, actorId: context.actor.id, eventType: 'flightdeck_pg.canvas_naplet.updated', entityType: 'canvas_naplet', entityId: naplet.id, operation: 'updated', entityRowVersion: naplet.row_version, payload: { canvas_id: canvasId, naplet_id: naplet.id } }, sql);
       return { naplet, auditId, outbox };
@@ -11722,12 +11732,16 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
   const body = await readJsonBody(c);
   if (!body) return validationError(c, identity, [{ path: 'body', code: 'invalid_json', message: 'body must be valid JSON' }]);
 
+  const requestId = body.client_request_id === undefined ? '' : String(body.client_request_id).trim();
+  const creationId = requestId ? taskRequestIdentity(context.workspace.id, context.actor.id, requestId) : crypto.randomUUID();
+  const requestHash = taskRequestHash({channel_id:channelId,body});
   const title = String(body.title || '').trim();
   const state = String(body.state || 'new').trim() as FlightDeckPgTaskState;
   const priority = String(body.priority || 'sand').trim() as FlightDeckPgTaskPriority;
   const metadata = optionalObject(body.metadata);
   const taskMetadata = taskMetadataFromBody(body, metadata ?? undefined);
   const fields: { path: string; code: string; message: string }[] = [];
+  if (body.client_request_id !== undefined && (!requestId || requestId.length > 240)) fields.push({path:'client_request_id',code:'invalid',message:'client_request_id must contain 1–240 characters'});
   if (!title) fields.push({ path: 'title', code: 'required', message: 'title must be a non-empty string' });
   if (!taskStates.has(state)) fields.push({ path: 'state', code: 'invalid', message: 'state is not a valid task state' });
   if (!taskPriorities.has(priority)) fields.push({ path: 'priority', code: 'invalid', message: 'priority is not a valid task priority' });
@@ -11754,7 +11768,14 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    await sql`SELECT pg_advisory_xact_lock(hashtextextended(${context.workspace.id + ':task-relationships'},0))`;
+    const [prior] = await sql<FlightDeckPgTask[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id} AND id=${creationId}`;
+    if (prior) return prior.metadata?._creation_request_hash === requestHash ? { replay: prior } : { conflict: true };
+    const invalid = await validateTaskRelationships(sql, {workspaceId:context.workspace.id,taskId:creationId,actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,metadata:canonicalTaskMetadata});
+    if (invalid.length) return {invalid};
+    if (requestId) canonicalTaskMetadata._creation_request_hash = requestHash;
     const task = await createFlightDeckPgTask({
+      taskId: creationId,
       workspaceId: context.workspace.id,
       channel,
       title,
@@ -11795,6 +11816,13 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/tasks', as
     return { task, auditId, outbox };
   });
 
+  if (payload.invalid) return validationError(c, identity, payload.invalid);
+  if ('conflict' in payload) return jsonError(c,409,'idempotency_conflict','client_request_id was reused with different input',identity);
+  if (payload.replay) {
+    const access = await authorizeFlightDeckPgOperation({actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,workspaceId:context.workspace.id,permission:'task.read',resource:{type:'channel',channelId:payload.replay.channel_id}});
+    if (!access.allowed || payload.replay.deleted_at) return jsonError(c,404,'task_unavailable','Task unavailable',identity);
+    return c.json({identity,task:serializeFlightDeckPgTask((await withFlightDeckPgTaskAssignments(context.workspace.id,[payload.replay]))[0]),replayed:true},200);
+  }
   return c.json({
     identity,
     task: serializeFlightDeckPgTask(payload.task),
@@ -11825,6 +11853,40 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/scopes/:scopeId/tasks', async (
     tasks: tasksWithAssignments.map(serializeFlightDeckPgTask),
     next_cursor: null,
   });
+});
+
+// One adjacency page at a time. Hidden candidates advance the opaque cursor,
+// but only a generic unavailable flag crosses the authorization boundary.
+flightDeckPgRouter.get('/workspaces/:workspaceId/tasks/:taskId/relationships', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const result = await requireFlightDeckPgContext(c, auth.userNpub);
+  if ('response' in result) return result.response;
+  const {context, identity} = result;
+  const taskId = c.req.param('taskId');
+  if(!isUuid(taskId))return jsonError(c,404,'task_unavailable','Task unavailable',identity);
+  const source = await resolveFlightDeckPgTask(context.workspace.id,taskId);
+  if (!source) return jsonError(c,404,'task_unavailable','Task unavailable',identity);
+  const permission = async (channelId: string, operation: 'task.read' | 'task.create') => authorizeFlightDeckPgOperation({actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,workspaceId:context.workspace.id,permission:operation,resource:{type:'channel',channelId}});
+  if (!(await permission(source.channel_id,'task.read')).allowed) return jsonError(c,404,'task_unavailable','Task unavailable',identity);
+  const cursor = c.req.query('cursor') || '';
+  let after = '';
+  try { if (cursor) after = Buffer.from(cursor,'base64url').toString(); } catch { return jsonError(c,400,'invalid_cursor','Invalid cursor',identity); }
+  if (after && !isUuid(after)) return jsonError(c,400,'invalid_cursor','Invalid cursor',identity);
+  const limit = parseLimit(c);
+  const sql = getDb();
+  const candidates = await sql<FlightDeckPgTask[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id}
+    AND (${after}='' OR id::text > ${after})
+    AND (metadata->>'parent_task_id'=${taskId} OR (jsonb_typeof(metadata->'predecessor_task_ids')='array' AND metadata->'predecessor_task_ids' ? ${taskId}))
+    ORDER BY id LIMIT ${limit+1}`;
+  const tasks = []; let unavailable = false;
+  const projection=async(row:FlightDeckPgTask)=>({...serializeFlightDeckPgTask((await withFlightDeckPgTaskAssignments(context.workspace.id,[row]))[0]),channel_title:(await resolveFlightDeckPgChannel(context.workspace.id,row.channel_id))?.name||'Channel'});
+  for (const row of candidates.slice(0,limit)) {
+    if (row.deleted_at || !(await permission(row.channel_id,'task.read')).allowed) { unavailable=true; continue; }
+    tasks.push(await projection(row));
+  }
+  const hasMore = candidates.length > limit;
+  return c.json({identity,workspace_id:context.workspace.id,task:await projection(source),tasks,unavailable,has_more:hasMore,next_cursor:hasMore ? Buffer.from(candidates[limit-1].id).toString('base64url') : null});
 });
 
 flightDeckPgRouter.get('/workspaces/:workspaceId/tasks/:taskId', async (c) => {
@@ -11897,12 +11959,19 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
 
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    await sql`SELECT pg_advisory_xact_lock(hashtextextended(${context.workspace.id + ':task-relationships'},0))`;
     const [current] = await sql<FlightDeckPgTask[]>`SELECT * FROM flightdeck_pg_tasks WHERE workspace_id=${context.workspace.id} AND id=${taskId} FOR UPDATE`;
+    if (!current || current.deleted_at) return null;
+    if (hasTaskRelationships(taskMetadata)) {
+      if (!rowVersion || current.row_version !== rowVersion) return null;
+      const invalid = await validateTaskRelationships(sql,{workspaceId:context.workspace.id,taskId,actorNpub:auth.userNpub,appNpub:context.workspace.app_npub,metadata:{...current.metadata,...canonicalTaskMetadata}});
+      if (invalid.length) return {invalid};
+    }
     const task = await updateFlightDeckPgTask({
       workspaceId: context.workspace.id,
       taskId,
       actorId: context.actor.id,
-      rowVersion: taskMetadata && Object.prototype.hasOwnProperty.call(taskMetadata, 'assigned_to_npub') ? rowVersion : null,
+      rowVersion: hasTaskRelationships(taskMetadata) || taskMetadata && Object.prototype.hasOwnProperty.call(taskMetadata, 'assigned_to_npub') ? rowVersion : null,
       patch: {
         title: body.title === undefined ? undefined : String(body.title).trim(),
         description: body.description === undefined ? undefined : (body.description === null ? null : String(body.description)),
@@ -11940,6 +12009,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
   });
   if (!payload) return jsonError(c, 409, 'stale_row_version', 'Task row_version is stale', identity);
 
+  if (payload.invalid) return validationError(c,identity,payload.invalid);
   return c.json({
     identity,
     task: serializeFlightDeckPgTask(payload.task),

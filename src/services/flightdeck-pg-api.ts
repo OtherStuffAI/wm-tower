@@ -7487,6 +7487,7 @@ export async function resolveFlightDeckPgTask(
 export async function createFlightDeckPgTask(
   input: {
     workspaceId: string;
+    taskId?: string;
     channel: FlightDeckPgChannelRow;
     title: string;
     description?: string | null;
@@ -7500,6 +7501,7 @@ export async function createFlightDeckPgTask(
 ): Promise<FlightDeckPgTaskRow> {
   const [task] = await sql<FlightDeckPgTaskRow[]>`
     INSERT INTO flightdeck_pg_tasks (
+      id,
       workspace_id,
       scope_id,
       channel_id,
@@ -7513,6 +7515,7 @@ export async function createFlightDeckPgTask(
       updated_by_actor_id
     )
     VALUES (
+      COALESCE(${input.taskId ?? null}::uuid, gen_random_uuid()),
       ${input.workspaceId},
       ${input.channel.scope_id},
       ${input.channel.id},

@@ -692,7 +692,7 @@ export type FlightDeckPgAudioNoteTargetType = FlightDeckPgReactionTargetType;
 export type FlightDeckPgDailyNoteStatus = 'active' | 'archived';
 export type FlightDeckPgPersonalWappStatus = 'active' | 'archived';
 export type FlightDeckPgCanvasVisibilityMode = 'workspace' | 'restricted';
-export type FlightDeckPgCanvasSourceType = 'document' | 'task_list' | 'chat_thread' | 'html' | 'excalidraw' | 'canvas';
+export type FlightDeckPgCanvasSourceType = 'document' | 'task_list' | 'task_tree' | 'chat_thread' | 'html' | 'excalidraw' | 'canvas';
 export type FlightDeckPgCanvasElementKind = 'text' | 'rectangle' | 'diamond' | 'ellipse' | 'arrow' | 'line' | 'draw' | 'frame';
 export type FlightDeckPgCanvasCommentAnchorType = 'canvas' | 'naplet';
 export type FlightDeckPgResponseActivityTargetType = 'chat_thread' | 'task_comment' | 'doc_comment';
@@ -900,6 +900,7 @@ export interface FlightDeckPgCanvasViewport {
 }
 
 export interface FlightDeckPgCanvasLayout {
+  task_tree?: {root_task_id: string | null; collapsed: string[]; upstream: string[]; viewport: {x:number;y:number;scale:number}; instance_id: string | null};
   x: number;
   y: number;
   width: number;

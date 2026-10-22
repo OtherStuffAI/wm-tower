@@ -3357,7 +3357,7 @@ export function buildOpenApiDocument(origin: string) {
         },
         FlightDeckPgCanvasLayout: {
           type: 'object', additionalProperties: false, required: ['x', 'y', 'width', 'height', 'z'],
-          properties: { x: { type: 'integer' }, y: { type: 'integer' }, width: { type: 'integer', minimum: 220, maximum: 1200 }, height: { type: 'integer', minimum: 160, maximum: 1000 }, z: { type: 'integer', minimum: 1, maximum: 100000 } },
+          properties: { task_tree: { type:'object', description:'Task Tree view only: root_task_id UUID/null, instance_id UUID/null, collapsed/upstream UUID arrays bounded to 2000 and viewport x/y/scale. No task contents.', additionalProperties:true }, x: { type: 'integer' }, y: { type: 'integer' }, width: { type: 'integer', minimum: 220, maximum: 1200 }, height: { type: 'integer', minimum: 160, maximum: 1000 }, z: { type: 'integer', minimum: 1, maximum: 100000 } },
         },
         FlightDeckPgCanvas: {
           type: 'object', additionalProperties: false,
@@ -3377,7 +3377,7 @@ export function buildOpenApiDocument(origin: string) {
           type: 'object', additionalProperties: false, required: ['id', 'access', 'layout', 'source', 'title', 'content', 'row_version'],
           properties: {
             id: { type: 'string', format: 'uuid' }, access: { type: 'string', const: 'ready' }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' },
-            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas'] }, id: { type: 'string', format: 'uuid', description: 'For html and excalidraw this is always the File id, including legacy html naplets that stored a version id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: null follows the File current version; a version id pins it.' } } },
+            source: { type: 'object', additionalProperties: false, required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas'] }, id: { type: 'string', format: 'uuid', description: 'For html and excalidraw this is always the File id, including legacy html naplets that stored a version id.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: null follows the File current version; a version id pins it.' } } },
             title: { type: 'string' }, content: { type: 'object', additionalProperties: true, description: 'Source-family-specific safe render projection. HTML contains immutable version bytes plus version/digest, file_id, version_id, version_number, current_version_id/number, follows_latest and a viewer-authorized asset list (FlightDeckPgHtmlArtifactAsset); never credentials or URLs. Excalidraw contains board metadata only (FlightDeckPgExcalidrawBoardContent), never scene bytes.' }, row_version: { type: 'integer', minimum: 1 },
           },
         },
@@ -5465,7 +5465,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Add an authorized source reference to a managed Canvas',
           description: 'Stores presentation title/layout plus an opaque canonical source reference only. The source must exist and be readable by the caller at placement time; later revocation produces the denied snapshot shape.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas'] }, id: { type: 'string', format: 'uuid', description: 'html: File id (preferred) or a legacy File version id, which is stored as File id plus pin. excalidraw: board File id. canvas: another visible canvas in this workspace; content contains its title only. Self-links are rejected.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: omit/null to follow latest, or pin a version of the same File. Must be omitted or null for excalidraw, which always follows latest.' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['source', 'layout'], properties: { source: { type: 'object', required: ['type', 'id'], properties: { type: { type: 'string', enum: ['document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas'] }, id: { type: 'string', format: 'uuid', description: 'html: File id (preferred) or a legacy File version id, which is stored as File id plus pin. excalidraw: board File id. canvas: another visible canvas in this workspace; content contains its title only. Self-links are rejected.' }, version_id: { type: ['string', 'null'], format: 'uuid', description: 'html only: omit/null to follow latest, or pin a version of the same File. Must be omitted or null for excalidraw, which always follows latest.' } } }, title: { type: 'string', minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' } } } } } },
           responses: { '201': { description: 'Naplet reference created' }, '400': { description: 'Source unavailable or invalid' }, '403': { description: 'Management denied' } },
         },
       },
@@ -5474,7 +5474,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Update Canvas naplet presentation state',
           description: 'Updates layout/title and, for html naplets, the version policy. The canonical source File is immutable; source_version_id null follows latest and a UUID pins a version that must belong to the same File and be readable by the caller. expected_row_version is mandatory compare-and-swap state.',
           parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'canvasId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'napletId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, title: { type: ['string', 'null'], minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' }, source_version_id: { type: ['string', 'null'], format: 'uuid' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 1 }, title: { type: ['string', 'null'], minLength: 1, maxLength: 200 }, layout: { $ref: '#/components/schemas/FlightDeckPgCanvasLayout' }, tree_channel_id: {type:'string',format:'uuid',description:'Task Tree only: rebind to an independently authorized channel with layout reset; does not move tasks.'}, source_version_id: { type: ['string', 'null'], format: 'uuid' } } } } } },
           responses: { '200': { description: 'Naplet presentation state updated' }, '403': { description: 'Management denied' }, '409': { description: 'Stale row version' } },
         },
         delete: {
@@ -6768,7 +6768,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Create a channel task',
-          description: 'Creates a task transactionally. Canonical description agent mentions may be supplied as top-level mentions or metadata.mentions and are stored as metadata.mentions entries containing actor_id and npub after task.read validation. The outbox event includes the canonical task, mentions, author identity, entity row version, stable event ID, and cursor.',
+          description: 'Optional client_request_id (1–240 characters) provides actor/workspace-scoped idempotency: exact replay returns 200, conflicting reuse 409. Relationships in metadata.parent_task_id and metadata.predecessor_task_ids are saved atomically and validated for reference read access, self/duplicate edges and cycles. Creates a task transactionally. Canonical description agent mentions may be supplied as top-level mentions or metadata.mentions and are stored as metadata.mentions entries containing actor_id and npub after task.read validation. The outbox event includes the canonical task, mentions, author identity, entity row version, stable event ID, and cursor.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
@@ -6851,6 +6851,9 @@ export function buildOpenApiDocument(origin: string) {
             '403': { description: 'Permission denied', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
           },
         },
+      },
+      '/api/v4/flightdeck-pg/workspaces/{workspaceId}/tasks/{taskId}/relationships': {
+        get: { tags: ['Flight Deck PG'], security: [{nip98:[]}], summary: 'Read one authorized outgoing task relationship page', description: 'Returns task and readable children/successors in tasks; unavailable is a generic flag with no hidden record metadata. Follow next_cursor until has_more=false, then traverse each returned task with a visited set. Root task.read required; each related task is independently authorized.', parameters: [{name:'workspaceId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'taskId',in:'path',required:true,schema:{type:'string',format:'uuid'}},{name:'cursor',in:'query',schema:{type:'string'}},{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:200}}], responses:{'200':{description:'Adjacency page with identity, task, tasks, unavailable, has_more and next_cursor'},'404':{description:'Task unavailable'}} },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/tasks/{taskId}': {
         get: {

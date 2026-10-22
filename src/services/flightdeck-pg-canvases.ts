@@ -129,7 +129,10 @@ export function normalizeFlightDeckPgCanvasViewport(value: unknown): FlightDeckP
 
 export function normalizeFlightDeckPgCanvasLayout(value: unknown): FlightDeckPgCanvasLayout {
   const layout = asJson(value);
+  const tree = asJson(layout.task_tree);
+  const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
   return {
+    ...(layout.task_tree ? {task_tree:{root_task_id:uuid(tree.root_task_id),instance_id:uuid(tree.instance_id),collapsed:(Array.isArray(tree.collapsed)?tree.collapsed:[]).map(uuid).filter(Boolean).slice(0,2000) as string[],upstream:(Array.isArray(tree.upstream)?tree.upstream:[]).map(uuid).filter(Boolean).slice(0,2000) as string[],viewport:{x:finite(asJson(tree.viewport).x,0),y:finite(asJson(tree.viewport).y,0),scale:Math.max(0.001,Math.min(2,finite(asJson(tree.viewport).scale,1)))}}} : {}),
     x: Math.round(finite(layout.x, 0)),
     y: Math.round(finite(layout.y, 0)),
     width: Math.max(220, Math.min(1200, Math.round(finite(layout.width, 360)))),
@@ -176,7 +179,7 @@ export function deniedFlightDeckPgCanvasNaplet(naplet: Pick<FlightDeckPgCanvasNa
   return {
     id: naplet.id,
     access: 'denied',
-    layout: normalizeFlightDeckPgCanvasLayout(naplet.layout),
+    layout: normalizeFlightDeckPgCanvasLayout({...naplet.layout,task_tree:undefined}),
     row_version: Number(naplet.row_version),
   };
 }
@@ -427,6 +430,7 @@ export async function updateFlightDeckPgCanvasNaplet(
     layout?: FlightDeckPgCanvasLayout;
     /** HTML version policy; applied together with the normalized File source id. */
     htmlSource?: { fileId: string; versionId: string | null };
+    treeChannelId?: string;
   },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgCanvasNaplet> {
@@ -434,7 +438,7 @@ export async function updateFlightDeckPgCanvasNaplet(
     UPDATE flightdeck_pg_canvas_naplets SET
       display_title = CASE WHEN ${input.displayTitleProvided === true} THEN ${input.displayTitle ?? null} ELSE display_title END,
       layout = COALESCE(${input.layout ? sql.json(input.layout as any) : null}::jsonb, layout),
-      source_id = CASE WHEN ${Boolean(input.htmlSource)} AND source_type = 'html' THEN ${input.htmlSource?.fileId ?? null}::uuid ELSE source_id END,
+      source_id = CASE WHEN ${Boolean(input.treeChannelId)} AND source_type = 'task_tree' THEN ${input.treeChannelId ?? null}::uuid WHEN ${Boolean(input.htmlSource)} AND source_type = 'html' THEN ${input.htmlSource?.fileId ?? null}::uuid ELSE source_id END,
       source_version_id = CASE WHEN ${Boolean(input.htmlSource)} AND source_type = 'html' THEN ${input.htmlSource?.versionId ?? null}::uuid ELSE source_version_id END,
       updated_by_actor_id = ${input.actorId},
       row_version = row_version + 1,
@@ -721,6 +725,14 @@ export async function resolveFlightDeckPgCanvasSource(
     const body = await readableStorageText(doc.storage_object_id, 4 * 1024 * 1024);
     if (!body) return null;
     return { title: doc.title, content: { title: doc.title, body: body.text, updated_at: doc.updated_at.toISOString() } };
+  }
+
+  if (input.sourceType === 'task_tree') {
+    const [channel] = await sql<{id:string;scope_id:string;name:string}[]>`SELECT id,scope_id,name FROM flightdeck_pg_channels WHERE workspace_id=${input.workspaceId} AND id=${input.sourceId} AND archived_at IS NULL`;
+    if (!channel) return null;
+    const permission = async (operation: 'task.read' | 'task.create') => authorizeFlightDeckPgOperation({actorNpub:input.actorNpub,appNpub:input.appNpub,workspaceId:input.workspaceId,permission:operation,resource:{type:'channel',channelId:channel.id}},sql);
+    if (!(await permission('task.read')).allowed) return null;
+    return {title:'Task Tree',content:{channel_id:channel.id,scope_id:channel.scope_id,channel_title:channel.name,can_create:(await permission('task.create')).allowed}};
   }
 
   if (input.sourceType === 'task_list') {

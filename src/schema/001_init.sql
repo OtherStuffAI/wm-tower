@@ -3354,6 +3354,12 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_orders (
 CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_canvas_orders_viewer_position
   ON flightdeck_pg_canvas_orders(workspace_id, viewer_actor_id, position, canvas_id);
 
+-- Existing task metadata remains authoritative; indexes serve graph adjacency.
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_task_tree_parent
+  ON flightdeck_pg_tasks(workspace_id, (metadata->>'parent_task_id'), id);
+CREATE INDEX IF NOT EXISTS idx_flightdeck_pg_task_tree_predecessors
+  ON flightdeck_pg_tasks USING GIN ((metadata->'predecessor_task_ids'));
+
 CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL,
@@ -3380,7 +3386,7 @@ CREATE TABLE IF NOT EXISTS flightdeck_pg_canvas_naplets (
     FOREIGN KEY (workspace_id, updated_by_actor_id)
     REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)
     ON DELETE RESTRICT,
-  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas')),
+  CHECK (source_type IN ('document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas')),
   CHECK (display_title IS NULL OR length(trim(display_title)) > 0),
   CHECK (row_version >= 1),
   UNIQUE (workspace_id, canvas_id, id)
@@ -3396,7 +3402,7 @@ ALTER TABLE flightdeck_pg_canvas_naplets ADD COLUMN IF NOT EXISTS source_version
 ALTER TABLE flightdeck_pg_canvas_naplets DROP CONSTRAINT IF EXISTS flightdeck_pg_canvas_naplets_source_type_check;
 ALTER TABLE flightdeck_pg_canvas_naplets
   ADD CONSTRAINT flightdeck_pg_canvas_naplets_source_type_check
-  CHECK (source_type IN ('document', 'task_list', 'chat_thread', 'html', 'excalidraw', 'canvas'));
+  CHECK (source_type IN ('document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas'));
 ALTER TABLE flightdeck_pg_canvas_naplets DROP CONSTRAINT IF EXISTS flightdeck_pg_canvas_naplets_version_pin_check;
 ALTER TABLE flightdeck_pg_canvas_naplets
   ADD CONSTRAINT flightdeck_pg_canvas_naplets_version_pin_check
