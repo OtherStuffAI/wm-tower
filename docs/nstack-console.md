@@ -47,3 +47,28 @@ setup ciphertext, exercises app confirmation and connection handoff, checks stal
 responses and denied access, and covers desktop/mobile and keyboard behavior.
 The fixture suite never contacts a real workspace. Live activation and database
 validation follow the repository's Tower-only lifecycle rules.
+
+The namespace inventory adds a read-only, independently authorized view of
+`workspace_apps` and `workspace_app_db_namespaces`. It shows registered names,
+enabled flags, shared app row/collection counts, allocated schema names and application table counts (excluding
+migration bookkeeping), with source and coverage labels. No schema allocation is
+interpreted as installation, online presence, row access or a byte measurement.
+The endpoint uses the existing owner-address management check, a read-only
+transaction, a three-second SQL budget and an explicit 500-registration cap.
+A denied or failed read stays unavailable; an empty successful list means only
+that no registrations were found for that address.
+
+Typed PG identities come from `flightdeck_pg_workspaces.app_npub`. Their shared
+`public.flightdeck_pg_*` tables partition data by workspace UUID. Owner/app
+registrations, `workspace_app_rows` and optional allocated WApp schemas use an
+owner-address/app pair instead; they may span multiple typed workspaces. The
+console labels that scope and never adds these overlapping references into a
+cross-workspace total. A backing `v4_workspace_id` is a mapping, not authorization.
+Typed membership alone never authorizes owner-wide namespace inspection.
+
+Ambulando Sol retains Flight Deck's app identity and record contracts; its brand
+does not establish an independent database namespace. See the Sol repository's
+`docs/design/ambulando-sol.md`, `src/app-identity.js` and `docs/ota-publishing.md`.
+Generic app row contents, custom-schema row counts, schema bytes, graph, Git and external storage
+remain explicitly outside the namespace metadata report. Existing typed UUID
+usage and encrypted-record counters retain their separate coverage statements.

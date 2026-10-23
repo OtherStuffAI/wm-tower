@@ -4680,6 +4680,20 @@ export function buildOpenApiDocument(origin: string) {
           },
         },
       },
+      '/api/v4/workspaces/{workspaceOwnerNpub}/namespace-inventory': {
+        get: {
+          tags: ['Workspaces'], security: [{ nip98: [] }],
+          summary: 'Read owner/app namespace metadata',
+          description: 'Requires existing management authority for the exact owner address. Typed membership or backing mappings do not confer access. Lists up to 500 registrations and allocated WApp schemas, with shared-row/collection counts and schema table counts excluding migrations. Owner/app scope may span typed workspaces; no row data, credentials or byte totals. Not installation or online status.',
+          parameters: [{ name: 'workspaceOwnerNpub', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            '200': { description: 'NamespaceInventory: owner address, scope, provenance, apps (app_npub, app_name, enabled, capabilities, shared_rows/shared_collections, nullable schema_name/app_slug/database_tables), truncated, coverage', content: { 'application/json': { schema: { type: 'object', required: ['workspace_owner_npub', 'scope', 'provenance', 'apps', 'truncated', 'coverage'], properties: {
+              workspace_owner_npub: { type: 'string' }, scope: { type: 'string', enum: ['owner_app_namespace'] }, provenance: { type: 'string' }, coverage: { type: 'string' }, truncated: { type: 'boolean' }, apps: { type: 'array', items: { type: 'object', properties: { app_npub: { type: 'string' }, app_name: { type: 'string' }, enabled: { type: 'boolean' }, capabilities: { type: 'array', items: { type: 'string' } }, schema_name: { type: 'string', nullable: true }, app_slug: { type: 'string', nullable: true }, shared_rows: { type: 'string', pattern: '^[0-9]+$' }, shared_collections: { type: 'integer' }, database_tables: { type: 'integer', nullable: true } } } },
+            } } } } },
+            '401': { description: 'Invalid authentication' }, '403': { description: 'Owner-address management required' }, '503': { description: 'Metadata unavailable; never an empty inventory' },
+          },
+        },
+      },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/storage-usage': {
         get: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }],

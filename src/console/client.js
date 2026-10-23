@@ -32,7 +32,7 @@ function showView(view) {
   state.view = view;
   document.querySelectorAll('.view').forEach(el => el.hidden = el.id !== 'view-' + view);
   document.querySelectorAll('[data-view]').forEach(el => { if (el.dataset.view === view) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
-  $('heading').textContent = ({ overview: state.active?.name || 'A workspace for your apps.', apps: 'Connected apps', storage: 'Storage', allApps: 'Apps across workspaces' })[view];
+  $('heading').textContent = ({ overview: state.active?.name || 'A workspace for your apps.', apps: 'Apps and namespaces', storage: 'Storage', allApps: 'Apps across workspaces' })[view];
   $('context').textContent = view === 'allApps' ? 'All accessible workspaces' : state.active ? 'Active workspace · ' + state.active.name : 'Welcome to NStack';
 }
 async function digest(raw) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)))).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -61,7 +61,7 @@ function resetWorkspace() {
   state.generation++; state.active = null; state.apps = []; state.offset = 0;
   $('overview').hidden = true; $('welcome').hidden = false; $('addApp').disabled = true;
   $('previous').disabled = true; $('next').disabled = true; $('pageLabel').textContent = '';
-  for (const id of ['apps', 'storage']) empty(id, 'Choose a workspace to continue.');
+  for (const id of ['apps', 'storage', 'inventory', 'appInventory']) empty(id, 'Choose a workspace to continue.');
   $('workspaceIdentity').replaceChildren(); $('workspaceName').textContent = ''; $('workspaceDescription').textContent = '';
   $('editName').value = ''; $('editDescription').value = ''; $('visibility').value = ''; $('completion').value = '';
   $('objectDialog').close(); $('objectDetails').replaceChildren(); $('editWorkspace').hidden = true; $('manageHint').textContent = 'Checking workspace management access…'; empty('usage', 'Measurements unavailable until a workspace is loaded.');
@@ -113,10 +113,10 @@ async function selectWorkspace(owner) {
   const w = state.active, generation = state.generation;
   $('welcome').hidden = true; $('overview').hidden = false;
   $('workspaceName').textContent = w.name; $('workspaceDescription').textContent = w.description || 'Add a description to help people recognise this workspace.';
-  $('workspaceIdentity').replaceChildren(details([['Workspace ID', w.workspace_id], ['Workspace service identity', w.workspace_service_npub || w.workspace_owner_npub], [w.kind === 'typed' ? 'Owner identity' : 'Creator identity', w.kind === 'typed' ? w.workspace_owner_npub : w.creator_npub]]));
+  $('workspaceIdentity').replaceChildren(details([['Workspace ID', w.workspace_id], ['Data model', w.kind === 'typed' ? 'Typed PG · shared tables partitioned by UUID' : 'Encrypted records · workspace service address'], ['Backing workspace mapping (not authority)', w.v4_workspace_id || 'None declared'], ['Workspace service identity', w.workspace_service_npub || w.workspace_owner_npub], [w.kind === 'typed' ? 'Owner identity' : 'Creator identity', w.kind === 'typed' ? w.workspace_owner_npub : w.creator_npub]]));
   $('editName').value = w.name; $('editDescription').value = w.description || '';
   status('Loading ' + w.name + '…');
-  await Promise.all([loadApps(w, generation), loadStorage(w, generation), loadUsage(w, generation)]);
+  await Promise.all([loadApps(w, generation), loadStorage(w, generation), loadUsage(w, generation), loadInventory(w, generation)]);
   if (still(generation)) { status('Viewing ' + w.name + '. Some operations require workspace administrator access.'); if (state.view === 'allApps') await loadAllApps(); }
 }
 function appCard(app, w, allowActions) {
@@ -161,26 +161,57 @@ async function loadUsage(w, generation) {
     $('usage').replaceChildren(details([['Encrypted record bytes (all versions)', bytes(usage.record_bytes)], ['Completed object bytes (registered metadata)', bytes(usage.object_bytes)]]));
   } catch (e) { if (still(generation)) empty('usage', 'Measurements unavailable. ' + e.message); }
 }
+const inventoryPath = (w) => workspacePath(w, '/namespace-inventory');
+function inventoryContent(payload, w) {
+  const container = document.createElement('div');
+  container.append(text('p', 'Owner/app namespace scope · ' + payload.workspace_owner_npub, 'app-id'));
+  if (w.kind === 'typed') container.append(text('p', 'These registrations belong to the owner address and may be shared across typed workspaces. They are not installations in this workspace. Access is checked independently of typed membership and backing mappings.', 'hint'));
+  container.append(text('p', 'Source: ' + payload.provenance, 'hint'));
+  const grid = document.createElement('div'); grid.className = 'cards';
+  for (const app of payload.apps || []) {
+    const card = document.createElement('article');
+    card.append(text('span', app.enabled ? 'Registered · enabled' : 'Registered · disabled', 'badge'), text('h3', app.app_name || app.app_slug || 'Unnamed registration'), text('p', app.app_npub, 'app-id'));
+    card.append(details([['Registration source', 'workspace_apps'], ['Shared app rows · workspace_app_rows', app.shared_rows ?? 'Unavailable'], ['Shared app collections', app.shared_collections == null ? 'Unavailable' : String(app.shared_collections)], ['WApp database schema', app.schema_name || 'No allocated schema recorded'], ['App tables in allocated schema', app.database_tables == null ? 'Not applicable' : String(app.database_tables)], ['Stored bytes', 'Unavailable — not measured by this inventory']]));
+    grid.append(card);
+  }
+  if (!payload.apps?.length) container.append(text('p', 'No registrations at this owner address. This does not prove no typed data or files exist.', 'hint'));
+  else container.append(grid);
+  if (payload.truncated) container.append(text('p', 'Inventory truncated at 500 registrations; additional entries are not shown.', 'hint'));
+  container.append(text('p', payload.coverage, 'hint'));
+  return container;
+}
+async function loadInventory(w, generation) {
+  for (const id of ['inventory', 'appInventory']) empty(id, 'Loading namespace inventory…');
+  try {
+    const payload = await api(inventoryPath(w));
+    if (!still(generation)) return;
+    for (const id of ['inventory', 'appInventory']) $(id).replaceChildren(...(w.kind === 'typed' ? [typedAppCard(w)] : []), inventoryContent(payload, w));
+  } catch (e) {
+    if (still(generation)) for (const id of ['inventory', 'appInventory']) $(id).replaceChildren(...(w.kind === 'typed' ? [typedAppCard(w)] : []), text('p', 'Namespace inventory unavailable. ' + e.message + ' This is not an empty inventory.', 'empty'));
+  }
+}
 function typedAppCard(w) {
   const card = document.createElement('article');
-  card.append(text('span', 'Typed workspace app identity', 'badge'), text('h3', w.name), text('p', w.app_npub, 'app-id'), text('p', 'This identity comes from the workspace descriptor. It is not an inventory of installed WApps or evidence of an online connection. Manage app permissions and integrations in the owning app.', 'hint'));
+  card.append(text('span', 'Typed workspace app identity', 'badge'), text('h3', w.app_npub === 'npub1hd37reqgfcnz3pvzj4grknd2nkzc94p9ercmunrxx22razr2rfxsw6dns5' ? 'Ambulando / Flight Deck namespace' : 'Typed app namespace'), text('p', w.app_npub, 'app-id'), text('p', 'Source: flightdeck_pg_workspaces.app_npub. Shared public flightdeck_pg_* tables hold typed data partitioned by workspace UUID. Several workspaces and clients can use the same app identity. Client branding does not establish a separate namespace. This is not an installed-app or online-connection inventory.', 'hint'));
   return card;
 }
 async function loadAllApps() {
   if (!state.npub) return;
   const session = state.session, generation = state.generation;
   empty('allApps', 'Loading apps across accessible workspaces…');
-  const cards = [];
+  const cards = [], seenOwners = new Map();
   for (const w of state.workspaces) {
     if (session !== state.session || !still(generation)) return;
     const section = document.createElement('section'); section.className = 'workspace-apps'; section.append(text('h2', w.name));
-    try {
-      if (w.kind === 'typed') { section.append(typedAppCard(w)); cards.push(section); continue; }
-      const result = await api(workspacePath(w, '/apps'));
-      if (session !== state.session) return;
-      if (!result.apps?.length) section.append(text('p', 'No registered apps.', 'hint'));
-      else { const grid = document.createElement('div'); grid.className = 'cards'; for (const app of result.apps) grid.append(appCard(app, w, false)); section.append(grid); }
-    } catch (e) { section.append(text('p', 'App list unavailable. ' + e.message, 'hint')); }
+    if (w.kind === 'typed') section.append(typedAppCard(w));
+    const previousOwner = seenOwners.get(w.workspace_owner_npub);
+    if (previousOwner) section.append(text('p', 'Shared owner/app inventory shown under ' + previousOwner + '. The same owner scope is not counted again.', 'hint'));
+    else try {
+      seenOwners.set(w.workspace_owner_npub, w.name);
+      const result = await api(inventoryPath(w));
+      if (session !== state.session || !still(generation)) return;
+      section.append(inventoryContent(result, w));
+    } catch (e) { section.append(text('p', 'App list unavailable. Namespace inventory unavailable. ' + e.message + ' This is not an empty inventory.', 'hint')); }
     section.append(button('Open workspace', async () => { showView('apps'); await selectWorkspace(ownerOf(w)); })); cards.push(section);
   }
   if (session !== state.session || !still(generation)) return;

@@ -3346,3 +3346,14 @@ export interface FlightDeckPgPrivatePreference {
 export interface FlightDeckPgPrivatePreferenceWrite {
  value: string; expected_row_version: number; mutation_id: string; import_only?: boolean;
 }
+
+// Read-only owner/app metadata; never a workspace-UUID usage subtotal.
+export interface NamespaceInventory {
+  workspace_owner_npub: string;
+  scope: 'owner_app_namespace';
+  provenance: string;
+  apps: { app_npub: string; app_name: string; enabled: boolean; capabilities: string[];
+    schema_name: string | null; app_slug: string | null; database_tables: number | null; shared_rows: string; shared_collections: number }[];
+  truncated: boolean;
+  coverage: string;
+}

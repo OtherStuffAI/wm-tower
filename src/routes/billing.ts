@@ -1,3 +1,4 @@
+import { collectNamespaceInventory } from '../services/namespace-inventory';
 import { Hono } from 'hono';
 import { requireNip98AuthResolved } from '../auth';
 import { config } from '../config';
@@ -204,6 +205,17 @@ workspaceBillingRouter.get('/:workspaceOwnerNpub/storage/metadata', async (c) =>
     public: boolValue(publicQuery),
     completed: boolValue(completedQuery),
   }));
+});
+
+workspaceBillingRouter.get('/:workspaceOwnerNpub/namespace-inventory', async (c) => {
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const owner = String(c.req.param('workspaceOwnerNpub') || '').trim();
+  const denied = await requireWorkspaceManager(c, owner, auth.userNpub);
+  if (denied) return denied;
+  c.header('Cache-Control', 'private, no-store');
+  try { return c.json(await collectNamespaceInventory(owner)); }
+  catch { return c.json({ error: 'Namespace inventory unavailable' }, 503); }
 });
 
 workspaceBillingRouter.get('/:workspaceOwnerNpub/apps', async (c) => {

@@ -15,6 +15,7 @@ test('workspace console: signed bootstrap, isolation, consent boundaries, storag
   ];
   const apps: Record<string, any[]> = { 'fixture-owner-a': [{ app_npub: appNpub, app_name: 'Example Notes', enabled: true, capabilities: ['notes'] }] };
   const writes: { path: string; body: any }[] = [], requests: string[] = [], signedEvents: any[] = [];
+  let inventoryUnavailable = false, inventoryDenied = false;
   let delayApps = false, releaseApps: (() => void) | undefined, responseLoss = false, typedUnavailable = false, rejectWrap = false;
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
     const url = new URL(req.url), path = url.pathname;
@@ -30,7 +31,7 @@ test('workspace console: signed bootstrap, isolation, consent boundaries, storag
     const owner = decodeURIComponent(path.split('/')[4] || '');
     if (req.method !== 'GET') writes.push({ path, body });
     if (path === '/api/v4/flightdeck-pg/workspaces' && typedUnavailable) return Response.json({ error: 'Temporarily unavailable' }, { status: 503 });
-    if (path === '/api/v4/flightdeck-pg/workspaces') return Response.json({ workspaces: [{ identity: { workspace_id: 'typed-fixture', workspace_owner_npub: 'human-owner-not-service', workspace_service_npub: 'typed-service', app_npub: appNpub }, label: 'Example Typed Workspace', v4_workspace_id: null }] });
+    if (path === '/api/v4/flightdeck-pg/workspaces') return Response.json({ workspaces: [{ identity: { workspace_id: 'typed-fixture', workspace_owner_npub: 'human-owner-not-service', workspace_service_npub: 'typed-service', app_npub: appNpub }, label: 'Example Typed Workspace', v4_workspace_id: 'fixture-a' }, { identity: { workspace_id: 'typed-shared-fixture', workspace_owner_npub: 'human-owner-not-service', workspace_service_npub: 'other-typed-service', app_npub: appNpub }, label: 'Example Shared Typed Workspace', v4_workspace_id: 'fixture-a' }] });
     if (path.includes('/typed-fixture/storage-usage')) return Response.json({ categories: [{ label: 'Database', status: 'measured', bytes: 1024, measurement: 'Logical estimate' }, { label: 'Git', status: 'unavailable', bytes: null, reason: 'No attribution' }], total_description: 'Partial estimate' });
     if (path === '/api/v4/workspaces' && req.method === 'GET') return Response.json({ workspaces });
     if (path === '/api/v4/workspaces' && req.method === 'POST') {
@@ -48,6 +49,13 @@ test('workspace console: signed bootstrap, isolation, consent boundaries, storag
       return Response.json({ workspace_owner_npub: body.workspace_owner_npub }, { status: 201 });
     }
     if (owner === 'fixture-owner-c') return Response.json({ error: 'Not authorized' }, { status: 403 });
+    if (path.endsWith('/namespace-inventory')) {
+      if (inventoryDenied && owner === 'human-owner-not-service') return Response.json({ error: 'Owner inspection denied' }, { status: 403 });
+      if (inventoryUnavailable) return Response.json({ error: 'Collector timed out' }, { status: 503 });
+      const namespaceOwner = owner === 'human-owner-not-service' ? 'human-owner-not-service' : owner;
+      return Response.json({ workspace_owner_npub: namespaceOwner, scope: 'owner_app_namespace', provenance: 'workspace_apps + workspace_app_db_namespaces', truncated: false,
+        apps: owner === 'fixture-owner-b' ? [] : [{ app_npub: appNpub, app_name: 'Shared Notes', enabled: true, schema_name: 'wapp_fixture_notes', app_slug: 'notes', database_tables: 2, shared_rows: '7', shared_collections: 1 }], coverage: 'Metadata only; no bytes or row contents. Shared owner/app scope.' });
+    }
     if (path.endsWith('/apps') && req.method === 'GET') {
       if (delayApps && owner === 'fixture-owner-a') await new Promise<void>(r => { releaseApps = r; });
       return Response.json({ apps: apps[owner] || [] });
@@ -89,6 +97,23 @@ test('workspace console: signed bootstrap, isolation, consent boundaries, storag
     expect(await page.locator('#editWorkspace').isHidden()).toBe(true); expect(await page.locator('#addApp').isDisabled()).toBe(true); expect(await page.locator('#usage').textContent()).toContain('unavailable'); expect(await page.locator('#storage').textContent()).not.toContain('Example private file');
     await page.locator('[data-view="allApps"]').click(); await page.locator('#allApps').getByText('App list unavailable.', { exact: false }).first().waitFor(); expect(await page.locator('#allApps').textContent()).toContain('Example Member');
     await page.locator('#workspace').selectOption('typed:typed-fixture'); await page.locator('[data-view="overview"]').click(); await page.getByText('Partial estimate', { exact: true }).waitFor(); expect(await page.locator('#usage').textContent()).toContain('Unavailable'); expect(await page.locator('#workspaceIdentity').textContent()).toContain('typed-service'); expect(await page.locator('#addApp').isDisabled()).toBe(true); expect(requests.some(p => p.includes('/human-owner-not-service/apps'))).toBe(false);
+    await page.locator('#inventory').getByText('Shared Notes', { exact: true }).waitFor();
+    expect(await page.locator('#inventory').textContent()).toContain('wapp_fixture_notes');
+    expect(await page.locator('#inventory').textContent()).toContain('Shared app rows · workspace_app_rows7');
+    expect(await page.locator('#inventory').textContent()).toContain('may be shared across typed workspaces');
+    expect(await page.locator('#apps').textContent()).toContain('flightdeck_pg_workspaces.app_npub');
+    await page.locator('[data-view="allApps"]').click();
+    await page.locator('#allApps').getByText('No registrations at this owner address.', { exact: false }).waitFor();
+    expect(await page.locator('#view-allApps').textContent()).toContain('No cross-workspace byte total');
+    expect(await page.locator('#allApps').textContent()).toContain('same owner scope is not counted again');
+    inventoryDenied = true; await page.locator('[data-view="overview"]').click(); await page.locator('#refresh').click();
+    await page.locator('#inventory').getByText('Namespace inventory unavailable.', { exact: false }).waitFor();
+    expect(await page.locator('#inventory').textContent()).toContain('flightdeck_pg_workspaces.app_npub'); inventoryDenied = false;
+    inventoryUnavailable = true; await page.locator('[data-view="overview"]').click(); await page.locator('#refresh').click();
+    await page.locator('#inventory').getByText('Namespace inventory unavailable.', { exact: false }).waitFor();
+    expect(await page.locator('#inventory').textContent()).toContain('not an empty inventory');
+    expect(await page.locator('#inventory').textContent()).toContain('flightdeck_pg_workspaces.app_npub'); inventoryUnavailable = false;
+
     // Hold an old response while switching; it must never enter the new workspace.
     delayApps = true; await page.locator('#workspace').selectOption('fixture-owner-a');
     await page.waitForTimeout(100); await page.locator('#workspace').selectOption('fixture-owner-b'); releaseApps?.(); delayApps = false;
