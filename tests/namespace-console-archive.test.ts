@@ -9,6 +9,7 @@ import { previewNamespaceArchive, applyNamespaceArchive } from '../src/services/
 
 // All DML and concurrency fixtures live in a unique schema, never existing data.
 const schema = 'archive_test_' + randomUUID().replaceAll('-', '');
+const customSchema = 'wapp_fixture_' + randomUUID().replaceAll('-', '').slice(0,12);
 const key = new Uint8Array(32).fill(106), foreignKey = new Uint8Array(32).fill(107);
 const owner = nip19.npubEncode(getPublicKey(key)), other = nip19.npubEncode(getPublicKey(foreignKey));
 const appIdentity = nip19.npubEncode(getPublicKey(new Uint8Array(32).fill(108)));
@@ -19,12 +20,14 @@ const tables = ['workspace_apps','workspace_app_rows','workspace_app_db_namespac
 beforeAll(async () => {
   admin = postgres({ ...options(), max: 1 });
   await admin.unsafe(`CREATE SCHEMA "${schema}"`);
+  await admin.unsafe(`CREATE SCHEMA "${customSchema}"`);
+  await admin.unsafe(`CREATE TABLE "${customSchema}".content (id int, retained text); INSERT INTO "${customSchema}".content VALUES (1,'Retained custom row')`);
   db = postgres({ ...options(), max: 4, connection: { search_path: schema + ',public' } }); setDb(db);
   for (const t of tables) await db.unsafe(`CREATE TABLE "${schema}"."${t}" (LIKE public."${t}" INCLUDING ALL)`);
   await db`CREATE TABLE graph_fixture (owner_npub text, app_npub text, retained text)`;
   await db`INSERT INTO graph_fixture VALUES (${owner},${appIdentity},'unmeasured graph stays intact')`;
 });
-afterAll(async () => { if (db) await db.end(); if (admin) { await admin.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`); await admin.end(); } });
+afterAll(async () => { if (db) await db.end(); if (admin) { await admin.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`); await admin.unsafe(`DROP SCHEMA IF EXISTS "${customSchema}" CASCADE`); await admin.end(); } });
 async function seed(id = randomUUID(), address = owner) {
   await db`INSERT INTO workspace_apps (workspace_owner_npub,app_npub,app_name,created_by_npub,capabilities) VALUES (${address},${id},'Disposable registration',${address},'[]')`;
   return id;
@@ -54,14 +57,19 @@ test('preview is read-only; owner/app isolation, exact confirmation and signed t
 });
 test('populated and unknown stores are retained; restore and deterministic retry do not repeat transitions', async () => {
   const id = await seed(appIdentity);
-  await db`INSERT INTO workspace_app_rows (workspace_owner_npub,app_npub,collection,row_id,visibility,owner_npub,data,created_by_npub,updated_by_npub) VALUES (${owner},${id},'notes','one','personal',${owner},'{}',${owner},${owner})`;
-  const p = await preview(id); expect(p.entry.shared_rows).toBe('1'); expect(p.impact).toContain('not fully measured'); expect(p.impact).toContain('Permanent deletion is unavailable');
+  await db`INSERT INTO workspace_app_rows (workspace_owner_npub,app_npub,collection,row_id,visibility,owner_npub,data,created_by_npub,updated_by_npub) VALUES (${owner},${id},'notes','one','private',${owner},'{}',${owner},${owner})`;
+  await db`INSERT INTO workspace_app_db_namespaces (workspace_owner_npub,app_npub,schema_name,app_slug,provisioned_by_npub) VALUES (${owner},${id},${customSchema},'fixture',${owner})`;
+  await db`INSERT INTO workspace_app_schema_manifests (workspace_owner_npub,app_npub,schema_hash,owner_ciphertext,created_by_npub) VALUES (${owner},${id},'fixture-hash','fixture-ciphertext',${owner})`;
+  const p = await preview(id); expect(p.entry.shared_rows).toBe('1'); expect(p.entry.database_tables).toBe(1); expect(p.entry.schema_manifests).toBe(1); expect(p.impact).toContain('not fully measured'); expect(p.impact).toContain('Permanent deletion is unavailable');
   const result = await apply(p); const retry = await apply(p); expect(retry.replayed).toBe(true); expect(retry.archive_revision).toBe(result.archive_revision);
   const restored = await apply(await preview(id,'restore')); expect(restored.archived).toBe(false);
   expect((await apply(p)).archived).toBe(true); // original receipt, not a second archive
   const [state] = await db`SELECT archived,revision::text FROM namespace_console_archives WHERE workspace_owner_npub=${owner} AND app_npub=${id}`; expect(state!.archived).toBe(false); expect(state!.revision).toBe('2');
   const [row] = await db`SELECT count(*)::int count FROM workspace_app_rows WHERE app_npub=${id}`; expect(row!.count).toBe(1);
   expect((await db`SELECT * FROM graph_fixture`)).toHaveLength(1);
+  expect((await db.unsafe(`SELECT * FROM "${customSchema}".content`))).toHaveLength(1);
+  expect((await db`SELECT * FROM workspace_app_schema_manifests WHERE app_npub=${id}`)).toHaveLength(1);
+  expect((await db`SELECT * FROM workspace_app_db_namespaces WHERE app_npub=${id}`)).toHaveLength(1);
   const [registration] = await db`SELECT enabled FROM workspace_apps WHERE app_npub=${id}`; expect(registration!.enabled).toBe(true);
 });
 test('stale registration, sidecar and shared-count previews fail closed', async () => {
@@ -70,7 +78,7 @@ test('stale registration, sidecar and shared-count previews fail closed', async 
   await expect(apply(p)).rejects.toThrow('Preview changed');
   const p2 = await preview(id); await apply(await preview(id)); await expect(apply(p2)).rejects.toThrow('Preview changed');
   const p3 = await preview(id,'restore');
-  await db`INSERT INTO workspace_app_rows (workspace_owner_npub,app_npub,collection,row_id,visibility,owner_npub,data,created_by_npub,updated_by_npub) VALUES (${owner},${id},'notes','new','personal',${owner},'{}',${owner},${owner})`;
+  await db`INSERT INTO workspace_app_rows (workspace_owner_npub,app_npub,collection,row_id,visibility,owner_npub,data,created_by_npub,updated_by_npub) VALUES (${owner},${id},'notes','new','private',${owner},'{}',${owner},${owner})`;
   await expect(apply(p3)).rejects.toThrow('Preview changed');
 });
 test('active current publisher protected; same app at another owner and historical roles do not leak', async () => {
