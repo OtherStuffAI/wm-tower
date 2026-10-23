@@ -37,9 +37,9 @@ function normalizeLimit(value: string | undefined): number {
   return Math.min(parsed, 500);
 }
 
-async function requireWorkspaceManager(c: any, workspaceOwnerNpub: string, userNpub: string) {
+async function requireWorkspaceManager(c: any, workspaceOwnerNpub: string, userNpub: string, readOnly = false) {
   if (!workspaceOwnerNpub) return c.json({ error: 'workspaceOwnerNpub path param required' }, 400);
-  if (!(await canManageWorkspace(workspaceOwnerNpub, userNpub))) {
+  if (!(await canManageWorkspace(workspaceOwnerNpub, userNpub, { readOnly }))) {
     return c.json({ error: 'Not authorized to manage this workspace' }, 403);
   }
   return null;
@@ -211,7 +211,7 @@ workspaceBillingRouter.get('/:workspaceOwnerNpub/namespace-inventory', async (c)
   const auth = await requireNip98AuthResolved(c);
   if (auth instanceof Response) return auth;
   const owner = String(c.req.param('workspaceOwnerNpub') || '').trim();
-  const denied = await requireWorkspaceManager(c, owner, auth.userNpub);
+  const denied = await requireWorkspaceManager(c, owner, auth.userNpub, true);
   if (denied) return denied;
   c.header('Cache-Control', 'private, no-store');
   try { return c.json(await collectNamespaceInventory(owner)); }

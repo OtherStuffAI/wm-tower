@@ -332,13 +332,23 @@ export async function getWorkspaceCreator(workspaceOwnerNpub: string): Promise<s
   return workspace?.creator_npub ?? null;
 }
 
-export async function canManageWorkspace(workspaceOwnerNpub: string, actorNpub: string): Promise<boolean> {
+export async function canManageWorkspace(workspaceOwnerNpub: string, actorNpub: string, options: { readOnly?: boolean } = {}): Promise<boolean> {
   if (!workspaceOwnerNpub || !actorNpub) return false;
   // Resolve ws_key_npub → real user_npub if applicable
   const resolvedNpub = await resolveWsKeyNpub(actorNpub) ?? actorNpub;
   if (workspaceOwnerNpub === resolvedNpub) return true;
 
-  const ensuredWorkspace = await ensureWorkspaceAdminGroup(workspaceOwnerNpub);
+  // Inspection must not provision/repair groups as a side effect of a GET.
+  // Match the existing repair's choice of admin group without writing it.
+  const ensuredWorkspace = options.readOnly ? (await getDb()<V4Workspace[]>`
+    SELECT w.*, COALESCE(w.admin_group_id, (
+      SELECT g.id FROM v4_groups g
+      WHERE g.owner_npub = w.workspace_owner_npub AND g.group_kind = 'workspace_admin'
+      ORDER BY g.created_at ASC LIMIT 1
+    )) AS admin_group_id
+    FROM v4_workspaces w WHERE w.workspace_owner_npub = ${workspaceOwnerNpub}
+    LIMIT 1
+  `)[0] : await ensureWorkspaceAdminGroup(workspaceOwnerNpub);
   if (!ensuredWorkspace) return false;
   if (ensuredWorkspace.creator_npub === resolvedNpub) return true;
   if (!ensuredWorkspace.admin_group_id) return false;

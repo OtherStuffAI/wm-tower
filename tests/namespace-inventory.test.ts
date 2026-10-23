@@ -14,8 +14,8 @@ const owner = nip19.npubEncode(getPublicKey(ownerKey)), other = nip19.npubEncode
 const schema = 'inventory_test_' + randomUUID().replaceAll('-', '');
 let db: ReturnType<typeof postgres>;
 const app = createApp();
-const path = (address = owner) => '/api/v4/workspaces/' + address + '/namespace-inventory';
-function signed(address = owner, key = ownerKey) {
+const path = (address: string = owner) => '/api/v4/workspaces/' + address + '/namespace-inventory';
+function signed(address: string = owner, key = ownerKey) {
   const p = path(address);
   const event = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', 'http://localhost' + p], ['method', 'GET']], content: '' }, key);
   return app.request('http://localhost' + p, { headers: { Authorization: 'Nostr ' + Buffer.from(JSON.stringify(event)).toString('base64') } });
@@ -23,6 +23,10 @@ function signed(address = owner, key = ownerKey) {
 beforeAll(async () => {
   db = postgres({ host: config.db.host, port: config.db.port, database: config.db.database, username: config.db.user, password: config.db.password, max: 1, onnotice: () => {} });
   setDb(db);
+  await db`CREATE TEMP TABLE v4_workspaces (id uuid, workspace_owner_npub text, creator_npub text, admin_group_id uuid)`;
+  await db`CREATE TEMP TABLE v4_groups (id uuid, owner_npub text, group_kind text, created_at timestamptz)`;
+  await db`CREATE TEMP TABLE v4_group_members (group_id uuid, member_npub text)`;
+  await db`INSERT INTO v4_workspaces VALUES (${randomUUID()},'legacy-address',${owner},NULL)`;
   await db`CREATE TEMP TABLE workspace_apps (workspace_owner_npub text, app_npub text, app_name text, enabled boolean, capabilities jsonb)`;
   await db`CREATE TEMP TABLE workspace_app_db_namespaces (workspace_owner_npub text, app_npub text, schema_name text, app_slug text)`;
   await db`CREATE TEMP TABLE workspace_app_rows (workspace_owner_npub text, app_npub text, collection text)`;
@@ -56,7 +60,25 @@ test('foreign owner denied and unsigned caller rejected before inventory reads',
 });
 test('empty owner succeeds, failed collector is unavailable rather than empty', async () => {
   const empty = await collectNamespaceInventory('unregistered-owner', db); expect(empty.apps).toEqual([]); expect(empty.truncated).toBe(false);
-  await db`ALTER TABLE workspace_app_db_namespaces RENAME TO unavailable_namespace_fixture`;
+  await db`ALTER TABLE workspace_app_db_namespaces RENAME COLUMN app_npub TO unavailable_app_fixture`;
   try { const response = await signed(); expect(response.status).toBe(503); expect((await response.json()).apps).toBeUndefined(); }
-  finally { await db`ALTER TABLE unavailable_namespace_fixture RENAME TO workspace_app_db_namespaces`; }
+  finally { await db`ALTER TABLE workspace_app_db_namespaces RENAME COLUMN unavailable_app_fixture TO app_npub`; }
+});
+
+test('read-only legacy management check never repairs missing admin groups', async () => {
+  expect((await signed('legacy-address')).status).toBe(200);
+  const [workspace] = await db`SELECT admin_group_id FROM v4_workspaces WHERE workspace_owner_npub = 'legacy-address'`;
+  expect(workspace!.admin_group_id).toBeNull();
+  const [groups] = await db`SELECT count(*)::int AS count FROM v4_groups`; expect(groups!.count).toBe(0);
+});
+
+test('read-only lookup preserves existing admin group membership without repairing workspace', async () => {
+  const group = randomUUID();
+  await db`INSERT INTO v4_workspaces VALUES (${randomUUID()},'legacy-admin-address',${owner},NULL)`;
+  await db`INSERT INTO v4_groups VALUES (${group},'legacy-admin-address','workspace_admin',NOW())`;
+  await db`INSERT INTO v4_group_members VALUES (${group},${other})`;
+  expect((await signed('legacy-admin-address', otherKey)).status).toBe(200);
+  expect((await signed('legacy-address', otherKey)).status).toBe(403);
+  const [workspace] = await db`SELECT admin_group_id FROM v4_workspaces WHERE workspace_owner_npub = 'legacy-admin-address'`;
+  expect(workspace!.admin_group_id).toBeNull();
 });

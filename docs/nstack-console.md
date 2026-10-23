@@ -53,7 +53,8 @@ The namespace inventory adds a read-only, independently authorized view of
 enabled flags, shared app row/collection counts, allocated schema names and application table counts (excluding
 migration bookkeeping), with source and coverage labels. No schema allocation is
 interpreted as installation, online presence, row access or a byte measurement.
-The endpoint uses the existing owner-address management check, a read-only
+The endpoint uses the existing owner/creator/admin management policy through a
+read-only lookup (no implicit legacy admin-group repair), a read-only
 transaction, a three-second SQL budget and an explicit 500-registration cap.
 A denied or failed read stays unavailable; an empty successful list means only
 that no registrations were found for that address.
