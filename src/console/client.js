@@ -167,18 +167,58 @@ function inventoryContent(payload, w) {
   container.append(text('p', 'Owner/app namespace scope · ' + payload.workspace_owner_npub, 'app-id'));
   if (w.kind === 'typed') container.append(text('p', 'These registrations belong to the owner address and may be shared across typed workspaces. They are not installations in this workspace. Access is checked independently of typed membership and backing mappings.', 'hint'));
   container.append(text('p', 'Source: ' + payload.provenance, 'hint'));
-  const grid = document.createElement('div'); grid.className = 'cards';
-  for (const app of payload.apps || []) {
-    const card = document.createElement('article');
-    card.append(text('span', app.enabled ? 'Registered · enabled' : 'Registered · disabled', 'badge'), text('h3', app.app_name || app.app_slug || 'Unnamed registration'), text('p', app.app_npub, 'app-id'));
-    card.append(details([['Registration source', 'workspace_apps'], ['Shared app rows · workspace_app_rows', app.shared_rows ?? 'Unavailable'], ['Shared app collections', app.shared_collections == null ? 'Unavailable' : String(app.shared_collections)], ['WApp database schema', app.schema_name || 'No allocated schema recorded'], ['App tables in allocated schema', app.database_tables == null ? 'Not applicable' : String(app.database_tables)], ['Stored bytes', 'Unavailable — not measured by this inventory']]));
-    grid.append(card);
+  const archivedCount = (payload.apps || []).filter(a => a.archived).length;
+  const toggleLabel = text('label', 'Show archived entries (' + archivedCount + ')');
+  const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggleLabel.prepend(toggle);
+  container.append(toggleLabel);
+  const grid = document.createElement('div'); grid.className = 'cards'; container.append(grid);
+  function render() {
+    grid.replaceChildren();
+    for (const app of payload.apps || []) {
+      const active = app.active_installations > 0 || app.active_grants > 0 || app.active_launchers > 0;
+      if (app.archived && !toggle.checked && !active) continue;
+      const card = document.createElement('article');
+      card.append(text('span', app.archived ? 'Archived from console' : app.enabled ? 'Registered · enabled' : 'Registered · disabled', 'badge'), text('h3', app.app_name || app.app_slug || 'Unnamed registration'), text('p', app.app_npub, 'app-id'));
+      card.append(details([['Declared capabilities / services', app.capabilities?.join(', ') || 'None declared'], ['Graph data', 'Not measured here · declared capabilities do not establish quantity'], ['Registration source', 'workspace_apps'], ['Created', app.created_at ? new Date(app.created_at).toLocaleString() : 'Unavailable'], ['Publisher role at this owner', app.current_publishers > 0 ? 'Current publisher' : app.previous_publishers > 0 ? 'Previous publisher · history retained' : 'No publisher reference measured'], ['Active installation / grant / launcher', [app.active_installations, app.active_grants, app.active_launchers].map(v => v ?? 'Unavailable').join(' / ')], ['Shared app rows · workspace_app_rows', app.shared_rows ?? 'Unavailable'], ['Shared app collections', app.shared_collections == null ? 'Unavailable' : String(app.shared_collections)], ['WApp database schema', app.schema_name || 'No allocated schema recorded'], ['App tables in allocated schema', app.database_tables == null ? 'Not applicable' : String(app.database_tables)], ['Stored bytes', 'Unavailable — not measured by this inventory']]));
+      if (active && app.archived) card.append(text('p', 'Active publisher is shown despite its earlier archive preference. Restore entry to clear that preference.', 'hint'));
+      if (active && !app.archived) card.append(text('p', 'Archive protected: current publisher has active installation, grant or launcher references.', 'hint'));
+      else card.append(button(app.archived ? 'Restore entry' : 'Archive from console', () => reviewInventoryArchive(app, w)));
+      grid.append(card);
+    }
+    if (!grid.children.length) grid.append(text('p', archivedCount ? 'No unarchived registrations. Use Show archived entries to restore them.' : 'No registrations at this owner address. This does not prove no typed data or files exist.', 'hint'));
   }
-  if (!payload.apps?.length) container.append(text('p', 'No registrations at this owner address. This does not prove no typed data or files exist.', 'hint'));
-  else container.append(grid);
+  toggle.addEventListener('change', render); render();
   if (payload.truncated) container.append(text('p', 'Inventory truncated at 500 registrations; additional entries are not shown.', 'hint'));
   container.append(text('p', payload.coverage, 'hint'));
   return container;
+}
+async function reviewInventoryArchive(app, w) {
+  const session = state.session, generation = state.generation;
+  const action = app.archived ? 'restore' : 'archive';
+  const path = inventoryPath(w) + '/' + encodeURIComponent(app.app_npub);
+  const preview = await api(path + '/preview', 'POST', { action });
+  if (session !== state.session || !still(generation)) return;
+  const checkTarget = () => { if (session !== state.session || !still(generation)) throw new Error('Workspace or signer changed. Start a new review.'); };
+  checkTarget();
+  const entry = preview.entry;
+  const label = text('label', 'Type this exact confirmation: ' + preview.confirmation);
+  const input = document.createElement('input'); input.type = 'text'; input.autocomplete = 'off'; input.spellcheck = false;
+  input.id = 'archiveConfirmation'; label.htmlFor = input.id;
+  review(action === 'archive' ? 'Archive from console?' : 'Restore entry?', [
+    details([['Owner address · shared across workspaces', preview.workspace_owner_npub], ['Exact app identity', preview.app_npub], ['Name', entry.app_name], ['Created', entry.created_at], ['Shared rows retained', entry.shared_rows], ['Custom tables retained', entry.database_tables ?? 'No allocated schema'], ['Schema manifests retained', entry.schema_manifests], ['Typed workspace references retained', entry.typed_workspaces], ['Current / previous publisher references retained', entry.current_publishers + ' / ' + entry.previous_publishers], ['Active installation / grant / launcher', [entry.active_installations, entry.active_grants, entry.active_launchers].join(' / ')]]),
+    text('p', preview.impact), ...(preview.blocked_reason ? [text('p', preview.blocked_reason)] : []), label, input,
+  ], action === 'archive' ? 'Archive from console' : 'Restore entry', async () => {
+    checkTarget();
+    if (!preview.allowed || input.value !== preview.confirmation) throw new Error('Exact confirmation required.');
+    await api(path + '/visibility', 'POST', { action, preview_token: preview.preview_token, confirmation: input.value });
+    if (session === state.session) {
+      await loadInventory(state.active, state.generation);
+      if (state.view === 'allApps') await loadAllApps();
+      status(action === 'archive' ? 'Entry archived from console. All data and access retained.' : 'Entry restored to console. All data and access retained.');
+    }
+  });
+  const check = () => { $('approveReview').disabled = !preview.allowed || input.value !== preview.confirmation; };
+  input.addEventListener('input', check); check(); input.focus();
 }
 async function loadInventory(w, generation) {
   for (const id of ['inventory', 'appInventory']) empty(id, 'Loading namespace inventory…');
@@ -365,7 +405,7 @@ $('approveReview').addEventListener('click', async () => {
   const action = state.review; if (!action || $('approveReview').disabled) return;
   $('approveReview').disabled = true; $('cancelReview').disabled = true; $('reviewError').textContent = 'Waiting for your signer and backend…';
   try { await action(); $('reviewDialog').close(); state.review = null; }
-  catch (e) { $('reviewError').textContent = (e.message || 'Could not complete the request.') + ' You can cancel and refresh. Retrying workspace creation checks whether the same generated workspace was already saved; it never generates a second workspace after a submission.'; $('approveReview').textContent = 'Check result & retry'; }
+  catch (e) { $('reviewError').textContent = (e.message || 'Could not complete the request.') + ' You can cancel and refresh. Retrying uses the same reviewed request; a changed preview requires a new review.'; $('approveReview').textContent = 'Check result & retry'; }
   finally { $('approveReview').disabled = !state.review; $('cancelReview').disabled = false; }
 });
 $('cancelReview').addEventListener('click', () => { $('reviewDialog').close(); state.review = null; });

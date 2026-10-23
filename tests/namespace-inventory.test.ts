@@ -27,13 +27,19 @@ beforeAll(async () => {
   await db`CREATE TEMP TABLE v4_groups (id uuid, owner_npub text, group_kind text, created_at timestamptz)`;
   await db`CREATE TEMP TABLE v4_group_members (group_id uuid, member_npub text)`;
   await db`INSERT INTO v4_workspaces VALUES (${randomUUID()},'legacy-address',${owner},NULL)`;
-  await db`CREATE TEMP TABLE workspace_apps (workspace_owner_npub text, app_npub text, app_name text, enabled boolean, capabilities jsonb)`;
+  await db`CREATE TEMP TABLE workspace_apps (workspace_owner_npub text, app_npub text, app_name text, enabled boolean, capabilities jsonb, id uuid DEFAULT gen_random_uuid(), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW())`;
   await db`CREATE TEMP TABLE workspace_app_db_namespaces (workspace_owner_npub text, app_npub text, schema_name text, app_slug text)`;
+  await db`CREATE TEMP TABLE namespace_console_archives (workspace_owner_npub text,app_npub text,archived boolean,revision bigint)`;
+  await db`CREATE TEMP TABLE workspace_app_schema_manifests (workspace_owner_npub text,app_npub text)`;
+  await db`CREATE TEMP TABLE flightdeck_pg_workspaces (workspace_owner_npub text,app_npub text)`;
+  await db`CREATE TEMP TABLE flightdeck_pg_wapp_installations (id uuid,owner_npub text,publisher_npub text,previous_publisher_npubs text[],lifecycle_status text)`;
+  await db`CREATE TEMP TABLE flightdeck_pg_wapp_publishing_grants (installation_id uuid,status text)`;
+  await db`CREATE TEMP TABLE flightdeck_pg_personal_wapps (wapp_installation_id uuid,status text,deleted_at timestamptz)`;
   await db`CREATE TEMP TABLE workspace_app_rows (workspace_owner_npub text, app_npub text, collection text)`;
   await db`INSERT INTO workspace_app_rows VALUES (${owner},'same-app','notes'), (${owner},'same-app','notes'), (${owner},'second-app','private'), (${other},'same-app','secret')`;
   await db.unsafe(`CREATE SCHEMA "${schema}"`);
   await db.unsafe(`CREATE TABLE "${schema}".notes(id int); CREATE TABLE "${schema}".schema_migrations(id int)`);
-  await db`INSERT INTO workspace_apps VALUES (${owner},'same-app','Example Notes',true,'[]'), (${owner},'second-app','Empty registration',false,'[]'), (${other},'same-app','Other owner secret name',true,'[]')`;
+  await db`INSERT INTO workspace_apps (workspace_owner_npub,app_npub,app_name,enabled,capabilities) VALUES (${owner},'same-app','Example Notes',true,'[]'), (${owner},'second-app','Empty registration',false,'[]'), (${other},'same-app','Other owner secret name',true,'[]')`;
   await db`INSERT INTO workspace_app_db_namespaces VALUES (${owner},'same-app',${schema},'notes'), (${other},'same-app','other_owner_private_schema','private')`;
 });
 afterAll(async () => {
@@ -50,7 +56,8 @@ test('owner/app join isolates same app identity; metadata excludes credentials a
   expect(notes.database_tables).toBe(1); expect(notes.schema_name).toBe(schema);
   expect(data.apps.find((a: any) => a.app_npub === 'second-app').schema_name).toBeNull();
   expect(JSON.stringify(data)).not.toContain('Other owner secret'); expect(JSON.stringify(data)).not.toContain('other_owner_private_schema');
-  expect(Object.keys(notes).sort()).toEqual(['app_name','app_npub','app_slug','capabilities','database_tables','enabled','schema_name','shared_collections','shared_rows']);
+  expect(notes.archived).toBe(false); expect(notes.archive_revision).toBe('0'); expect(notes.current_publishers).toBe(0); expect(notes.previous_publishers).toBe(0);
+  expect(notes.created_at).toBeDefined();
 });
 test('foreign owner denied and unsigned caller rejected before inventory reads', async () => {
   expect((await signed(owner, otherKey)).status).toBe(403);

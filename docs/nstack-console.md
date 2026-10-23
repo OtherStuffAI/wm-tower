@@ -73,3 +73,45 @@ does not establish an independent database namespace. See the Sol repository's
 Generic app row contents, custom-schema row counts, schema bytes, graph, Git and external storage
 remain explicitly outside the namespace metadata report. Existing typed UUID
 usage and encrypted-record counters retain their separate coverage statements.
+
+Inventory cards also show registration dates and same-owner current/previous
+publisher references. A publisher is an installation identity and may differ
+from an app's graph identity. Rotation retains historical publisher identities;
+zero generic rows does not establish that a registration is unused.
+
+“Archive from console” is a reversible inventory preference, stored separately
+in `namespace_console_archives`. It does not unregister, uninstall, disable or
+permanently delete anything. Registration flags, all data, manifests, schema
+mappings, grants and runtime authority remain intact. Archived entries can be
+shown and restored; a current publisher with active installation, grant or
+launcher references always remains visible and is protected from new archive
+operations. This console does not claim to detect every running external app.
+Graph, custom-schema contents, legacy records, objects, Git and external stores
+are explicitly unmeasured and retained. Permanent deletion requires broader
+attribution and lifecycle/quiescence controls and has no endpoint here.
+
+Preview and apply use the owner-address management policy independently of typed
+membership. `POST /api/v4/workspaces/{owner}/namespace-inventory/{app}/preview`
+accepts `action: archive|restore`; it performs no writes and returns the exact
+owner/app pair, registration metadata, references, retained impact, short confirmation
+phrase (uppercase action plus the last eight app-identity characters), blocked reason and opaque preview token. Apply uses the sibling
+`/visibility` route with the same action, token and exact confirmation phrase.
+Tokens expire after five minutes or a Tower process restart. Invalid, stale,
+changed or blocked previews require another review; failed collectors never
+imply empty data. No confirmation request changes app data or access.
+
+Apply serializes on the exact registration row and matching same-owner current
+installation rows while rechecking metadata and active publisher references.
+No global table lock or cross-database transaction is used. Only archive metadata
+and an operation receipt are written. Observed changed counts or identity
+invalidate the preview. Later writes, new installations and grant/launcher
+activation can proceed and all data remains intact; newly active publishers
+always override the archive display filter. Registration upserts do not clear an
+archive preference. Lock/statement timeouts fail closed.
+
+Exact request receipts survive process restarts. Retrying a completed token with
+the same actor, owner, app, action and phrase returns the original outcome with
+`replayed: true`, even after a later restore/archive; it does not replay the
+transition or assert the current visibility. Refresh inventory for current state.
+Receipt metadata remains until an explicit future retention policy is introduced.
+A restart invalidates unapplied previews, so request a new preview in that case.

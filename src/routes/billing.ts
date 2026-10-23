@@ -1,3 +1,4 @@
+import { previewNamespaceArchive, applyNamespaceArchive } from '../services/namespace-console-archive';
 import { collectNamespaceInventory } from '../services/namespace-inventory';
 import { Hono } from 'hono';
 import { requireNip98AuthResolved } from '../auth';
@@ -216,6 +217,30 @@ workspaceBillingRouter.get('/:workspaceOwnerNpub/namespace-inventory', async (c)
   c.header('Cache-Control', 'private, no-store');
   try { return c.json(await collectNamespaceInventory(owner)); }
   catch { return c.json({ error: 'Namespace inventory unavailable' }, 503); }
+});
+
+// Console presentation only; no registration/data deletion or enabled-state change.
+workspaceBillingRouter.post('/:workspaceOwnerNpub/namespace-inventory/:appNpub/:operation', async (c) => {
+  const operation = c.req.param('operation');
+  if (operation !== 'preview' && operation !== 'visibility') return c.json({ error: 'Not found' }, 404);
+  const auth = await requireNip98AuthResolved(c);
+  if (auth instanceof Response) return auth;
+  const owner = String(c.req.param('workspaceOwnerNpub') || '').trim();
+  const app = String(c.req.param('appNpub') || '').trim();
+  const denied = await requireWorkspaceManager(c, owner, auth.userNpub, true);
+  if (denied) return denied;
+  c.header('Cache-Control', 'private, no-store');
+  const body = await c.req.json().catch(() => null);
+  if (!body || !['archive', 'restore'].includes(body.action)) return c.json({ error: 'action must be archive or restore' }, 400);
+  try {
+    return c.json(operation === 'preview'
+      ? await previewNamespaceArchive(owner, app, auth.userNpub, body.action)
+      : await applyNamespaceArchive(owner, app, auth.userNpub, body));
+  } catch (error: any) {
+    if (error.status) return c.json({ error: error.message }, error.status);
+    if (['40P01', '55P03', '57014', '40001'].includes(error.code)) return c.json({ error: 'Concurrent change or busy collector; retry with a new preview' }, 409);
+    return c.json({ error: 'Namespace visibility unavailable; no empty-data assumption was made' }, 503);
+  }
 });
 
 workspaceBillingRouter.get('/:workspaceOwnerNpub/apps', async (c) => {

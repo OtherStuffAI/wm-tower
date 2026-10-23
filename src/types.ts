@@ -3352,7 +3352,7 @@ export interface NamespaceInventory {
   workspace_owner_npub: string;
   scope: 'owner_app_namespace';
   provenance: string;
-  apps: { app_npub: string; app_name: string; enabled: boolean; capabilities: string[];
+  apps: { id: string; created_at: Date | string; updated_at: Date | string; archived: boolean; archive_revision: string; schema_manifests: number; typed_workspaces: number; current_publishers: number; previous_publishers: number; active_installations: number; active_grants: number; active_launchers: number; app_npub: string; app_name: string; enabled: boolean; capabilities: string[];
     schema_name: string | null; app_slug: string | null; database_tables: number | null; shared_rows: string; shared_collections: number }[];
   truncated: boolean;
   coverage: string;
