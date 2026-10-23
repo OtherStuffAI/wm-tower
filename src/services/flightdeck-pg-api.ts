@@ -6980,6 +6980,8 @@ export async function listVisibleFlightDeckPgEvents(
     FROM flightdeck_pg_outbox_events e
     LEFT JOIN flightdeck_pg_actors actor ON actor.id = e.actor_id
     WHERE e.workspace_id = ${input.workspaceId}
+      AND e.entity_type <> 'canvas_comment'
+      AND NOT starts_with(e.event_type, 'flightdeck_pg.canvas_comment.')
       AND e.row_version > ${input.afterRowVersion}
       AND (${input.throughRowVersion ?? null}::integer IS NULL OR e.row_version <= ${input.throughRowVersion ?? null})
       AND (
@@ -7134,7 +7136,7 @@ export async function listVisibleFlightDeckPgEvents(
           AND e.payload->>'viewer_actor_id' = ${input.actorId}
         )
         OR (
-          e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment')
+          e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element')
           AND EXISTS (
             SELECT 1
             FROM flightdeck_pg_canvases canvas
@@ -7174,7 +7176,7 @@ export async function listVisibleFlightDeckPgEvents(
           e.channel_id IS NULL
           AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','private_preference','org_data','feed_subscription','feed_item_state','context_component','context_reference')
           AND ${includeWorkspaceEvents}
-          AND e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment', 'canvas_order')
+          AND e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_order', 'canvas_comment')
         )
       )
     ORDER BY e.row_version ASC, e.created_at ASC, e.id ASC

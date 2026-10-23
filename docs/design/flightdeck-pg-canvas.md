@@ -1,7 +1,7 @@
 # Flight Deck PG Canvas authority
 
 Tower owns the shared Canvas definition, visibility, viewer order, naplet
-references, native elements, threaded comments, and presentation state. Ambulando owns the spatial rendering and its
+references, native elements and presentation state. Ambulando owns the spatial rendering and its
 viewer-partitioned Dexie projection. A Canvas is workspace-wide; it is not
 anchored to a scope or channel.
 
@@ -18,8 +18,6 @@ The NIP-98 surface is:
 - `DELETE /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/naplets/:napletId`
 - `POST /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/elements`
 - `PATCH/DELETE /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId`
-- `GET/POST /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/comments`
-- `PATCH /api/v4/flightdeck-pg/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId`
 
 Every route uses the normal resolved NIP-98 actor. Human and agent actors follow
 the same membership, stable-group and record permission path. List and snapshot
@@ -39,7 +37,7 @@ Canvases visible to the current actor and fails on a visibility-set race. This
 lets two actors order different restricted projections without turning a
 channel into the Canvas owner.
 
-Canvas, naplet, element and comment mutations require `expected_row_version`
+Canvas, naplet and element mutations require `expected_row_version`
 where they update or delete an existing row and use an
 atomic row-version predicate. Audit and outbox rows are written in the same
 transaction. Canvas outbox events receive an additional visibility filter;
@@ -47,11 +45,23 @@ restricted Canvas IDs and naplet IDs do not become generic workspace events.
 
 Native elements are Canvas-owned rows with a validated kind, bounded layout,
 JSON data, actor attribution, soft deletion, and monotonic row version.
-Comments are Canvas-owned root/reply rows anchored either to coordinates or a
-naplet. A reply inherits its root anchor. Any viewer may comment; resolving or
-reopening is limited to the comment author or a Canvas manager and uses CAS.
-Comment snapshots include authors and timestamps for browser and agent callers
-through the same signed API.
+Native canvas comments have been retired. Conversations use ordinary chat-thread
+naplets; document comments and task comments retain their existing contracts.
+Snapshots omit `comments`, and `spatial_context` contains only authorized item
+bounds. Old comment routes are absent (404); old clients cannot recreate rows.
+Clients must discard native comment caches and queued comment commands during
+upgrade through their normal TowerSyncService materialization boundary.
+
+Startup and bootstrap run `native_canvas_comments_retirement_v1` idempotently:
+drop the dedicated table (including its indexes and self/outgoing constraints),
+and delete pending, failed and historical native-comment outbox events. Delivery
+rows referencing those events cascade through their existing FK. No external
+table references native comments in the shipped schema; the drop deliberately
+omits CASCADE so unknown extensions fail safely. Native comments never belonged
+to the generic record-current/journal families or durable snapshot caches.
+Historical audit metadata is retained as history, not a replay source. Restarting
+Tower clears its process-local SSE buffer; outbox replay excludes retired events.
+Legacy drawing kinds, canvas ACLs and all other canvas records remain supported.
 
 ## Canonical source mapping
 
@@ -80,11 +90,6 @@ not-found records all become the same response:
 No source type, source ID, title, author, timestamps, counts, filename or content
 is included in this state. The explanatory sentence shown to a person remains a
 client concern.
-
-A naplet-anchored comment follows the same independent source boundary. If the
-viewer cannot read that naplet source, serialization degrades the anchor to its
-stored canvas coordinates and does not expose the naplet ID or protected source
-metadata.
 
 ## HTML boundary
 

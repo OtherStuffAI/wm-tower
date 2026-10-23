@@ -46,10 +46,6 @@ describe.skipIf(!port || port === 5432)('Canvas links signed API against disposa
     await db?.end();
     const admin = postgres({ ...connection, database: 'postgres' }); await admin.unsafe(`DROP DATABASE IF EXISTS ${database}`); await admin.end();
   });
-  async function create(body = 'Root', actor = 1, parent?: string) {
-    const result = await request('/comments', 'POST', actor, { body, parent_comment_id: parent, anchor: { type: 'canvas', x: 40, y: 60 } });
-    expect(result.status).toBe(201); return result.body.comment;
-  }
   test('title-only links preserve independent ACLs, support cycles and redact revocation/deletion', async () => {
     const b = (await request('', 'GET')).body; // Definition route confirms source canvas.
     expect(b.canvas.id).toBe(canvas);

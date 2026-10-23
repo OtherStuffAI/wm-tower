@@ -2,7 +2,6 @@ import { getDb } from '../db';
 import { createHash } from 'node:crypto';
 import type {
   FlightDeckPgCanvas,
-  FlightDeckPgCanvasComment,
   FlightDeckPgCanvasElement,
   FlightDeckPgCanvasElementKind,
   FlightDeckPgCanvasLayout,
@@ -56,11 +55,6 @@ export type CanvasDeniedNaplet = {
   access: 'denied';
   layout: FlightDeckPgCanvasLayout;
   row_version: number;
-};
-
-export type CanvasCommentView = FlightDeckPgCanvasComment & {
-  author_npub: string;
-  author_label: string | null;
 };
 
 export class FlightDeckPgCanvasConflictError extends Error {
@@ -150,11 +144,6 @@ export function normalizeFlightDeckPgCanvasElementLayout(value: unknown): Flight
     height: Math.max(8, Math.min(4000, Math.round(finite(layout.height, 100)))),
     z: Math.max(1, Math.min(100000, Math.round(finite(layout.z, 1)))),
   };
-}
-
-export function normalizeFlightDeckPgCanvasAnchor(value: unknown) {
-  const anchor = asJson(value);
-  return { x: Math.round(finite(anchor.x, 0)), y: Math.round(finite(anchor.y, 0)) };
 }
 
 export function serializeFlightDeckPgCanvas(canvas: FlightDeckPgCanvasView) {
@@ -527,148 +516,6 @@ export async function deleteFlightDeckPgCanvasElement(
   return requireFlightDeckPgCanvasMutation(element, 'Canvas element row_version is stale');
 }
 
-export async function listFlightDeckPgCanvasComments(workspaceId: string, canvasId: string, sql: DbClient = getDb()) {
-  return sql<CanvasCommentView[]>`
-    SELECT c.*, a.npub AS author_npub, a.display_name AS author_label
-    FROM flightdeck_pg_canvas_comments c
-    JOIN flightdeck_pg_actors a ON a.id = c.created_by_actor_id
-    WHERE c.workspace_id = ${workspaceId} AND c.canvas_id = ${canvasId} AND c.deleted_at IS NULL
-    ORDER BY c.created_at, c.id
-  `;
-}
-
-export function canvasCommentPermissions(comment: CanvasCommentView, comments: CanvasCommentView[], actorId: string, canManage: boolean) {
-  const owns = comment.created_by_actor_id === actorId;
-  const root = !comment.parent_comment_id;
-  return {
-    can_delete: canManage || (owns && (!root || comments.filter(row => row.parent_comment_id === comment.id).every(row => row.created_by_actor_id === actorId))),
-    can_retarget: root && (canManage || owns),
-    retarget_preserves_position: true,
-    can_resolve: root && (canManage || owns),
-  };
-}
-
-export function serializeFlightDeckPgCanvasComment(comment: CanvasCommentView, readableNapletIds?: Set<string>) {
-  const napletReadable = comment.anchor_type !== 'naplet' || Boolean(comment.anchor_naplet_id && readableNapletIds?.has(comment.anchor_naplet_id));
-  return {
-    id: comment.id,
-    anchor: comment.anchor_type === 'naplet' && napletReadable
-      ? { type: 'naplet', naplet_id: comment.anchor_naplet_id, ...(comment.anchor.positioned ? normalizeFlightDeckPgCanvasAnchor(comment.anchor) : {}) }
-      : { type: 'canvas', ...normalizeFlightDeckPgCanvasAnchor(comment.anchor) },
-    parent_comment_id: comment.parent_comment_id,
-    body: comment.body,
-    resolved_at: comment.resolved_at,
-    author: { actor_id: comment.created_by_actor_id, npub: comment.author_npub, label: comment.author_label || comment.author_npub },
-    row_version: Number(comment.row_version),
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-  };
-}
-
-export async function createFlightDeckPgCanvasComment(
-  input: { workspaceId: string; canvasId: string; actorId: string; anchorType: 'canvas' | 'naplet'; anchorNapletId?: string | null; anchor: { x: number; y: number; positioned?: boolean }; parentCommentId?: string | null; body: string },
-  sql: DbClient = getDb(),
-) {
-  let anchorType = input.anchorType;
-  let anchorNapletId = input.anchorNapletId ?? null;
-  let anchor = input.anchor;
-  if (input.parentCommentId) {
-    const [parent] = await sql<{ id: string; parent_comment_id: string | null; anchor_type: 'canvas' | 'naplet'; anchor_naplet_id: string | null; anchor: { x: number; y: number; positioned?: boolean } }[]>`
-      SELECT id, parent_comment_id, anchor_type, anchor_naplet_id, anchor FROM flightdeck_pg_canvas_comments
-      WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${input.parentCommentId} AND deleted_at IS NULL
-      FOR UPDATE
-    `;
-    if (!parent || parent.parent_comment_id) throw new FlightDeckPgCanvasValidationError('parent_comment_id must identify a root Canvas comment');
-    anchorType = parent.anchor_type;
-    anchorNapletId = parent.anchor_naplet_id;
-    anchor = parent.anchor;
-  }
-  if (anchorType === 'naplet') {
-    const [naplet] = await sql<{ id: string }[]>`
-      SELECT id FROM flightdeck_pg_canvas_naplets
-      WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${anchorNapletId} AND deleted_at IS NULL
-    `;
-    if (!naplet) throw new FlightDeckPgCanvasValidationError('anchor naplet is unavailable');
-  }
-  const [comment] = await sql<CanvasCommentView[]>`
-    INSERT INTO flightdeck_pg_canvas_comments
-      (workspace_id, canvas_id, anchor_type, anchor_naplet_id, anchor, parent_comment_id, body, created_by_actor_id, updated_by_actor_id)
-    VALUES (${input.workspaceId}, ${input.canvasId}, ${anchorType}, ${anchorNapletId}, ${sql.json(anchor as any)}, ${input.parentCommentId ?? null}, ${input.body}, ${input.actorId}, ${input.actorId})
-    RETURNING *, ''::text AS author_npub, NULL::text AS author_label
-  `;
-  return comment;
-}
-
-export async function setFlightDeckPgCanvasCommentResolved(
-  input: { workspaceId: string; canvasId: string; commentId: string; actorId: string; expectedRowVersion: number; resolved: boolean },
-  sql: DbClient = getDb(),
-) {
-  const [comment] = await sql<CanvasCommentView[]>`
-    UPDATE flightdeck_pg_canvas_comments SET
-      resolved_at = CASE WHEN ${input.resolved} THEN NOW() ELSE NULL END,
-      resolved_by_actor_id = CASE WHEN ${input.resolved} THEN ${input.actorId}::uuid ELSE NULL END,
-      updated_by_actor_id = ${input.actorId}, row_version = row_version + 1, updated_at = NOW()
-    WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${input.commentId}
-      AND parent_comment_id IS NULL AND deleted_at IS NULL AND row_version = ${input.expectedRowVersion}
-    RETURNING *, ''::text AS author_npub, NULL::text AS author_label
-  `;
-  return requireFlightDeckPgCanvasMutation(comment, 'Canvas comment row_version is stale');
-}
-
-export async function retargetFlightDeckPgCanvasComment(
-  input: { workspaceId: string; canvasId: string; commentId: string; actorId: string; expectedRowVersion: number; anchorType: 'canvas' | 'naplet'; anchorNapletId: string | null; anchor: { x: number; y: number; positioned?: boolean } },
-  sql: DbClient = getDb(),
-) {
-  // Root CAS also serializes with reply creation and deletion's root lock.
-  const [comment] = await sql<CanvasCommentView[]>`
-    UPDATE flightdeck_pg_canvas_comments SET anchor_type = ${input.anchorType}, anchor_naplet_id = ${input.anchorNapletId},
-      anchor = ${sql.json(input.anchor as any)}, updated_by_actor_id = ${input.actorId}, row_version = row_version + 1, updated_at = NOW()
-    WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${input.commentId}
-      AND parent_comment_id IS NULL AND deleted_at IS NULL AND row_version = ${input.expectedRowVersion}
-    RETURNING *, ''::text AS author_npub, NULL::text AS author_label
-  `;
-  requireFlightDeckPgCanvasMutation(comment, 'Canvas comment row_version is stale');
-  await sql`
-    UPDATE flightdeck_pg_canvas_comments SET anchor_type = ${input.anchorType}, anchor_naplet_id = ${input.anchorNapletId},
-      anchor = ${sql.json(input.anchor as any)}, updated_by_actor_id = ${input.actorId}, row_version = row_version + 1, updated_at = NOW()
-    WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND parent_comment_id = ${input.commentId} AND deleted_at IS NULL
-  `;
-  return comment;
-}
-
-export class CanvasCommentPermissionError extends Error {}
-
-export function assertCanvasCommentDeletion(comment: CanvasCommentView, comments: CanvasCommentView[], actorId: string, canManage: boolean, expectedReplies?: Record<string, number>) {
-  if (!canvasCommentPermissions(comment, comments, actorId, canManage).can_delete) throw new CanvasCommentPermissionError('Only the author or a Canvas manager may delete; threads containing other authors require a manager');
-  if (!comment.parent_comment_id) {
-    const replies = comments.filter(row => row.parent_comment_id === comment.id);
-    if (!expectedReplies || Object.keys(expectedReplies).length !== replies.length || replies.some(row => expectedReplies[row.id] !== Number(row.row_version))) {
-      throw new FlightDeckPgCanvasConflictError('Replies changed; refresh and confirm the thread again');
-    }
-  }
-}
-
-export async function deleteFlightDeckPgCanvasComment(
-  input: { workspaceId: string; canvasId: string; commentId: string; actorId: string; canManage: boolean; expectedRowVersion: number; expectedReplies?: Record<string, number> },
-  sql: DbClient = getDb(),
-) {
-  const [existing] = await sql<CanvasCommentView[]>`SELECT * FROM flightdeck_pg_canvas_comments WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${input.commentId} AND deleted_at IS NULL`;
-  if (!existing) throw new FlightDeckPgCanvasConflictError('Canvas comment no longer exists');
-  // All mutations lock root before reply; new replies also hold this lock.
-  const [root] = await sql<CanvasCommentView[]>`SELECT * FROM flightdeck_pg_canvas_comments WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND id = ${existing.parent_comment_id || existing.id} AND deleted_at IS NULL FOR UPDATE`;
-  if (!root) throw new FlightDeckPgCanvasConflictError('Canvas thread no longer exists');
-  const comments = await listFlightDeckPgCanvasComments(input.workspaceId, input.canvasId, sql);
-  const comment = comments.find(row => row.id === input.commentId);
-  if (!comment || Number(comment.row_version) !== input.expectedRowVersion) throw new FlightDeckPgCanvasConflictError('Canvas comment row_version is stale');
-  assertCanvasCommentDeletion(comment, comments, input.actorId, input.canManage, input.expectedReplies);
-  return sql<CanvasCommentView[]>`
-    UPDATE flightdeck_pg_canvas_comments SET deleted_at = NOW(), updated_at = NOW(), updated_by_actor_id = ${input.actorId}, row_version = row_version + 1
-    WHERE workspace_id = ${input.workspaceId} AND canvas_id = ${input.canvasId} AND deleted_at IS NULL
-      AND (id = ${input.commentId} OR parent_comment_id = ${input.commentId})
-    RETURNING *, ''::text AS author_npub, NULL::text AS author_label
-  `;
-}
-
 function decodeUtf8(bytes: Uint8Array) {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
@@ -827,7 +674,7 @@ export async function createFlightDeckPgCanvasOutboxEvent(
     workspaceId: string;
     actorId: string;
     eventType: string;
-    entityType: 'canvas' | 'canvas_naplet' | 'canvas_order' | 'canvas_element' | 'canvas_comment';
+    entityType: 'canvas' | 'canvas_naplet' | 'canvas_order' | 'canvas_element';
     entityId: string;
     operation: string;
     entityRowVersion?: number | null;

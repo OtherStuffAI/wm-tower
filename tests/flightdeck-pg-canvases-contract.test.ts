@@ -14,7 +14,6 @@ import {
   requireFlightDeckPgCanvasMutation,
   serializeAuthorizedFlightDeckPgCanvasNaplet,
   serializeFlightDeckPgCanvas,
-  serializeFlightDeckPgCanvasComment,
 } from '../src/services/flightdeck-pg-canvases';
 import { HTML_ARTIFACT_MANIFEST_ID, HTML_ARTIFACT_MAX_ASSETS, htmlArtifactDigestMatches, parseHtmlArtifactManifest } from '../src/services/flightdeck-pg-html-artifacts';
 
@@ -120,15 +119,14 @@ describe('Flight Deck PG Canvas source contract', () => {
     expect(spec.paths[`${root}/{canvasId}/elements`].post).toBeDefined();
     expect(spec.paths[`${root}/{canvasId}/elements/{elementId}`].patch.responses['409']).toBeDefined();
     expect(spec.paths[`${root}/{canvasId}/elements/{elementId}`].delete.responses['409']).toBeDefined();
-    expect(spec.paths[`${root}/{canvasId}/comments`].get.description).toMatch(/agent/i);
-    expect(spec.paths[`${root}/{canvasId}/comments`].post).toBeDefined();
-    expect(spec.paths[`${root}/{canvasId}/comments/{commentId}`].patch.responses['409']).toBeDefined();
+    expect(spec.paths[`${root}/{canvasId}/comments`]).toBeUndefined();
+    expect(spec.paths[`${root}/{canvasId}/comments/{commentId}`]).toBeUndefined();
     expect(spec.components.schemas.FlightDeckPgCanvasNapletReady.properties.source.properties.type.enum).toEqual(['document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas']);
     expect(spec.components.schemas.FlightDeckPgCanvasNapletDenied.additionalProperties).toBe(false);
     expect(spec.components.schemas.FlightDeckPgCanvasElement.properties.kind.enum).toContain('text');
   });
 
-  test('registers the complete signed Canvas interaction and comment surface', () => {
+  test('registers the complete signed Canvas interaction surface', () => {
     const routes = readFileSync(new URL('../src/routes/flightdeck-pg.ts', import.meta.url), 'utf8');
     const expected = [
       ['get', '/workspaces/:workspaceId/canvases'],
@@ -144,21 +142,17 @@ describe('Flight Deck PG Canvas source contract', () => {
       ['post', '/workspaces/:workspaceId/canvases/:canvasId/elements'],
       ['patch', '/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId'],
       ['delete', '/workspaces/:workspaceId/canvases/:canvasId/elements/:elementId'],
-      ['get', '/workspaces/:workspaceId/canvases/:canvasId/comments'],
-      ['post', '/workspaces/:workspaceId/canvases/:canvasId/comments'],
-      ['patch', '/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId'],
-      ['delete', '/workspaces/:workspaceId/canvases/:canvasId/comments/:commentId'],
     ];
     for (const [method, path] of expected) {
       expect(routes).toContain(`flightDeckPgRouter.${method}('${path}'`);
     }
-    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(17);
+    expect(routes.match(/flightDeckPgRouter\.(?:get|post|put|patch|delete)\('\/workspaces\/:workspaceId\/canvases/g)?.length).toBe(13);
   });
 
   test('bootstraps and runtime-migrates dedicated Canvas authority tables', () => {
     const bootstrap = readFileSync(new URL('../src/schema/001_init.sql', import.meta.url), 'utf8');
     const runtime = readFileSync(new URL('../src/schema/ensure-runtime-schema.ts', import.meta.url), 'utf8');
-    for (const table of ['flightdeck_pg_canvases', 'flightdeck_pg_canvas_visibility_principals', 'flightdeck_pg_canvas_orders', 'flightdeck_pg_canvas_naplets', 'flightdeck_pg_canvas_elements', 'flightdeck_pg_canvas_comments']) {
+    for (const table of ['flightdeck_pg_canvases', 'flightdeck_pg_canvas_visibility_principals', 'flightdeck_pg_canvas_orders', 'flightdeck_pg_canvas_naplets', 'flightdeck_pg_canvas_elements']) {
       expect(bootstrap).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
     }
     expect(bootstrap).toContain("CHECK (source_type IN ('document', 'task_list', 'task_tree', 'chat_thread', 'html', 'excalidraw', 'canvas'))");
@@ -166,26 +160,6 @@ describe('Flight Deck PG Canvas source contract', () => {
     expect(bootstrap).toContain('REFERENCES flightdeck_pg_workspace_memberships(workspace_id, actor_id)');
     expect(bootstrap).toContain('REFERENCES flightdeck_pg_groups(workspace_id, id)');
     expect(runtime).toContain("split('-- flightdeck_pg_canvas_v1')");
-  });
-
-  test('redacts a naplet comment anchor unless that source is independently readable', () => {
-    const comment = {
-      id: uuid('70'), workspace_id: uuid('11'), canvas_id: uuid('10'), anchor_type: 'naplet' as const,
-      anchor_naplet_id: uuid('20'), anchor: { x: 8, y: 9 }, parent_comment_id: null, body: 'Discuss this item',
-      resolved_at: null, resolved_by_actor_id: null, created_by_actor_id: uuid('1'), updated_by_actor_id: uuid('1'),
-      author_npub: 'npub-author', author_label: 'Author', row_version: 1, created_at: new Date(), updated_at: new Date(), deleted_at: null,
-    };
-    expect(serializeFlightDeckPgCanvasComment(comment, new Set([uuid('20')])).anchor).toEqual({ type: 'naplet', naplet_id: uuid('20') });
-    const denied = serializeFlightDeckPgCanvasComment(comment, new Set());
-    expect(denied.anchor).toEqual({ type: 'canvas', x: 8, y: 9 });
-    expect(JSON.stringify(denied.anchor)).not.toContain(uuid('20'));
-  });
-
-  test('requires independent source access before creating a root naplet-anchored comment', () => {
-    const routes = readFileSync(new URL('../src/routes/flightdeck-pg.ts', import.meta.url), 'utf8');
-    expect(routes).toContain("authorized.access !== 'ready'");
-    expect(routes).toContain("'canvas_anchor_unavailable'");
-    expect(routes).toContain("anchor.type must be canvas or naplet");
   });
 
   test('source resolver independently applies every canonical family permission and immutable HTML version boundary', () => {
@@ -253,10 +227,10 @@ describe('Flight Deck PG Canvas source contract', () => {
     const api = readFileSync(new URL('../src/services/flightdeck-pg-api.ts', import.meta.url), 'utf8');
     expect(api).toContain("e.entity_type = 'canvas_order'");
     expect(api).toContain("e.payload->>'viewer_actor_id'");
-    expect(api).toContain("e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment')");
+    expect(api).toContain("e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element')");
     expect(api).toContain('flightdeck_pg_canvas_visibility_principals');
-    expect(api).toContain("e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment', 'canvas_order')");
-    expect(api.indexOf("e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment')"))
-      .toBeLessThan(api.indexOf("e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_comment', 'canvas_order')"));
+    expect(api).toContain("e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_order', 'canvas_comment')");
+    expect(api.indexOf("e.entity_type IN ('canvas', 'canvas_naplet', 'canvas_element')"))
+      .toBeLessThan(api.indexOf("e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_order', 'canvas_comment')"));
   });
 });
