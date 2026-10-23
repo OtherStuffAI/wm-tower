@@ -28,7 +28,7 @@ beforeAll(async () => {
   await db`INSERT INTO graph_fixture VALUES (${owner},${appIdentity},'unmeasured graph stays intact')`;
 });
 afterAll(async () => { if (db) await db.end(); if (admin) { await admin.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`); await admin.unsafe(`DROP SCHEMA IF EXISTS "${customSchema}" CASCADE`); await admin.end(); } });
-async function seed(id = randomUUID(), address = owner) {
+async function seed(id: string = randomUUID(), address = owner) {
   await db`INSERT INTO workspace_apps (workspace_owner_npub,app_npub,app_name,created_by_npub,capabilities) VALUES (${address},${id},'Disposable registration',${address},'[]')`;
   return id;
 }
@@ -93,7 +93,7 @@ test('concurrent registration update before target lock invalidates preview; con
   const id = await seed(); const p = await preview(id);
   let locked!: () => void, release!: () => void;
   const ready = new Promise<void>(r => locked=r), gate = new Promise<void>(r => release=r);
-  const writer = db.begin(async tx => { await tx`UPDATE workspace_apps SET app_name='Concurrent registration' WHERE app_npub=${id}`; locked(); await gate; });
+  const writer = db.begin(async transaction => { const tx = transaction as unknown as typeof db; await tx`UPDATE workspace_apps SET app_name='Concurrent registration' WHERE app_npub=${id}`; locked(); await gate; });
   await ready; const mutation = apply(p); release(); await writer;
   await expect(mutation).rejects.toThrow('Preview changed');
   const current = await preview(id); const results = await Promise.all([apply(current),apply(current)]); expect(results.filter(r=>r.replayed)).toHaveLength(1);
@@ -110,7 +110,7 @@ test('waiting on selected registration never blocks an unrelated owner writer', 
   const id = await seed(); const p = await preview(id);
   let locked!:()=>void, release!:()=>void;
   const ready = new Promise<void>(r=>locked=r), gate = new Promise<void>(r=>release=r);
-  const holder = db.begin(async tx=>{await tx`SELECT id FROM workspace_apps WHERE workspace_owner_npub=${owner} AND app_npub=${id} FOR UPDATE`;locked();await gate;});
+  const holder = db.begin(async transaction=>{const tx = transaction as unknown as typeof db; await tx`SELECT id FROM workspace_apps WHERE workspace_owner_npub=${owner} AND app_npub=${id} FOR UPDATE`;locked();await gate;});
   await ready; const pending = apply(p);
   try {
     const write = seed(randomUUID(),other);

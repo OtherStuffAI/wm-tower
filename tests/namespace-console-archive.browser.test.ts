@@ -79,9 +79,15 @@ test('console archive preview/cancel/short confirmation/restore and second-works
     expect(mutations.at(-1).address).toBe('fixture-second-owner');
     for (const width of [1440,390]) {
       await page.setViewportSize({width,height:1000});await page.locator('[data-view="overview"]').click();
+      if (process.env.CONSOLE_SCREENSHOT_DIR) await page.screenshot({path:process.env.CONSOLE_SCREENSHOT_DIR+'/archive-inventory-'+width+'.png',fullPage:true});
       await historical().getByRole('button',{name:'Archive from console'}).click();
+      await page.locator('#archiveConfirmation').waitFor();
+      expect(await page.locator('#reviewDialog').evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
-      if (process.env.CONSOLE_SCREENSHOT_DIR) await page.screenshot({path:process.env.CONSOLE_SCREENSHOT_DIR+'/archive-'+width+'.png',fullPage:true});
+      if (process.env.CONSOLE_SCREENSHOT_DIR) await page.screenshot({path:process.env.CONSOLE_SCREENSHOT_DIR+'/archive-'+width+'.png',fullPage:false});
+      await page.locator('#approveReview').scrollIntoViewIfNeeded();
+      const bounds = await page.locator('#approveReview').boundingBox(); expect(bounds!.y + bounds!.height <= 1000).toBe(true);
+      if (process.env.CONSOLE_SCREENSHOT_DIR) await page.screenshot({path:process.env.CONSOLE_SCREENSHOT_DIR+'/archive-actions-'+width+'.png'});
       await page.keyboard.press('Escape'); expect(mutations).toHaveLength(4);
     }
     expect(errors).toEqual([]);expect(previews.length).toBeGreaterThan(4);

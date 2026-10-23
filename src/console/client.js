@@ -168,7 +168,7 @@ function inventoryContent(payload, w) {
   if (w.kind === 'typed') container.append(text('p', 'These registrations belong to the owner address and may be shared across typed workspaces. They are not installations in this workspace. Access is checked independently of typed membership and backing mappings.', 'hint'));
   container.append(text('p', 'Source: ' + payload.provenance, 'hint'));
   const archivedCount = (payload.apps || []).filter(a => a.archived).length;
-  const toggleLabel = text('label', 'Show archived entries (' + archivedCount + ')');
+  const toggleLabel = text('label', 'Show archived entries (' + archivedCount + ')', 'archive-toggle');
   const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggleLabel.prepend(toggle);
   container.append(toggleLabel);
   const grid = document.createElement('div'); grid.className = 'cards'; container.append(grid);
