@@ -84,6 +84,13 @@ Provider configuration (secret-env custody: `NAME` or `NAME_FILE`; the key is ne
 | `NOTIF_PUBLIC_ORIGIN` | recommended | https origin written to `fd.origin` (otherwise the https origin seen at registration is used) |
 | `NOTIF_ALERTS` | no (`on`) | `off` stops the alert worker (registry and inbox keep working) |
 
+Docker (local compose): `docker-compose.prod.yml` forwards all of these to the `b3` container (empty defaults) and mounts the **directory**
+`TOWER_APNS_SECRETS_DIR` (default `./.runtime/tower-apns-secrets`, gitignored, created by `rebuild_deploy_docker.sh`) read-only at
+`/run/tower-apns-secrets`. A directory mount is valid and empty when no key exists, so an unconfigured Tower starts healthy. To enable (operator, not tooling):
+put the key at `.runtime/tower-apns-secrets/apns-auth-key.p8` (`chmod 600`), then in `.env.prod` set `APNS_KEY_ID`, `APNS_TEAM_ID`,
+`APNS_TOPIC`, `APNS_AUTH_KEY_FILE=/run/tower-apns-secrets/apns-auth-key.p8` (and `NOTIF_PUBLIC_ORIGIN`), and run `./rebuild_deploy_docker.sh`.
+Never set the raw key inline in compose or the env file. Startup logs `APNs provider ready` or `not ready: <reason>` (no values).
+
 Missing key/id/team/topic ⇒ the provider is **not ready**: descriptor shows `alerts:false`, registration answers `delivery.ready=false`, and no alert is queued.
 Debug (Xcode-installed) builds use `sandbox` tokens and `api.sandbox.push.apple.com`; TestFlight/App Store use `production`. One key created for
 "Sandbox & Production" serves both. Operator view: `GET …/admin/notifications/queue` → `queue.alerts` (states, oldest pending age, provider readiness, breaker).

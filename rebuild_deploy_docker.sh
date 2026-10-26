@@ -72,6 +72,9 @@ else
   exit 1
 fi
 
+# Read-only APNs key directory mounted into Tower; empty (no key) is a valid, healthy state.
+mkdir -p "$SCRIPT_DIR/.runtime/tower-apns-secrets"
+
 COMPOSE=("${DC[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 source "$SCRIPT_DIR/docker/compose-fips-options.sh"
 append_tower_fips_options

@@ -369,6 +369,8 @@ export function startAlertWorker(sql: Sql = getDb()) {
     return stopAlertWorker;
   }
   alertStatus.running = true;
+  const readiness = loadApnsConfig();
+  console.log(readiness.ready ? '[notifications] APNs provider ready' : `[notifications] APNs provider not ready: ${readiness.reason} (inbox and registry unaffected)`);
   const tick = async () => {
     if (busy) return;
     busy = true;

@@ -210,12 +210,25 @@ services:
       GIT_OIDC_SIGNING_KEY: ""
       GIT_OIDC_SIGNING_KEY_FILE: /run/tower-git-secrets/git-oidc-signing-key.pem
       GIT_OIDC_REDIRECT_URI: ${GIT_OIDC_REDIRECT_URI:-}
+      # APNs push provider (optional). Unset = provider_not_configured: Tower stays healthy and the inbox/registry keep working.
+      # Key custody: APNS_AUTH_KEY_FILE must point under /run/tower-apns-secrets (read-only mount of TOWER_APNS_SECRETS_DIR).
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_TOPIC: ${APNS_TOPIC:-}
+      APNS_CLIENT_APP_ID: ${APNS_CLIENT_APP_ID:-ambulando}
+      APNS_EXTRA_TOPICS: ${APNS_EXTRA_TOPICS:-}
+      APNS_ENVIRONMENTS: ${APNS_ENVIRONMENTS:-sandbox,production}
+      APNS_AUTH_KEY_FILE: ${APNS_AUTH_KEY_FILE:-}
+      NOTIF_PUBLIC_ORIGIN: ${NOTIF_PUBLIC_ORIGIN:-}
+      NOTIF_ALERTS: ${NOTIF_ALERTS:-on}
       DB_WAIT_MAX_ATTEMPTS: ${DB_WAIT_MAX_ATTEMPTS:-40}
     ports:
       - "${TOWER_HOST_BIND_ADDRESS:-127.0.0.1}:${TOWER_HOST_PORT:-3100}:3100"
     volumes:
       - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-oidc-client-secret:/run/tower-git-secrets/git-oidc-client-secret:ro
       - ${TOWER_GIT_SECRETS_DIR:-./.runtime/tower-git-secrets}/git-oidc-signing-key.pem:/run/tower-git-secrets/git-oidc-signing-key.pem:ro
+      # Directory mount (not a file mount): it is valid and empty when no APNs key exists, so an unconfigured Tower starts normally.
+      - ${TOWER_APNS_SECRETS_DIR:-./.runtime/tower-apns-secrets}:/run/tower-apns-secrets:ro
     networks:
       default:
       git-private:
