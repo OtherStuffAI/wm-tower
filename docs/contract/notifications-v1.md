@@ -161,8 +161,10 @@ items visible to the client app. `badge` = those with severity ≥ normal (see M
 also set read (`read_reason` kept if already read else `user`). `read:false` clears `read_at`.
 Optional `observed_change_seq`: if present and `< item.change_seq` ⇒ 409 `state_conflict`.
 `200 { "item": Item }` with new `row_version`/`change_seq`.
-`409 state_conflict { "item": Item }` (stale `expected_row_version`; reload and re-apply
-the intent with a **new** `mutation_id`). `409 mutation_id_reused` when the same
+`409 state_conflict { "item": Item }` (stale `expected_row_version`). Read/dismiss/archive are
+observation-sensitive: the client must use the rendered `row_version` and its observed `change_seq`, and on 409 adopt the
+returned newer item and show it, without auto-acknowledging or re-folding the intent onto it. Only restoring visibility
+(unread/undismiss/unarchive) may rebase onto the new item, using a **new** `mutation_id`. `409 mutation_id_reused` when the same
 `mutation_id` is sent with a different request; an identical retry returns the
 original acknowledgement (replay-safe). `404 notification_not_found`. A no-op
 patch (state already as requested) succeeds without bumping versions.
@@ -200,7 +202,7 @@ resurrect an overridden value. `default` needs an existing rule (`expected_row_v
 
 If any key is stale ⇒ `409 { "code":"rules_conflict", "conflicts":[{ source_app_id, category, client_app_id, channel,
 expected_row_version, "current": Rule|null }], "rules":[all current], "rules_revision" }` and **nothing is written**; the
-client rebases its intent on `rules` and retries with a **new** `mutation_id`. An identical retry of a successful PUT
+client adopts the returned `rules` (shown with a notice) and the user explicitly retries, which sends a **new** `mutation_id`. An identical retry of a successful PUT
 (hash includes expected versions) returns the stored 200; the same `mutation_id` with a different body ⇒
 `409 mutation_id_reused` (a semantic rejection, not a retry).
 

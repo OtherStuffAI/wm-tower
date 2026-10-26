@@ -6,11 +6,16 @@
  *
  * All requests are NIP-98 signed through the Autopilot capability broker (--bot-crypto equivalent); no key material is
  * read, printed or stored. Default mode is read-only. `--probe` additionally needs the caller to hold effective workspace.manage:
- * it registers a temporary producer source bound to the caller's own signer, publishes one event to the caller, waits
- * for the server-side worker to project it (proves intake -> worker -> item end to end), exercises read/unread CAS and
- * resolve, then revokes the temporary source (content-free tombstone). It never touches other actors' inboxes.
+ * it generates an ephemeral TEST-ONLY producer key in memory (never read from disk, printed or stored), registers its
+ * public npub as the producer of a fresh temporary source through the broker, and signs ONLY POST /notification-events
+ * with that fixture key (NIP-98 exact URL/method/body hash). A producer signer is permanently bound to one source, so the
+ * fresh key makes the probe repeatable without weakening bindings or revocation. All admin and consumer requests stay on
+ * the broker. It publishes to the caller only (recipients = GET /me actor), waits for the server-side worker to project
+ * (intake -> worker -> item end to end), exercises read CAS, app audiences and rules CAS, then revokes the source
+ * (content-free tombstones). It never touches other actors' inboxes.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 
 const autopilot = process.env.AUTOPILOT_DIR || new URL('../../autopilot', import.meta.url).pathname;
 const { requestJsonBotCrypto } = await import(`${autopilot}/clis/lib/auth.ts`);
@@ -63,21 +68,36 @@ const queue = await call('GET', '/admin/notifications/queue').catch((e) => ({ er
 console.log('queue (workspace.manage only):', JSON.stringify(queue.queue ?? queue));
 if (queue.queue) check('worker is running inside the server', queue.queue.worker?.running === true && queue.queue.worker?.enabled === true, queue.queue.worker);
 
+// Fixture producer signer: NIP-98 kind 27235 over exact URL, method and sha256 of the raw JSON body.
+const signAsFixture = (secretKey: Uint8Array, method: string, url: string, rawBody: string) => 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
+  kind: 27235, created_at: Math.floor(Date.now() / 1000), content: '',
+  tags: [['u', url], ['method', method], ['payload', createHash('sha256').update(rawBody).digest('hex')]],
+}, secretKey))).toString('base64');
+
 // 3. Optional end-to-end probe through the real worker (no manual drain: proves the boot worker). Rick-only temporary source.
 if (probe) {
   const me = await call('GET', '/me');
+  const fixtureKey = generateSecretKey(); // in memory only; never printed or persisted
+  const fixtureNpub = nip19.npubEncode(getPublicKey(fixtureKey));
   const sourceId = `smoke-probe-${Date.now().toString(36)}`;
   const category = 'smoke_probe';
   const source = {
-    kind: 'app', display_name: 'Notification smoke probe', producer_signer_npub: me.actor.npub, allowed_recipient_mode: 'actor_list',
+    kind: 'app', display_name: 'Notification smoke probe', producer_signer_npub: fixtureNpub, allowed_recipient_mode: 'actor_list',
     allowed_recipient_actor_ids: [me.actor.actor_id], max_severity: 'normal', rate_per_minute: 60,
     allowed_categories: [{ category, label: 'Smoke probe' }], allowed_client_apps: ['*'],
   };
-  const publish = (key: string, apps: string[]) => call('POST', '/notification-events', {
+  const publish = async (key: string, apps: string[]) => {
+    const rawBody = JSON.stringify({
     schema: 'org.wingman.notification.event', version: 1, event_key: key, category, severity: 'normal',
     subject: { kind: 'app_object', app_id: sourceId, object_type: 'probe', object_id: key }, group_key: `smoke:${key}`,
     audience: { client_apps: apps }, recipients: { mode: 'actors', actor_ids: [me.actor.actor_id] },
-  });
+    });
+    const url = new URL(`${api}/notification-events`, `${tower}/`).toString();
+    const response = await fetch(url, { method: 'POST', headers: { authorization: signAsFixture(fixtureKey, 'POST', url, rawBody), 'content-type': 'application/json' }, body: rawBody });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`${response.status} ${text}`);
+    return JSON.parse(text);
+  };
   const items = async (query = '') => (await call('GET', `/notifications/items?source_app_id=${sourceId}${query}`)).items as any[];
   const waitFor = async (n: number, query = '') => { let r: any[] = []; for (let i = 0; i < 30 && r.length < n; i += 1) { r = await items(query); if (r.length < n) await Bun.sleep(500); } return r; };
   const unreadCount = async (clientApp?: string) => {
@@ -118,19 +138,19 @@ if (probe) {
     // Rules CAS: app-scoped off hides B from smoke-b only; revision change forces reset; default is durable.
     const before = await call('GET', '/notifications/rules');
     const key = { source_app_id: sourceId, category, client_app_id: 'smoke-b', channel: 'inbox' };
-    const rulesPut = (mode: string, expected: number) => call('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode, preview: false, expected_row_version: expected }] });
+    const rulesPut = (mode: string, expected: number) => call('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode, expected_row_version: expected }] });
     const mid = await call('GET', `/notifications/counts`);
     const off = await rulesPut('off', 0);
     const offRule = off.rules.find((r: any) => r.source_app_id === sourceId && r.client_app_id === 'smoke-b');
     check('rules PUT bumps rules_revision', off.rules_revision > before.rules_revision && !!offRule, [before.rules_revision, off.rules_revision]);
-    check('stale rules CAS -> 409', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'on', preview: false, expected_row_version: 0 }] }, '409'));
+    check('stale rules CAS -> 409', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'on', expected_row_version: 0 }] }, '409'));
     check('old rules_revision on changes -> 410 rules_changed', await expectError('GET', `/notifications/changes?after_seq=${mid.head_seq}&rules_revision=${mid.rules_revision}`, undefined, '410'));
     check('off rule hides the item from smoke-b only', (await items('&client_app_id=smoke-b')).length === 0 && (await items()).length === 2 && (await items('&client_app_id=smoke-a')).length === 1);
     check('list == count with rule applied', (await unreadCount('smoke-b')).source === 0 && (await unreadCount()).source === 1 && await parity('smoke-b') && await parity());
     const dflt = await rulesPut('default', offRule.row_version);
     const dfltRule = dflt.rules.find((r: any) => r.source_app_id === sourceId && r.client_app_id === 'smoke-b');
     check('default is durable (row kept, version bumped, mode default)', dfltRule?.mode === 'default' && dfltRule.row_version > offRule.row_version, dfltRule);
-    check('expected_row_version 0 cannot resurrect after default', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'off', preview: false, expected_row_version: 0 }] }, '409'));
+    check('expected_row_version 0 cannot resurrect after default', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'off', expected_row_version: 0 }] }, '409'));
     check('item visible to smoke-b again after default', (await items('&client_app_id=smoke-b')).length === 1);
   } finally {
     const head = head0;
