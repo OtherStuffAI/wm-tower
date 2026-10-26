@@ -246,7 +246,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect(payload.aps).toMatchObject({ alert: { title: 'New activity', body: '' }, sound: 'default' });
     expect(payload.aps['content-available']).toBeUndefined();
     expect(typeof payload.aps.badge).toBe('number');
-    expect(payload.fd).toMatchObject({ v: 1, origin: 'https://tower.example', workspace_id: w1, category: 'mention', thread_id: thread, channel_id: ch1, notification_id: item!.id, change_seq: Number(item!.change_seq), source_app_id: 'flightdeck.core' });
+    expect(payload.fd).toMatchObject({ v: 1, origin: 'https://tower.example', tower_service_npub: 'tower-push', workspace_id: w1, category: 'mention', thread_id: thread, channel_id: ch1, notification_id: item!.id, change_seq: Number(item!.change_seq), source_app_id: 'flightdeck.core' });
     expect(payload.fd.task_id).toBeUndefined();
     for (const secret of ['secret body text', 'Alice', 'Private roadmap title', 'mentioned you', tok]) expect(call0.body).not.toContain(secret);
     expect((await alertsFor())[0]).toMatchObject({ state: 'sent', attempt_count: 1, provider_status: 200 });

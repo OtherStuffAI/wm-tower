@@ -116,6 +116,7 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
   "fd": {
     "v": 1,
     "origin": "https://tower.example",
+    "tower_service_npub": "npub1…",
     "workspace_id": "<uuid>",
     "category": "mention",
     "channel_id": "<uuid>", "thread_id": "<uuid>", "task_id": "<uuid>", "doc_id": "<uuid>",
@@ -127,7 +128,7 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 ```
 
 * `fd` is the Apple `PushPayload` v1: `v`, `origin` (https), `workspace_id` required; id keys are UUIDs or **absent** (never null, never malformed);
-  `category` string. `notification_id`, `change_seq`, `source_app_id` are additive. Only the ids relevant to the item are present.
+  `category` string. `tower_service_npub` (the workspace's stable Tower service identity) lets a client match the alert to a stored connection when the https `origin` differs from its pinned/FIPS origin; it is a matching hint, never a new network authority. `notification_id`, `change_seq`, `source_app_id` are additive. Only the ids relevant to the item are present.
 * Not a silent push: no `content-available`; `aps.alert` + `sound` always present.
 * `badge` is the recipient's badge count for the installation's `client_app_id` in this workspace (`getCounts().badge`), only when the installation is
   enrolled in exactly one workspace; otherwise omitted (no cross-workspace aggregation).

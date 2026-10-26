@@ -102,6 +102,8 @@ export type AlertContent = {
   workspaceId: string; itemId: string; changeSeq: number; sourceAppId: string; category: string;
   groupKey: string | null; coreSource: boolean; ids: { channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string };
   badge: number | null; origin: string;
+  /** Stable service identity so a client can match the alert to a stored connection when the https origin differs (FIPS-pinned). */
+  towerServiceNpub: string | null;
   /** Only set when both the transport and the alert rule opted in to a full preview. */
   preview: { title: string; body: string } | null;
 };
@@ -112,6 +114,7 @@ const GENERIC_TITLE = 'New activity';
 export function buildApnsPayload(content: AlertContent) {
   const fd: Record<string, unknown> = {
     v: 1, origin: content.origin, workspace_id: content.workspaceId, category: content.category,
+    ...(content.towerServiceNpub ? { tower_service_npub: content.towerServiceNpub } : {}),
     ...content.ids, notification_id: content.itemId, change_seq: content.changeSeq, source_app_id: content.sourceAppId,
   };
   const aps: Record<string, unknown> = {

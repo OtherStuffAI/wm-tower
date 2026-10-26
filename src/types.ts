@@ -3448,7 +3448,7 @@ export interface NotificationPushRegistrationV1 {
 export interface NotificationPushEnvelopeV1 {
   aps: { alert: { title: string; body: string }; sound: 'default'; 'thread-id': string; badge?: number };
   fd: {
-    v: 1; origin: string; workspace_id: string; category: string; notification_id: string; change_seq: number; source_app_id: string;
+    v: 1; origin: string; tower_service_npub?: string; workspace_id: string; category: string; notification_id: string; change_seq: number; source_app_id: string;
     channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string;
   };
 }

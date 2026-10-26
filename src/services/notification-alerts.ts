@@ -226,7 +226,9 @@ async function buildContent(sql: Sql, alert: Claimed, g: Extract<Gate, { ok: tru
     badge = (await getCounts(sql, { workspaceId: alert.workspace_id, actorId: alert.recipient_actor_id }, { clientAppId: installation.client_app_id })).badge;
   }
   const presentation = item.presentation as { title?: string; body?: string };
+  const [ws] = await sql<{ tower_service_npub: string | null }[]>`SELECT tower_service_npub FROM flightdeck_pg_workspaces WHERE id = ${alert.workspace_id}`;
   return {
+    towerServiceNpub: ws?.tower_service_npub ?? null,
     workspaceId: alert.workspace_id, itemId: item.id, changeSeq: Number(item.change_seq), sourceAppId: item.source_app_id, category: item.category,
     groupKey: item.group_key, coreSource: core, ids, badge, origin,
     preview: g.preview === 'full' ? { title: plainText(presentation.title, 120), body: plainText(presentation.body, 120) } : null,
