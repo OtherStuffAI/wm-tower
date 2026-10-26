@@ -11,6 +11,9 @@ import {
 import {
   getProducerEvent, grantSummary, ingestProducerEvent, listSources, resolveProducerGrant, setSourceStatus, upsertSource, type SourceInput,
 } from '../services/notification-producers';
+import {
+  parseApnsInput, parseInstallationInput, putApnsTransport, putInstallation, removeEnrollment, revokeTransport,
+} from '../services/notification-registry';
 import { queueStats } from '../services/notification-worker';
 
 const MAX_BODY = 16 * 1024;
@@ -49,7 +52,7 @@ function intParam(c: Context, name: string, fallback: number, min: number, max: 
 }
 
 /** Consumer routes: actor comes only from verified NIP-98 and an active workspace membership. */
-type ConsumerCtx = { c: Context; sql: Sql; identity: Identity; workspaceId: string; actorId: string; role: string; userNpub: string; appNpub: string };
+type ConsumerCtx = { c: Context; sql: Sql; identity: Identity; workspaceId: string; actorId: string; role: string; userNpub: string; signerNpub: string; appNpub: string };
 function consumer(handler: (ctx: ConsumerCtx) => Promise<Response>) {
   return async (c: Context) => {
     c.header('Cache-Control', 'private, no-store');
@@ -65,7 +68,7 @@ function consumer(handler: (ctx: ConsumerCtx) => Promise<Response>) {
       if (!context.workspace) throw new NotificationError(404, 'workspace_not_found', 'Flight Deck PG workspace not found');
       if (!context.actor || !context.membership) throw new NotificationError(403, 'workspace_membership_required', 'Actor is not a member of this Flight Deck PG workspace');
       if (!inboxApiEnabled()) throw new NotificationError(404, 'notifications_not_enabled', 'Notification inbox is not enabled on this Tower');
-      return await handler({ c, sql, identity, workspaceId: context.workspace.id, actorId: context.actor.id, role: context.membership.role, userNpub: auth.userNpub, appNpub: context.workspace.app_npub });
+      return await handler({ c, sql, identity, workspaceId: context.workspace.id, actorId: context.actor.id, role: context.membership.role, userNpub: auth.userNpub, signerNpub: auth.signerNpub, appNpub: context.workspace.app_npub });
     } catch (error) {
       if (error instanceof NotificationError) return fail(c, identity, error);
       throw error;
@@ -199,6 +202,69 @@ export function registerNotificationRoutes(router: Hono) {
     const keys = rules.map((rule) => [rule.source_app_id, rule.category, rule.client_app_id, rule.channel].join('\u0000'));
     if (new Set(keys).size !== keys.length) throw new NotificationError(400, 'validation_error', 'rules must not repeat a key');
     return c.json({ identity, ...(await putRules(sql, { workspaceId, actorId }, body.mutation_id, rules)) });
+  }));
+
+
+  // --- Installations and transports (push registry). Owner is always the verified actor. ---
+  const requestOrigin = (c: Context) => {
+    const url = new URL(c.req.url);
+    const proto = (c.req.header('x-forwarded-proto') ?? url.protocol.replace(':', '')).split(',')[0]!.trim();
+    return `${proto}://${(c.req.header('x-forwarded-host') ?? url.host).split(',')[0]!.trim()}`;
+  };
+  const installationParam = (c: Context) => {
+    const id = c.req.param('installationId') ?? '';
+    if (!UUID_RE.test(id)) throw new NotificationError(400, 'validation_error', 'installationId must be a UUID');
+    return id.toLowerCase();
+  };
+  const registrant = (ctx: Pick<ConsumerCtx, 'c' | 'actorId' | 'workspaceId' | 'signerNpub'>) => ({
+    actorId: ctx.actorId, workspaceId: ctx.workspaceId, signerNpub: ctx.signerNpub, installationId: installationParam(ctx.c),
+  });
+  const INSTALLATION_KEYS = ['client_app_id', 'platform', 'app_version', 'device_label', 'permission_state'];
+  const APNS_KEYS = ['device_token', 'environment', 'bundle_id', 'preview', 'lease_seconds'];
+
+  router.put(`${base}/installations/:installationId`, consumer(async (ctx) => {
+    const { body } = await readBody(ctx.c);
+    onlyKeys(body, INSTALLATION_KEYS);
+    return ctx.c.json({ identity: ctx.identity, ...(await putInstallation(ctx.sql, registrant(ctx), parseInstallationInput(body, true))) });
+  }));
+
+  router.delete(`${base}/installations/:installationId`, consumer(async (ctx) => {
+    queryKeys(ctx.c, []);
+    return ctx.c.json({ identity: ctx.identity, ...(await removeEnrollment(ctx.sql, registrant(ctx))) });
+  }));
+
+  const transportKind = (c: Context) => {
+    const kind = c.req.param('kind');
+    if (kind === 'apns') return kind;
+    if (kind === 'webpush' || kind === 'fcm') throw new NotificationError(400, 'transport_not_implemented', `Transport ${kind} is not implemented on this Tower`);
+    throw new NotificationError(400, 'validation_error', 'kind must be apns, webpush or fcm');
+  };
+
+  router.put(`${base}/installations/:installationId/transports/:kind`, consumer(async (ctx) => {
+    transportKind(ctx.c);
+    const { body } = await readBody(ctx.c);
+    onlyKeys(body, APNS_KEYS);
+    const result = await putApnsTransport(ctx.sql, registrant(ctx), parseApnsInput(body), { implicit: null, origin: requestOrigin(ctx.c) });
+    return ctx.c.json({ identity: ctx.identity, ...result });
+  }));
+
+  router.delete(`${base}/installations/:installationId/transports/:kind`, consumer(async (ctx) => {
+    const kind = transportKind(ctx.c);
+    queryKeys(ctx.c, []);
+    return ctx.c.json({ identity: ctx.identity, ...(await revokeTransport(ctx.sql, registrant(ctx), kind)) });
+  }));
+
+  // Compatibility alias for shipped Apple clients: implicit installation + enrollment.
+  router.put(`${base}/apns-devices/:installationId`, consumer(async (ctx) => {
+    const { body } = await readBody(ctx.c);
+    onlyKeys(body, [...APNS_KEYS, ...INSTALLATION_KEYS]);
+    const result = await putApnsTransport(ctx.sql, registrant(ctx), parseApnsInput(body), { implicit: parseInstallationInput(body, false), origin: requestOrigin(ctx.c) });
+    return ctx.c.json({ identity: ctx.identity, ...result });
+  }));
+
+  router.delete(`${base}/apns-devices/:installationId`, consumer(async (ctx) => {
+    queryKeys(ctx.c, []);
+    return ctx.c.json({ identity: ctx.identity, ...(await removeEnrollment(ctx.sql, registrant(ctx))) });
   }));
 
   // --- Producers (external applications). Signer is bound to a registered source; no inbox read access. ---

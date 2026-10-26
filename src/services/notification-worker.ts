@@ -1,5 +1,6 @@
 import { getDb } from '../db';
 import { type Sql, projectorEnabled } from './notification-core';
+import { alertStats, pruneAlerts } from './notification-alerts';
 import { processIntakeBatch, tombstoneItem } from './notification-projector';
 
 export const workerStatus = {
@@ -19,7 +20,7 @@ export async function queueStats(sql: Sql, workspaceId: string) {
            COUNT(*) FILTER (WHERE state = 'dead')::int AS dead,
            EXTRACT(EPOCH FROM NOW() - MIN(created_at) FILTER (WHERE state IN ('pending','leased')))::int AS oldest_age_s
     FROM flightdeck_pg_notification_intake WHERE workspace_id = ${workspaceId}`;
-  return { ...row!, worker: { ...workerStatus, enabled: projectorEnabled() } };
+  return { ...row!, worker: { ...workerStatus, enabled: projectorEnabled() }, alerts: await alertStats(sql, workspaceId) };
 }
 
 /** Retention and bounded cleanup. Safe to run repeatedly; each run touches at most `batch` rows per rule. */
@@ -52,6 +53,7 @@ export async function runMaintenance(sql: Sql = getDb(), batch = 500) {
   await sql`DELETE FROM flightdeck_pg_notification_events WHERE id IN (SELECT id FROM flightdeck_pg_notification_events WHERE created_at < NOW() - INTERVAL '180 days' LIMIT ${batch})`;
   await sql`DELETE FROM flightdeck_pg_notification_mutations WHERE created_at < NOW() - INTERVAL '30 days'`;
   await sql`DELETE FROM flightdeck_pg_notification_audit WHERE created_at < NOW() - INTERVAL '90 days'`;
+  await pruneAlerts(sql, batch);
   workerStatus.lastMaintenanceAt = new Date().toISOString();
   return { tombstoned: doomed.length };
 }

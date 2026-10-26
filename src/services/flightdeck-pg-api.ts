@@ -1,4 +1,5 @@
 import { inboxApiEnabled } from './notification-core';
+import { transportAdvertisement } from './notification-registry';
 import { createHash, randomUUID } from 'crypto';
 import { getDb } from '../db';
 
@@ -1961,7 +1962,7 @@ export function serializeFlightDeckPgWorkspaceSummary(
   };
 }
 
-/** Descriptor flag for the shared notification inbox. Alerts/transports are not part of v1 (transports: []). */
+/** Descriptor flag for the shared notification inbox and the push transports this Tower implements (see notifications-push-v1.md). */
 export function notificationsDescriptor(workspaceId: string) {
   const enabled = inboxApiEnabled();
   const base = `/api/v4/flightdeck-pg/workspaces/${encodeURIComponent(workspaceId)}/notifications`;
@@ -1970,9 +1971,8 @@ export function notificationsDescriptor(workspaceId: string) {
     capability: 'notifications.inbox.v1',
     schema: 'org.wingman.notification.item',
     schema_version: 1,
-    transports: [] as string[],
-    alerts: false,
-    links: enabled ? { items: `${base}/items`, changes: `${base}/changes`, counts: `${base}/counts`, bulk: `${base}/bulk`, categories: `${base}/categories`, rules: `${base}/rules` } : {},
+    ...(enabled ? transportAdvertisement() : { transports: [] as string[], alerts: false }),
+    links: enabled ? { installations: `${base}/installations`, apns_devices: `${base}/apns-devices`, items: `${base}/items`, changes: `${base}/changes`, counts: `${base}/counts`, bulk: `${base}/bulk`, categories: `${base}/categories`, rules: `${base}/rules` } : {},
   };
 }
 

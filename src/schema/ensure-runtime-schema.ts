@@ -4370,5 +4370,7 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   await sql.unsafe(hostingBillingV1Sql);
   // Shared notification inbox: tables, sequence/hint functions, transactional intake and view-state bridge triggers.
   await sql.unsafe(readFileSync(new URL('./notifications-v1.sql', import.meta.url), 'utf8'));
+  // Push delivery: installation/transport registry and the durable alert queue (additive; no backfill, so upgrades enqueue nothing).
+  await sql.unsafe(readFileSync(new URL('./notification-push-v1.sql', import.meta.url), 'utf8'));
 
 }

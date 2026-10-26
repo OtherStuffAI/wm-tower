@@ -691,7 +691,7 @@ describe.skipIf(!port || port === 5432)('shared notification inbox against dispo
   test('descriptor advertises the capability; NIP-98 only; hosted flag can hide it', async () => {
     const descriptor = (await call(`${base()}/descriptor`, 'GET', 1)).body;
     expect(descriptor.capabilities).toContain('notifications_inbox_v1');
-    expect(descriptor.notifications).toMatchObject({ inbox_v1: true, capability: 'notifications.inbox.v1', alerts: false, transports: [] });
+    expect(descriptor.notifications).toMatchObject({ inbox_v1: true, capability: 'notifications.inbox.v1', alerts: false, transports: ['apns'], transport_status: { apns: { ready: false, reason: 'provider_not_configured' } }, push_envelope_v: 1 });
     const unauth = await app.request(`${base()}/notifications/items`);
     expect(unauth.status).toBe(401);
     Bun.env.NOTIF_INBOX_API = 'off';

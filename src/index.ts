@@ -28,6 +28,9 @@ try {
 startHostingBillingRunner();
 // Durable notification projection runs in this process (NOTIF_PROJECTOR=off disables it).
 startNotificationWorker();
+// Durable push alert delivery (NOTIF_ALERTS=off disables); idle unless APNs is fully configured.
+const { startAlertWorker } = await import('./services/notification-alerts');
+startAlertWorker();
 
 console.log(`[coworker-be] listening on :${config.port}`);
 console.log(`[coworker-be] service npub: ${identity.npub}`);

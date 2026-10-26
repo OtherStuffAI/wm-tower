@@ -5,12 +5,44 @@ const err = { description: 'Error', content: { 'application/json': { schema: ref
 const workspaceParam = { name: 'workspaceId', in: 'path', required: true, schema: uuid };
 const json = (schema: unknown, description = 'OK') => ({ description, content: { 'application/json': { schema } } });
 const clientApp = { name: 'client_app_id', in: 'query', description: 'Presentation filter: only items visible to this client app (audience + effective inbox rule). Never access authority.', schema: { type: 'string', pattern: '^[a-z][a-z0-9_.-]{0,63}$' } };
+const installationParam = { name: 'installationId', in: 'path', required: true, schema: uuid };
+const transportKind = { name: 'kind', in: 'path', required: true, schema: { enum: ['apns'], description: 'webpush and fcm are rejected with 400 transport_not_implemented' } };
 const tags = ['Notifications'];
 const security = [{ nip98: [] }];
 const op = (summary: string, extra: Record<string, unknown> = {}) => ({
   tags, security, summary, parameters: [workspaceParam, ...((extra.parameters as unknown[]) ?? [])],
   ...Object.fromEntries(Object.entries(extra).filter(([key]) => key !== 'parameters')),
 });
+
+const pushSchemas = {
+  NotificationInstallationBody: {
+    type: 'object', additionalProperties: false, required: ['client_app_id', 'platform'],
+    properties: {
+      client_app_id: { type: 'string', pattern: '^[a-z][a-z0-9_.-]{0,63}$', description: 'Presentation label only; not an attestation' },
+      platform: { enum: ['web', 'ios', 'ipados', 'macos', 'android'] }, app_version: { type: 'string', maxLength: 64 }, device_label: { type: 'string', maxLength: 64 },
+      permission_state: { enum: ['granted', 'denied', 'unknown'] },
+    },
+  },
+  NotificationApnsBody: {
+    type: 'object', additionalProperties: false, required: ['device_token', 'environment', 'bundle_id'],
+    properties: {
+      device_token: { type: 'string', pattern: '^[0-9a-fA-F]{64,200}$', description: 'Never returned or logged' },
+      environment: { enum: ['sandbox', 'production', 'development'], description: 'development is an alias of sandbox' },
+      bundle_id: { type: 'string', description: 'Must be on the server allow-list once a provider is configured' },
+      preview: { enum: ['generic', 'full'], default: 'generic' }, lease_seconds: { type: 'integer', minimum: 1, maximum: 2592000, default: 604800 },
+      client_app_id: { type: 'string' }, platform: { enum: ['web', 'ios', 'ipados', 'macos', 'android'] }, app_version: { type: 'string' }, device_label: { type: 'string' }, permission_state: { enum: ['granted', 'denied', 'unknown'] },
+    },
+  },
+  NotificationPushRegistration: {
+    type: 'object', required: ['installation', 'device', 'delivery'],
+    properties: {
+      installation: { type: 'object', properties: { installation_id: uuid, client_app_id: { type: 'string' }, platform: { type: 'string' }, permission_state: { type: 'string' }, status: { enum: ['active', 'revoked'] }, enrolled_workspace_ids: { type: 'array', items: uuid } } },
+      device: { type: 'object', properties: { installation_id: uuid, kind: { const: 'apns' }, environment: { enum: ['sandbox', 'production'] }, bundle_id: { type: 'string' }, preview: { enum: ['generic', 'full'] }, status: { enum: ['active', 'stale', 'revoked'] }, token_suffix: { type: 'string' }, lease_expires_at: { type: 'string', format: 'date-time' } } },
+      delivery: { type: 'object', required: ['ready'], properties: { ready: { type: 'boolean' }, reason: { enum: ['provider_not_configured', 'provider_key_invalid', 'environment_not_enabled', 'bundle_not_allowed', 'permission_denied'] } } },
+    },
+  },
+  NotificationPushRevocation: { type: 'object', required: ['revoked', 'remaining_workspace_ids'], properties: { revoked: { const: true }, remaining_workspace_ids: { type: 'array', items: uuid } } },
+};
 
 export const notificationSchemas = {
   NotificationItem: {
@@ -114,6 +146,7 @@ export const notificationSchemas = {
       allowed_client_apps: { type: 'array', items: { type: 'string' } }, max_severity: { enum: ['low', 'normal', 'high'] }, rate_per_minute: { type: 'integer', minimum: 1, maximum: 6000 },
     },
   },
+  ...pushSchemas,
 };
 
 const base = '/api/v4/flightdeck-pg/workspaces/{workspaceId}';
@@ -165,6 +198,29 @@ export const notificationPaths = {
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['mutation_id', 'rules'], properties: { mutation_id: uuid, rules: { type: 'array', minItems: 1, maxItems: 50, items: { allOf: [ref('NotificationRule'), { type: 'object', required: ['expected_row_version'], properties: { expected_row_version: { type: 'integer', minimum: 0, description: 'row_version of this key in the last GET; 0 when absent; >= 1 for mode default' } } }] } } } } } } },
       responses: { '200': json(ref('NotificationRulesState')), '400': err, '409': json({ oneOf: [ref('NotificationRulesConflict'), ref('ErrorResponse')] }, 'rules_conflict (nothing written) or mutation_id_reused') },
     }),
+  },
+  [`${base}/notifications/installations/{installationId}`]: {
+    put: op('Register/update the caller\'s installation and enroll this workspace (actor-private; 409 installation_owned for another actor)', {
+      parameters: [installationParam], requestBody: { required: true, content: { 'application/json': { schema: ref('NotificationInstallationBody') } } },
+      responses: { '200': json({ type: 'object' }), '400': err, '403': err, '409': err },
+    }),
+    delete: op('Remove this workspace from the installation; revokes the installation and its transports when none remain', {
+      parameters: [installationParam], responses: { '200': json(ref('NotificationPushRevocation')), '404': err },
+    }),
+  },
+  [`${base}/notifications/installations/{installationId}/transports/{kind}`]: {
+    put: op('Register/renew a push transport (apns) with a bounded lease', {
+      parameters: [installationParam, transportKind], requestBody: { required: true, content: { 'application/json': { schema: ref('NotificationApnsBody') } } },
+      responses: { '200': json(ref('NotificationPushRegistration')), '400': err, '403': err, '404': err, '409': json(ref('ErrorResponse'), 'transport_owned | installation_owned | workspace_not_enrolled') },
+    }),
+    delete: op('Revoke the transport (pending alerts are withdrawn)', { parameters: [installationParam, transportKind], responses: { '200': json(ref('NotificationPushRevocation')), '404': err } }),
+  },
+  [`${base}/notifications/apns-devices/{installationId}`]: {
+    put: op('Compatibility alias for shipped Apple clients: registers an APNs token and implicitly creates the installation and enrollment', {
+      parameters: [installationParam], requestBody: { required: true, content: { 'application/json': { schema: ref('NotificationApnsBody') } } },
+      responses: { '200': json(ref('NotificationPushRegistration')), '400': err, '403': err, '409': err },
+    }),
+    delete: op('Compatibility alias: remove this workspace enrollment, revoking the token once none remains (404 = nothing to revoke)', { parameters: [installationParam], responses: { '200': json(ref('NotificationPushRevocation')), '404': err } }),
   },
   [`${base}/notification-producers/grants/me`]: { get: op('Grant summary for the NIP-98 producer signer', { responses: { '200': json({ type: 'object' }), '403': err } }) },
   [`${base}/notification-events`]: {

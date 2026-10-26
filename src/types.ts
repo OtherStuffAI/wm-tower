@@ -3418,3 +3418,37 @@ export interface NotificationResetRequired {
   head_seq: number;
   rules_revision: number;
 }
+
+// --- Notification push delivery (docs/contract/notifications-push-v1.md) ---------------------------------------
+export type PushPlatform = 'web' | 'ios' | 'ipados' | 'macos' | 'android';
+export type PushPermissionState = 'granted' | 'denied' | 'unknown';
+export type ApnsEnvironmentV1 = 'sandbox' | 'production';
+export interface NotificationInstallationInputV1 {
+  client_app_id: string;
+  platform: PushPlatform;
+  app_version?: string;
+  device_label?: string;
+  permission_state?: PushPermissionState;
+}
+/** PUT .../transports/apns and the Apple-compatible PUT .../apns-devices/:installation_id. */
+export interface NotificationApnsRegistrationInputV1 {
+  device_token: string;
+  /** `development` is accepted as an alias of `sandbox`. */
+  environment: ApnsEnvironmentV1 | 'development';
+  bundle_id: string;
+  preview?: 'generic' | 'full';
+  lease_seconds?: number;
+}
+export interface NotificationPushRegistrationV1 {
+  installation: { installation_id: string; client_app_id: string; platform: PushPlatform; permission_state: PushPermissionState; status: 'active' | 'revoked'; enrolled_workspace_ids: string[] };
+  device: { installation_id: string; kind: 'apns'; environment: ApnsEnvironmentV1; bundle_id: string; preview: 'generic' | 'full'; status: 'active' | 'stale' | 'revoked'; token_suffix: string; lease_expires_at: string };
+  delivery: { ready: boolean; reason?: string };
+}
+/** Visible APNs alert. `fd` is routing only; no private content unless a full preview was explicitly allowed. */
+export interface NotificationPushEnvelopeV1 {
+  aps: { alert: { title: string; body: string }; sound: 'default'; 'thread-id': string; badge?: number };
+  fd: {
+    v: 1; origin: string; workspace_id: string; category: string; notification_id: string; change_seq: number; source_app_id: string;
+    channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string;
+  };
+}

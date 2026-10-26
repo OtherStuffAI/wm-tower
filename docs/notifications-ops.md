@@ -65,10 +65,34 @@ SESSION_ID=<session> WINGMAN_CAPABILITY=<capability> \
 `--probe` (needs effective `workspace.manage`, e.g. the Rick agent actor) registers a temporary producer bound to the caller, publishes an event to the caller,
 waits for the worker to project it, exercises CAS read and then revokes the temporary source.
 
+## Push delivery (APNs)
+
+Wire contract: `contract/notifications-push-v1.md`. Code: `src/services/notification-registry.ts` (installations/transports, leases, ownership),
+`notification-alerts.ts` (enqueue in the item transaction, claim/late-checks/write-ahead/backoff worker), `notification-apns.ts`
+(config, ES256 provider token cache, HTTP/2 sender, payload), schema `src/schema/notification-push-v1.sql`.
+
+Provider configuration (secret-env custody: `NAME` or `NAME_FILE`; the key is never read by tooling and never committed):
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `APNS_AUTH_KEY` / `APNS_AUTH_KEY_FILE` | yes | the APNs `.p8` private key (PEM). Prefer a mounted file |
+| `APNS_KEY_ID`, `APNS_TEAM_ID` | yes | from the Apple Developer account |
+| `APNS_TOPIC` | yes | primary bundle id; also the registration allow-list |
+| `APNS_CLIENT_APP_ID` | no (`ambulando`) | client app label for the primary topic |
+| `APNS_EXTRA_TOPICS` | no | `bundle=client_app,...` additional allowed bundles |
+| `APNS_ENVIRONMENTS` | no (`sandbox,production`) | which APNs environments may be addressed |
+| `NOTIF_PUBLIC_ORIGIN` | recommended | https origin written to `fd.origin` (otherwise the https origin seen at registration is used) |
+| `NOTIF_ALERTS` | no (`on`) | `off` stops the alert worker (registry and inbox keep working) |
+
+Missing key/id/team/topic ⇒ the provider is **not ready**: descriptor shows `alerts:false`, registration answers `delivery.ready=false`, and no alert is queued.
+Debug (Xcode-installed) builds use `sandbox` tokens and `api.sandbox.push.apple.com`; TestFlight/App Store use `production`. One key created for
+"Sandbox & Production" serves both. Operator view: `GET …/admin/notifications/queue` → `queue.alerts` (states, oldest pending age, provider readiness, breaker).
+Live probe (manager runs after rebuild): `bun scripts/notifications-push-probe.ts --tower … --workspace … [--register-fake] [--send-real --device-token … --bundle-id …]`.
+Rollback: `NOTIF_ALERTS=off` (or unset the key); tables are additive.
+
 ## Not implemented (recorded gaps)
 
-Alert sender/transports (Web Push migration, APNs, FCM), installation/transport registry
-(`/me/notifications/*`), quiet hours, subject mutes, entitlement leases for external previews, silent baseline import,
+Web Push migration to the shared alert worker, FCM, global `/me/notifications/*` registry routes, quiet hours, subject mutes, entitlement leases for external previews, silent baseline import,
 record-subject events from external producers, scoped WApp inbox grants, delegated agent inbox reads, and replacing the
 legacy inline `await evaluate…` after writes. Legacy Web Push still derives mentions from visible text; only the inbox
 uses structured canonical mentions.
