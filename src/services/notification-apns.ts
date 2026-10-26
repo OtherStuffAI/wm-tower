@@ -1,4 +1,4 @@
-import { createHmac, createPrivateKey, sign, type KeyObject } from 'node:crypto';
+import { createHash, createHmac, createPrivateKey, createPublicKey, sign, type KeyObject } from 'node:crypto';
 import http2 from 'node:http2';
 import { secretEnv } from '../secret-env';
 
@@ -75,7 +75,8 @@ export function loadApnsConfig(): ApnsReadiness {
 function parseKey(pem: string): KeyObject | null {
   try {
     const key = createPrivateKey(pem);
-    return key.asymmetricKeyType === 'ec' ? key : null;
+    // ES256 requires P-256 (prime256v1 / secp256r1); any other curve would sign tokens Apple rejects.
+    return key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1' ? key : null;
   } catch {
     return null;
   }
@@ -88,7 +89,9 @@ let jwtCache: { fingerprint: string; token: string; issuedAt: number } | null = 
 export function resetApnsJwtCache() { jwtCache = null; }
 
 export function providerToken(config: ApnsConfig, now = Date.now()): string {
-  const fingerprint = `${config.keyId}:${config.teamId}`;
+  // Public key fingerprint (SPKI DER hash, never private material) so rotated key material under the same ids cannot reuse a token.
+  const publicHash = createHash('sha256').update(createPublicKey(config.key).export({ type: 'spki', format: 'der' })).digest('hex');
+  const fingerprint = `${config.keyId}:${config.teamId}:${publicHash}`;
   if (jwtCache && jwtCache.fingerprint === fingerprint && now - jwtCache.issuedAt < JWT_TTL_MS) return jwtCache.token;
   const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const signingInput = `${b64({ alg: 'ES256', kid: config.keyId })}.${b64({ iss: config.teamId, iat: Math.floor(now / 1000) })}`;

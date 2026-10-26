@@ -77,8 +77,8 @@ export async function enqueueAlerts(tx: Sql, itemId: string, refold: boolean): P
   if (!item || item.removed_at || item.read_at || item.dismissed_at || item.archived_at || item.status !== 'active') return 0;
   if (item.expires_at && new Date(item.expires_at).getTime() <= Date.now()) return 0;
 
-  const candidates = await tx<{ transport_id: string; client_app_id: string; environment: string; bundle_id: string }[]>`
-    SELECT t.id AS transport_id, i.client_app_id, t.environment, t.bundle_id
+  const candidates = await tx<{ transport_id: string; client_app_id: string; environment: string; bundle_id: string; registered_origin: string | null }[]>`
+    SELECT t.id AS transport_id, i.client_app_id, t.environment, t.bundle_id, t.registered_origin
     FROM flightdeck_pg_notification_transports t
     JOIN flightdeck_pg_notification_installations i ON i.id = t.installation_id
     WHERE t.kind = 'apns' AND t.status = 'active' AND t.lease_expires_at > NOW() AND t.actor_id = ${item.recipient_actor_id}
@@ -92,6 +92,7 @@ export async function enqueueAlerts(tx: Sql, itemId: string, refold: boolean): P
   let queued = 0;
   for (const c of candidates) {
     if (!config.environments.has(c.environment as 'sandbox' | 'production') || !config.topics.has(c.bundle_id)) continue;
+    if (!config.publicOrigin && !c.registered_origin?.startsWith('https://')) continue;
     if (!audienceAllows(item.audience_client_apps, c.client_app_id)) continue;
     if (resolveAlertRule(rules, item.source_app_id, item.category, c.client_app_id, fallback).mode !== 'on') continue;
     const [last] = await tx<{ generation: number; state: string }[]>`
@@ -106,15 +107,12 @@ export async function enqueueAlerts(tx: Sql, itemId: string, refold: boolean): P
   return queued;
 }
 
-/** Projection must never fail because of the push queue: errors are contained in a savepoint. */
-export async function enqueueAlertsSafe(tx: Sql, itemId: string, refold: boolean) {
-  try {
-    return await tx.savepoint(async (sp) => enqueueAlerts(sp as unknown as Sql, itemId, refold));
-  } catch (error) {
-    console.error('[notifications] alert enqueue failed:', (error instanceof Error ? error.message : String(error)).slice(0, 200));
-    return 0;
-  }
-}
+/**
+ * Runs inside the projection transaction. A real enqueue failure (DB error) is NOT contained: it propagates so the item write
+ * rolls back with it and the intake row retries, rather than committing an item whose alert was silently dropped. A missing or
+ * disabled provider is a plain `0` from enqueueAlerts, not an error.
+ */
+export const enqueueAlertsInProjection = enqueueAlerts;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Dispatch
@@ -236,7 +234,7 @@ async function buildContent(sql: Sql, alert: Claimed, g: Extract<Gate, { ok: tru
   };
 }
 
-async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: ApnsConfig, sender: ApnsSender, stats: AlertBatchStats) {
+async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: ApnsConfig, sender: ApnsSender, stats: AlertBatchStats, beforeSend?: (alert: { id: string }) => void | Promise<void>) {
   const g = await gate(sql, alert, config);
   if (!g.ok) {
     if (await settle(sql, alert, owner, { state: 'suppressed', reason: g.reason })) { stats.suppressed += 1; alertStatus.suppressed += 1; }
@@ -248,12 +246,15 @@ async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: Apns
     return;
   }
 
-  // Write-ahead intent: the attempt row exists before any network I/O. A crash after this point may re-send (at-least-once).
+  // Write-ahead intent, also the last lease check: an expired or reclaimed lease marks nothing and sends nothing, and a valid one is
+  // renewed to cover the provider timeout. The attempt row exists before any network I/O. A crash after this point may re-send (at-least-once).
+  if (beforeSend) await beforeSend(alert);
   const attemptNo = alert.attempt_count + 1;
   const started = Date.now();
   const marked = await sql`
-    UPDATE flightdeck_pg_notification_alerts SET attempt_count = ${attemptNo}, collapse_key = ${content.collapseId}
-    WHERE id = ${alert.id} AND lease_owner = ${owner} AND state = 'leased' RETURNING collapse_key`;
+    UPDATE flightdeck_pg_notification_alerts SET attempt_count = ${attemptNo}, collapse_key = ${content.collapseId},
+      lease_until = NOW() + make_interval(secs => ${LEASE_MS / 1000})
+    WHERE id = ${alert.id} AND lease_owner = ${owner} AND state = 'leased' AND lease_until > NOW() AND attempt_count = ${alert.attempt_count} RETURNING collapse_key`;
   if (!marked.length) { stats.skipped += 1; return; }
   await sql`INSERT INTO flightdeck_pg_notification_alert_attempts (alert_id, attempt_no) VALUES (${alert.id}, ${attemptNo}) ON CONFLICT DO NOTHING`;
 
@@ -315,20 +316,21 @@ async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: Apns
 }
 
 /** Claims due alerts and delivers them. Safe to run from several processes: `SKIP LOCKED` leases give each alert one sender. */
-export async function processAlertBatch(opts: { sql?: Sql; limit?: number; sender?: ApnsSender; owner?: string } = {}): Promise<AlertBatchStats> {
+export async function processAlertBatch(opts: { sql?: Sql; limit?: number; sender?: ApnsSender; owner?: string; beforeSend?: (alert: { id: string }) => void | Promise<void> } = {}): Promise<AlertBatchStats> {
   const sql = opts.sql ?? getDb();
   const owner = opts.owner ?? `worker-${process.pid}-${randomUUID().slice(0, 8)}`;
   const stats: AlertBatchStats = { claimed: 0, sent: 0, suppressed: 0, retried: 0, dead: 0, skipped: 0 };
   const readiness = loadApnsConfig();
   if (!readiness.ready) return stats;
   if (Date.now() < alertStatus.breakerOpenUntil) return stats;
-  const alerts = await claim(sql, owner, opts.limit ?? 25);
+  // Never claim more than run at once: a claimed-but-waiting alert would burn its lease behind slow provider calls.
+  const alerts = await claim(sql, owner, Math.min(opts.limit ?? PARALLEL, PARALLEL));
   stats.claimed = alerts.length;
   const sender = opts.sender ?? sendApns;
   for (let i = 0; i < alerts.length; i += PARALLEL) {
     await Promise.all(alerts.slice(i, i + PARALLEL).map(async (alert) => {
       try {
-        await dispatchOne(sql, alert, owner, readiness.config, sender, stats);
+        await dispatchOne(sql, alert, owner, readiness.config, sender, stats, opts.beforeSend);
       } catch (error) {
         // Unexpected failure: give the alert back with a backoff rather than leaving it leased.
         alertStatus.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 200);

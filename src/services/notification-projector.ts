@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
-import { enqueueAlertsSafe } from './notification-alerts';
+import { enqueueAlertsInProjection } from './notification-alerts';
 import { effectiveFlightDeckPgThreadTitle } from './flightdeck-pg-thread-titles';
 import { listChannelRecipients } from './flightdeck-pg-notifications';
 import {
@@ -418,7 +418,7 @@ async function writeItem(tx: Sql, seed: ItemSeed): Promise<'created' | 'folded' 
   await tx`INSERT INTO flightdeck_pg_notification_item_events (event_id, recipient_actor_id, item_id) VALUES (${seed.event.id}, ${seed.recipient}, ${itemId})`;
   await tx`SELECT flightdeck_pg_notification_emit_hint(${seed.workspaceId}::uuid, ${seed.recipient}::uuid, ${itemId}::uuid, ${seq}::bigint, ${hintOp(outcome === 'created')})`;
   // Same transaction as the item: an alert exists only if its item committed. Born-read items are skipped inside.
-  await enqueueAlertsSafe(tx, itemId, outcome === 'folded');
+  await enqueueAlertsInProjection(tx, itemId, outcome === 'folded');
   return outcome;
 }
 

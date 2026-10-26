@@ -75,13 +75,13 @@ Provider configuration (secret-env custody: `NAME` or `NAME_FILE`; the key is ne
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `APNS_AUTH_KEY` / `APNS_AUTH_KEY_FILE` | yes | the APNs `.p8` private key (PEM). Prefer a mounted file |
+| `APNS_AUTH_KEY` / `APNS_AUTH_KEY_FILE` | yes | the APNs `.p8` private key (PEM, must be an EC P-256 key for ES256; other curves ⇒ `provider_key_invalid`). Prefer a mounted file |
 | `APNS_KEY_ID`, `APNS_TEAM_ID` | yes | from the Apple Developer account |
 | `APNS_TOPIC` | yes | primary bundle id; also the registration allow-list |
 | `APNS_CLIENT_APP_ID` | no (`ambulando`) | client app label for the primary topic |
 | `APNS_EXTRA_TOPICS` | no | `bundle=client_app,...` additional allowed bundles |
 | `APNS_ENVIRONMENTS` | no (`sandbox,production`) | which APNs environments may be addressed |
-| `NOTIF_PUBLIC_ORIGIN` | recommended | https origin written to `fd.origin` (otherwise the https origin seen at registration is used) |
+| `NOTIF_PUBLIC_ORIGIN` | recommended | https origin written to `fd.origin` (otherwise the https origin seen at registration is used; a transport with neither answers `delivery.reason=origin_unavailable` and is never queued) |
 | `NOTIF_ALERTS` | no (`on`) | `off` stops the alert worker (registry and inbox keep working) |
 
 Docker (local compose): `docker-compose.prod.yml` forwards all of these to the `b3` container (empty defaults) and mounts the **directory**

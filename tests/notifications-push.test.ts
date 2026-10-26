@@ -11,7 +11,7 @@ import { splitSqlStatements } from '../src/schema/sql-statements';
 import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { processIntakeBatch } from '../src/services/notification-projector';
 import { alertStatus, processAlertBatch } from '../src/services/notification-alerts';
-import { resetApnsJwtCache, sendApns, type ApnsResult, type ApnsSender, type ApnsSendInput } from '../src/services/notification-apns';
+import { loadApnsConfig, providerToken, resetApnsJwtCache, sendApns, type ApnsResult, type ApnsSender, type ApnsSendInput } from '../src/services/notification-apns';
 import { transportAdvertisement } from '../src/services/notification-registry';
 
 // Push delivery v1. Runs against a disposable Postgres with generated fixtures only (no owner keys, no real provider):
@@ -419,6 +419,93 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     const second = recorder();
     await processAlertBatch({ sql: db, sender: second.sender });
     expect(second.calls[0]!.collapseId).toBe(first.calls[0]!.collapseId);
+  });
+
+  test('an alert insert failure aborts the projection: no item commits, intake retries, then exactly one item and alert', async () => {
+    await freshBob();
+    const items = async () => (await db`SELECT COUNT(*)::int AS c FROM flightdeck_pg_notification_items WHERE recipient_actor_id = ${actors[2]!}`)[0]!.c as number;
+    const before = await items();
+    await db.unsafe(`CREATE OR REPLACE FUNCTION test_fail_alert_insert() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'forced alert insert failure'; END $$ LANGUAGE plpgsql`);
+    await db.unsafe('CREATE TRIGGER test_fail_alert_insert BEFORE INSERT ON flightdeck_pg_notification_alerts FOR EACH ROW EXECUTE FUNCTION test_fail_alert_insert()');
+    const originalError = console.error; console.error = () => {};
+    try { await ping(); } finally { console.error = originalError; await db.unsafe('DROP TRIGGER test_fail_alert_insert ON flightdeck_pg_notification_alerts'); }
+    expect(await items()).toBe(before);
+    expect((await alertsFor()).length).toBe(0);
+    const failed = await db`SELECT state, last_error FROM flightdeck_pg_notification_intake WHERE last_error LIKE '%forced alert insert failure%'`;
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed.every((r) => r.state === 'pending')).toBe(true);
+    await db`UPDATE flightdeck_pg_notification_intake SET next_attempt_at = NOW() WHERE state = 'pending'`;
+    await drain();
+    expect(await items()).toBe(before + 1);
+    expect((await alertsFor()).length).toBe(1);
+    expect((await db`SELECT COUNT(*)::int AS c FROM flightdeck_pg_notification_intake WHERE state = 'pending'`)[0]!.c).toBe(0);
+  });
+
+  test('a lease that expired before the provider call sends nothing and burns no attempt; claims never exceed what runs at once', async () => {
+    await freshBob();
+    for (let i = 0; i < 10; i++) await ping();
+    const wide = recorder({}, 20);
+    const stats = await processAlertBatch({ sql: db, sender: wide.sender, limit: 25 });
+    expect(stats.claimed).toBe(8);
+    expect(wide.calls).toHaveLength(8);
+
+    await freshBob(); await ping();
+    const [alert] = await alertsFor();
+    const old = recorder(); const fresh = recorder();
+    const oldRun = await processAlertBatch({
+      sql: db, sender: old.sender, owner: 'old-owner',
+      // the old owner stalls past its lease; another worker reclaims and delivers before the old one reaches the provider
+      beforeSend: async () => {
+        await db`UPDATE flightdeck_pg_notification_alerts SET lease_until = NOW() - INTERVAL '1 second' WHERE id = ${alert!.id}`;
+        expect((await processAlertBatch({ sql: db, sender: fresh.sender, owner: 'new-owner' })).sent).toBe(1);
+      },
+    });
+    expect(old.calls).toHaveLength(0);
+    expect(fresh.calls).toHaveLength(1);
+    expect(oldRun.sent).toBe(0);
+    expect(oldRun.skipped).toBe(1);
+    const [row] = await alertsFor();
+    expect(row!.state).toBe('sent');
+    expect(row!.attempt_count).toBe(1);
+    const attempts = await db`SELECT attempt_no, outcome FROM flightdeck_pg_notification_alert_attempts WHERE alert_id = ${alert!.id}`;
+    expect(attempts.map((x) => [x.attempt_no, x.outcome])).toEqual([[1, 'sent']]);
+  });
+
+  test('ES256 key must be P-256; the provider token follows key rotation under unchanged ids', () => {
+    const p384 = generateKeyPairSync('ec', { namedCurve: 'P-384' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    process.env.APNS_AUTH_KEY = p384;
+    expect(loadApnsConfig()).toEqual({ ready: false, reason: 'provider_key_invalid' });
+    expect(transportAdvertisement().transport_status.apns).toMatchObject({ ready: false, reason: 'provider_key_invalid' });
+
+    const check = (jwt: string, publicKey: import('node:crypto').KeyObject) => {
+      const [h, c, sig] = jwt.split('.');
+      return verify('sha256', Buffer.from(`${h}.${c}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig!, 'base64url'));
+    };
+    const rotated = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const load = (pem: string) => { process.env.APNS_AUTH_KEY = pem; const r = loadApnsConfig(); if (!r.ready) throw new Error(r.reason); return r.config; };
+    const first = providerToken(load(keyPem), 1_000_000);
+    expect(providerToken(load(keyPem), 1_000_500)).toBe(first); // same key: cached
+    const second = providerToken(load(rotated.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()), 1_001_000);
+    expect(second).not.toBe(first);
+    expect(check(first, ec.publicKey)).toBe(true);
+    expect(check(second, rotated.publicKey)).toBe(true);
+    expect(check(second, ec.publicKey)).toBe(false);
+  });
+
+  test('no eligible https origin for a transport: delivery is explicitly not ready and nothing is queued', async () => {
+    await freshBob();
+    delete process.env.NOTIF_PUBLIC_ORIGIN;
+    const res = await register(2, randomUUID(), token()); // test requests arrive over http://localhost: no https origin to fall back on
+    expect(res.status).toBe(200);
+    expect(res.body.delivery).toEqual({ ready: false, reason: 'origin_unavailable' });
+    expect(transportAdvertisement()).toMatchObject({ public_origin_configured: false });
+    await ping();
+    expect((await alertsFor()).length).toBe(0);
+
+    process.env.NOTIF_PUBLIC_ORIGIN = 'https://tower.example';
+    expect(transportAdvertisement()).toMatchObject({ public_origin_configured: true });
+    const ok = await register(2, randomUUID(), token());
+    expect(ok.body.delivery).toEqual({ ready: true });
   });
 
   test('real HTTP/2 adapter: environment routing, headers, ES256 provider token, and error mapping', async () => {

@@ -64,12 +64,14 @@ export function parseApnsInput(body: Record<string, any>): ApnsInput {
 }
 
 /** Honest delivery state for one transport: tells the client whether Tower can actually buzz this device. */
-export function deliveryState(installation: Pick<InstallationRow, 'permission_state'>, transport: Pick<TransportRow, 'environment' | 'bundle_id'> | null) {
+export function deliveryState(installation: Pick<InstallationRow, 'permission_state'>, transport: Pick<TransportRow, 'environment' | 'bundle_id'> & { registered_origin?: string | null } | null) {
   const readiness = loadApnsConfig();
   if (!readiness.ready) return { ready: false as const, reason: readiness.reason };
   if (transport?.environment && !readiness.config.environments.has(transport.environment)) return { ready: false as const, reason: 'environment_not_enabled' };
   if (transport?.bundle_id && !readiness.config.topics.has(transport.bundle_id)) return { ready: false as const, reason: 'bundle_not_allowed' };
   if (installation.permission_state !== 'granted') return { ready: false as const, reason: 'permission_not_granted' };
+  // The alert envelope needs an https origin: the configured NOTIF_PUBLIC_ORIGIN, else the https origin seen at registration.
+  if (transport && !readiness.config.publicOrigin && !transport.registered_origin?.startsWith('https://')) return { ready: false as const, reason: 'origin_unavailable' };
   return { ready: true as const };
 }
 
@@ -229,6 +231,8 @@ export function transportAdvertisement() {
   return {
     transports: ['apns'],
     alerts: readiness.ready,
+    // false: each transport must have registered over https (delivery.reason=origin_unavailable otherwise)
+    public_origin_configured: readiness.ready && readiness.config.publicOrigin !== null,
     transport_status: {
       apns: readiness.ready
         ? { ready: true, environments: [...readiness.config.environments] }
