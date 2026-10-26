@@ -53,7 +53,7 @@ function intParam(c: Context, name: string, fallback: number, min: number, max: 
 
 /** Consumer routes: actor comes only from verified NIP-98 and an active workspace membership. */
 type ConsumerCtx = { c: Context; sql: Sql; identity: Identity; workspaceId: string; actorId: string; role: string; userNpub: string; signerNpub: string; appNpub: string };
-function consumer(handler: (ctx: ConsumerCtx) => Promise<Response>) {
+function consumer(handler: (ctx: ConsumerCtx) => Promise<Response>, options: { sensitiveErrors?: boolean } = {}) {
   return async (c: Context) => {
     c.header('Cache-Control', 'private, no-store');
     let identity: Identity | null = null;
@@ -71,10 +71,25 @@ function consumer(handler: (ctx: ConsumerCtx) => Promise<Response>) {
       return await handler({ c, sql, identity, workspaceId: context.workspace.id, actorId: context.actor.id, role: context.membership.role, userNpub: auth.userNpub, signerNpub: auth.signerNpub, appNpub: context.workspace.app_npub });
     } catch (error) {
       if (error instanceof NotificationError) return fail(c, identity, error);
+      if (options.sensitiveErrors) return failSensitive(c, identity, error);
       throw error;
     }
   };
 }
+
+/**
+ * Unexpected failure on a route that handles raw device tokens/addresses. Database driver errors can carry the query,
+ * bound parameters or detail text, and the default error handler logs the whole error, so never pass it on: log a
+ * constant message plus the sanitized SQLSTATE only and answer with a generic 500.
+ */
+function failSensitive(c: Context, identity: Identity | null, error: unknown) {
+  const code = (error as { code?: unknown } | null)?.code;
+  console.error('push registration failed', typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? { sqlstate: code } : {});
+  return fail(c, identity, new NotificationError(500, 'push_registration_failed', 'Push registration failed'));
+}
+
+/** Push registry routes: consumer routes whose unexpected errors are never logged or returned verbatim. */
+const pushConsumer = (handler: (ctx: ConsumerCtx) => Promise<Response>) => consumer(handler, { sensitiveErrors: true });
 
 /**
  * Source/queue administration needs the EFFECTIVE `workspace.manage` permission (direct, group or role grants through the
@@ -222,13 +237,13 @@ export function registerNotificationRoutes(router: Hono) {
   const INSTALLATION_KEYS = ['client_app_id', 'platform', 'app_version', 'device_label', 'permission_state'];
   const APNS_KEYS = ['device_token', 'environment', 'bundle_id', 'preview', 'lease_seconds'];
 
-  router.put(`${base}/installations/:installationId`, consumer(async (ctx) => {
+  router.put(`${base}/installations/:installationId`, pushConsumer(async (ctx) => {
     const { body } = await readBody(ctx.c);
     onlyKeys(body, INSTALLATION_KEYS);
     return ctx.c.json({ identity: ctx.identity, ...(await putInstallation(ctx.sql, registrant(ctx), parseInstallationInput(body, true))) });
   }));
 
-  router.delete(`${base}/installations/:installationId`, consumer(async (ctx) => {
+  router.delete(`${base}/installations/:installationId`, pushConsumer(async (ctx) => {
     queryKeys(ctx.c, []);
     return ctx.c.json({ identity: ctx.identity, ...(await removeEnrollment(ctx.sql, registrant(ctx))) });
   }));
@@ -240,7 +255,7 @@ export function registerNotificationRoutes(router: Hono) {
     throw new NotificationError(400, 'validation_error', 'kind must be apns, webpush or fcm');
   };
 
-  router.put(`${base}/installations/:installationId/transports/:kind`, consumer(async (ctx) => {
+  router.put(`${base}/installations/:installationId/transports/:kind`, pushConsumer(async (ctx) => {
     transportKind(ctx.c);
     const { body } = await readBody(ctx.c);
     onlyKeys(body, APNS_KEYS);
@@ -248,21 +263,21 @@ export function registerNotificationRoutes(router: Hono) {
     return ctx.c.json({ identity: ctx.identity, ...result });
   }));
 
-  router.delete(`${base}/installations/:installationId/transports/:kind`, consumer(async (ctx) => {
+  router.delete(`${base}/installations/:installationId/transports/:kind`, pushConsumer(async (ctx) => {
     const kind = transportKind(ctx.c);
     queryKeys(ctx.c, []);
     return ctx.c.json({ identity: ctx.identity, ...(await revokeTransport(ctx.sql, registrant(ctx), kind)) });
   }));
 
   // Compatibility alias for shipped Apple clients: implicit installation + enrollment.
-  router.put(`${base}/apns-devices/:installationId`, consumer(async (ctx) => {
+  router.put(`${base}/apns-devices/:installationId`, pushConsumer(async (ctx) => {
     const { body } = await readBody(ctx.c);
     onlyKeys(body, [...APNS_KEYS, ...INSTALLATION_KEYS]);
     const result = await putApnsTransport(ctx.sql, registrant(ctx), parseApnsInput(body), { implicit: parseInstallationInput(body, false), origin: requestOrigin(ctx.c) });
     return ctx.c.json({ identity: ctx.identity, ...result });
   }));
 
-  router.delete(`${base}/apns-devices/:installationId`, consumer(async (ctx) => {
+  router.delete(`${base}/apns-devices/:installationId`, pushConsumer(async (ctx) => {
     queryKeys(ctx.c, []);
     return ctx.c.json({ identity: ctx.identity, ...(await removeEnrollment(ctx.sql, registrant(ctx))) });
   }));

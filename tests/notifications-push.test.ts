@@ -204,6 +204,53 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect((await register(3, randomUUID(), tok)).status).toBe(200);
   });
 
+  test('unexpected registry database failures never log or return the device token', async () => {
+    await freshBob();
+    const installation = randomUUID(); const tok = token();
+    expect((await register(2, installation, tok)).status).toBe(200);
+    // A database error whose message and detail carry the generated fixture token, as a driver error with bound parameters could.
+    await db.unsafe(`CREATE OR REPLACE FUNCTION fd_test_leak() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      RAISE EXCEPTION 'leak %', COALESCE(NEW.address, OLD.address) USING DETAIL = COALESCE(NEW.address, OLD.address), ERRCODE = 'XX001'; END $$`);
+    await db.unsafe('CREATE TRIGGER fd_test_leak BEFORE INSERT OR UPDATE OR DELETE ON flightdeck_pg_notification_transports FOR EACH ROW EXECUTE FUNCTION fd_test_leak()');
+    const logged: string[] = [];
+    const originals = { error: console.error, warn: console.warn, log: console.log };
+    const capture = (...args: unknown[]) => { logged.push(args.map((a) => (a instanceof Error ? `${a.message}\n${a.stack}\n${JSON.stringify(a)}` : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')); };
+    console.error = capture; console.warn = capture; console.log = capture;
+    let results: { status: number; text: string; body: any }[];
+    try {
+      const other = token();
+      results = [
+        await register(2, randomUUID(), other),
+        await register(2, installation, tok, { lease_seconds: 3600 }),
+        await n(`/installations/${installation}/transports/apns`, 'PUT', 2, transportBody(tok)),
+        await n(`/installations/${installation}/transports/apns`, 'DELETE', 2),
+        await n(`/apns-devices/${installation}`, 'DELETE', 2),
+      ];
+      logged.push(other);
+      for (const r of results.slice(0, 2)) expect(r.text.includes(other) || r.text.includes(tok)).toBe(false);
+      expect(logged.slice(0, -1).join('\n').includes(other)).toBe(false);
+    } finally {
+      console.error = originals.error; console.warn = originals.warn; console.log = originals.log;
+      await db.unsafe('DROP TRIGGER IF EXISTS fd_test_leak ON flightdeck_pg_notification_transports');
+      await db.unsafe('DROP FUNCTION IF EXISTS fd_test_leak()');
+    }
+    const failures = results.filter((r) => r.status === 500);
+    expect(failures.length).toBeGreaterThanOrEqual(3);
+    for (const r of failures) {
+      expect(r.body).toMatchObject({ code: 'push_registration_failed', status: 500, error: 'Push registration failed' });
+      expect(r.text.includes(tok)).toBe(false);
+    }
+    expect(results[0]!.status).toBe(500);
+    expect(logged.length).toBeGreaterThan(0);
+    expect(logged.every((line) => !line.includes(tok) && !line.includes('leak '))).toBe(true);
+    expect(logged.some((line) => line.includes('push registration failed') && line.includes('XX001'))).toBe(true);
+
+    // expected failures are unchanged once the fault is gone
+    expect((await register(3, randomUUID(), tok)).body.code).toBe('transport_owned');
+    expect((await register(3, installation, token())).body.code).toBe('installation_owned');
+    expect((await register(2, installation, 'abcd')).body.code).toBe('validation_error');
+  });
+
   test('a lease-expired token is released to a new owner; a live one is not', async () => {
     await freshBob();
     const tok = token();

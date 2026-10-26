@@ -36,7 +36,7 @@ export const CORE_CATEGORIES: CategoryDef[] = [
 export const RESERVED_CATEGORIES = new Set(['security', 'approval', ...CORE_CATEGORIES.map((c) => c.category)]);
 
 export class NotificationError extends Error {
-  constructor(public status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429, public code: string, message?: string, public extra: Record<string, unknown> = {}) {
+  constructor(public status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500, public code: string, message?: string, public extra: Record<string, unknown> = {}) {
     super(message ?? code);
   }
 }
