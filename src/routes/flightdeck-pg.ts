@@ -1190,8 +1190,9 @@ function parseTextAttachmentLineage(value: unknown, fields: { path: string; code
     return null;
   }
   const record = value as Record<string, unknown>;
-  const originMessageId = String(record.origin_message_id || '').trim();
-  const originStorageObjectId = String(record.origin_storage_object_id || '').trim();
+  // UUIDs are lowercased so case variants cannot dodge the lock or the lookup.
+  const originMessageId = String(record.origin_message_id || '').trim().toLowerCase();
+  const originStorageObjectId = String(record.origin_storage_object_id || '').trim().toLowerCase();
   if (record.v !== 1) fields.push({ path: `${path}.v`, code: 'invalid', message: 'v must be 1' });
   if (!isUuid(originMessageId)) fields.push({ path: `${path}.origin_message_id`, code: 'invalid', message: 'origin_message_id must be a UUID' });
   if (!isUuid(originStorageObjectId)) fields.push({ path: `${path}.origin_storage_object_id`, code: 'invalid', message: 'origin_storage_object_id must be a UUID' });
@@ -1200,7 +1201,17 @@ function parseTextAttachmentLineage(value: unknown, fields: { path: string; code
   }
   return fields.some((field) => field.path.startsWith(path))
     ? null
-    : { origin_message_id: originMessageId, origin_storage_object_id: originStorageObjectId };
+    : {
+      origin_message_id: originMessageId,
+      origin_storage_object_id: originStorageObjectId,
+      // Stored form: only known keys, canonical ids.
+      stored: {
+        v: 1,
+        origin_message_id: originMessageId,
+        origin_storage_object_id: originStorageObjectId,
+        ...(typeof record.origin_filename === 'string' ? { origin_filename: record.origin_filename.slice(0, 255) } : {}),
+      },
+    };
 }
 
 const FILE_VERSION_SUMMARY_MAX_CHARS = 280;
@@ -7999,6 +8010,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
   const rawLineage = metadata?.text_attachment_lineage;
   const lineage = rawLineage === undefined ? null : parseTextAttachmentLineage(rawLineage, fields);
   if (fields.length) return validationError(c, identity, fields);
+  const storedMetadata = lineage && metadata ? { ...metadata, text_attachment_lineage: lineage.stored } : metadata;
 
   const access = await authorizeFlightDeckPgStorageAttach({
     actorNpub: auth.userNpub,
@@ -8016,7 +8028,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
     const origin = await resolveFlightDeckPgMessage(context.workspace.id, lineage.origin_message_id);
     const originAttachments = Array.isArray(origin?.metadata?.attachments) ? origin!.metadata.attachments as Array<Record<string, unknown>> : [];
     if (!origin || origin.channel_id !== channel.id
-      || !originAttachments.some((attachment) => String(attachment?.storage_object_id || '') === lineage.origin_storage_object_id)) {
+      || !originAttachments.some((attachment) => String(attachment?.storage_object_id || '').toLowerCase() === lineage.origin_storage_object_id)) {
       return jsonError(c, 400, 'lineage_origin_invalid', 'Lineage origin message attachment was not found in this channel', identity);
     }
     // Text lineage only: both the new bytes and the pinned original must be text/plain.
@@ -8039,7 +8051,6 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
       if (lineage) {
         const canonical = await lockAndFindTextLineageFile({
           workspaceId: context.workspace.id,
-          channelId: channel.id,
           originMessageId: lineage.origin_message_id,
           originStorageObjectId: lineage.origin_storage_object_id,
         }, sql);
@@ -8058,7 +8069,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
         folderId: folderPlacement.folderId,
         displayName,
         description,
-        metadata: metadata ?? undefined,
+        metadata: storedMetadata ?? undefined,
         actorId: context.actor.id,
         versionSummary,
       }, sql);
@@ -8097,6 +8108,15 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
       // Another creator already owns this lineage: hand back the canonical file
       // so the client adopts it and rebases with a normal version POST.
       const canonical = payload.lineageCanonical;
+      // Writing is not reading: canonical metadata needs file.read on its own channel.
+      const readAccess = await authorizeFlightDeckPgStorageRead({
+        actorNpub: auth.userNpub,
+        appNpub: context.workspace.app_npub,
+        workspaceId: context.workspace.id,
+        entityType: 'file',
+        channelId: canonical.channel_id,
+      });
+      if (!readAccess.allowed) return storageAuthorizationError(c, readAccess, identity, 'file.read or channel.read');
       const currentVersion = canonical.current_version_id
         ? await resolveFlightDeckPgFileVersion({ workspaceId: context.workspace.id, versionId: canonical.current_version_id })
         : null;
@@ -8194,6 +8214,30 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/files/:fileId', async (c) => 
   if (archived !== undefined && typeof archived !== 'boolean') fields.push({ path: 'archived', code: 'invalid', message: 'archived must be a boolean when provided' });
   if (fields.length) return validationError(c, identity, fields);
 
+  // Text attachment lineage is the first-edit uniqueness key: it can neither be
+  // added, changed, removed nor moved to another channel. Other metadata is free.
+  const existingLineage = (existing.metadata as Record<string, unknown> | null)?.text_attachment_lineage;
+  let patchMetadata = metadata ?? undefined;
+  if (metadata) {
+    const incoming = metadata.text_attachment_lineage;
+    if (existingLineage !== undefined) {
+      const canonicalIncoming = incoming === undefined ? null : parseTextAttachmentLineage(incoming, []);
+      const current = existingLineage as Record<string, unknown>;
+      // jsonb does not keep key order, so compare the identifying fields only.
+      if (incoming !== undefined && (!canonicalIncoming
+        || canonicalIncoming.origin_message_id !== current.origin_message_id
+        || canonicalIncoming.origin_storage_object_id !== current.origin_storage_object_id)) {
+        return jsonError(c, 400, 'lineage_immutable', 'Text attachment lineage cannot be changed', identity);
+      }
+      patchMetadata = { ...metadata, text_attachment_lineage: existingLineage };
+    } else if (incoming !== undefined) {
+      return jsonError(c, 400, 'lineage_immutable', 'Text attachment lineage can only be set when the file is created', identity);
+    }
+  }
+  if (existingLineage !== undefined && channelId && channelId !== existing.channel_id) {
+    return jsonError(c, 400, 'lineage_immutable', 'A text attachment lineage file cannot move channels', identity);
+  }
+
   let targetChannel = null;
   if (channelId && channelId !== existing.channel_id) {
     targetChannel = await resolveFlightDeckPgChannel(context.workspace.id, channelId);
@@ -8242,7 +8286,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/files/:fileId', async (c) => 
           folderId: folderId === undefined && !targetChannel ? undefined : folderPlacement.folderId,
           displayName,
           description,
-          metadata: metadata ?? undefined,
+          metadata: patchMetadata,
           archived,
         },
       }, sql);

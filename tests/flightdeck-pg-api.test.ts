@@ -419,7 +419,7 @@ describe('Flight Deck PG API routes', () => {
   });
 
   test('text attachment lineage files are unique per origin attachment and replay safely', async () => {
-    const { workspaceId, ownerId } = await seedWorkspace('npub1textlineageapi');
+    const { workspaceId, ownerId, groupMemberId } = await seedWorkspace('npub1textlineageapi');
     const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Lineage','project') RETURNING id`;
     const makeChannel = async (name: string) => {
       const [channel] = await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope!.id},${name}) RETURNING id`;
@@ -504,6 +504,54 @@ describe('Flight Deck PG API routes', () => {
     expect(replay.res.status).toBe(200);
     expect(replay.json.idempotent_replay).toBe(true);
     expect(replay.json.file.id).toBe(canonicalId);
+
+    // Case variants of the same ids hit the same lineage, and stored ids are canonical.
+    const upperDuplicate = await requestJson(path(channelId), 'POST', ownerSecret, {
+      display_name: 'upper', storage_object_id: (await edit('upper')).id,
+      metadata: lineage({ origin_message_id: messageId.toUpperCase(), origin_storage_object_id: original.id.toUpperCase() }),
+    });
+    expect(upperDuplicate.res.status).toBe(409);
+    expect(upperDuplicate.json.file.id).toBe(canonicalId);
+    expect(upperDuplicate.json.file.metadata.text_attachment_lineage).toMatchObject({ v: 1, origin_message_id: messageId, origin_storage_object_id: original.id });
+
+    // The lineage is immutable through PATCH, while ordinary metadata and renames still work.
+    const filePatchPath = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${canonicalId}`;
+    const fileNow = async () => (await requestJson(filePatchPath, 'GET', ownerSecret)).json.file;
+    const rename = await requestJson(filePatchPath, 'PATCH', ownerSecret, { display_name: 'Renamed.txt', metadata: { note: 'kept' }, row_version: (await fileNow()).row_version });
+    expect(rename.res.status).toBe(200);
+    expect(rename.json.file.metadata.note).toBe('kept');
+    expect(rename.json.file.metadata.text_attachment_lineage).toMatchObject({ origin_message_id: messageId, origin_storage_object_id: original.id });
+    const repoint = await requestJson(filePatchPath, 'PATCH', ownerSecret, { metadata: lineage({ origin_storage_object_id: foreignObject.id }), row_version: (await fileNow()).row_version });
+    expect(repoint.res.status).toBe(400);
+    expect(repoint.json.code).toBe('lineage_immutable');
+    const moveChannel = await requestJson(filePatchPath, 'PATCH', ownerSecret, { channel_id: otherChannelId, row_version: (await fileNow()).row_version });
+    expect(moveChannel.json.code).toBe('lineage_immutable');
+    const ordinaryFile = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'ordinary', storage_object_id: (await edit('ord')).id });
+    const addLineage = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${ordinaryFile.json.file.id}`, 'PATCH', ownerSecret, { metadata: lineage(), row_version: ordinaryFile.json.file.row_version });
+    expect(addLineage.json.code).toBe('lineage_immutable');
+    const clearMetadata = await requestJson(filePatchPath, 'PATCH', ownerSecret, { metadata: {}, row_version: (await fileNow()).row_version });
+    expect(clearMetadata.res.status).toBe(200);
+    expect(clearMetadata.json.file.metadata.text_attachment_lineage).toBeTruthy();
+
+    // A deleted origin message is not a valid lineage origin.
+    const doomedId = await sendMessage(channelId, [{ kind: 'file', storage_object_id: (await edit('doomed')).id, filename: 'x.txt' }]);
+    await sql`UPDATE flightdeck_pg_messages SET deleted_at = now() WHERE id = ${doomedId}`;
+    const [doomedAttachment] = (await sql`SELECT metadata FROM flightdeck_pg_messages WHERE id = ${doomedId}`).map((row: any) => row.metadata.attachments);
+    const deletedOrigin = await requestJson(path(channelId), 'POST', ownerSecret, {
+      display_name: 'x', storage_object_id: (await edit('after-delete')).id,
+      metadata: lineage({ origin_message_id: doomedId, origin_storage_object_id: doomedAttachment[0].storage_object_id }),
+    });
+    expect(deletedOrigin.json.code).toBe('lineage_origin_invalid');
+
+    // A writer without read access cannot learn canonical file metadata from the conflict.
+    for (const permission of ['channel.write', 'file.write']) {
+      await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+        VALUES(${workspaceId},'actor',${groupMemberId},'channel',${channelId},${permission})`;
+    }
+    const writerOnly = await requestJson(path(channelId), 'POST', groupMemberSecret, { display_name: 'w', storage_object_id: (await edit('writer')).id, metadata: lineage() });
+    expect(writerOnly.res.status).toBe(403);
+    expect(writerOnly.json.required_permission).toBe('file.read or channel.read');
+    expect(JSON.stringify(writerOnly.json)).not.toContain(canonicalId);
 
     // The loser rebases onto the canonical version with the normal version route.
     const loserObject = conflicts[0] ? await edit('rebased') : null;

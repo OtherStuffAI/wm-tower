@@ -4893,7 +4893,7 @@ export async function listFlightDeckPgFileVersions(
  * the surrounding transaction ends, so concurrent first creators queue here.
  */
 export async function lockAndFindTextLineageFile(
-  input: { workspaceId: string; channelId: string; originMessageId: string; originStorageObjectId: string },
+  input: { workspaceId: string; originMessageId: string; originStorageObjectId: string },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgFileRow | null> {
   const lockKey = `${input.workspaceId}:text-lineage:${input.originMessageId}:${input.originStorageObjectId}`;
@@ -4902,7 +4902,6 @@ export async function lockAndFindTextLineageFile(
     SELECT *
     FROM flightdeck_pg_files
     WHERE workspace_id = ${input.workspaceId}
-      AND channel_id = ${input.channelId}
       AND deleted_at IS NULL
       AND metadata -> 'text_attachment_lineage' ->> 'origin_message_id' = ${input.originMessageId}
       AND metadata -> 'text_attachment_lineage' ->> 'origin_storage_object_id' = ${input.originStorageObjectId}
