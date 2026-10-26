@@ -418,6 +418,87 @@ describe('Flight Deck PG API routes', () => {
     expect(foreign.json.channels).toEqual([]);
   });
 
+  test('text attachment lineage files are unique per origin attachment and replay safely', async () => {
+    const { workspaceId, ownerId } = await seedWorkspace('npub1textlineageapi');
+    const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind) VALUES(${workspaceId},'Lineage','project') RETURNING id`;
+    const makeChannel = async (name: string) => {
+      const [channel] = await sql`INSERT INTO flightdeck_pg_channels(workspace_id,scope_id,name) VALUES(${workspaceId},${scope!.id},${name}) RETURNING id`;
+      for (const permission of ['channel.read', 'channel.write', 'file.read', 'file.write']) {
+        await sql`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission)
+          VALUES(${workspaceId},'actor',${ownerId},'channel',${channel!.id},${permission})`;
+      }
+      return channel!.id as string;
+    };
+    const channelId = await makeChannel('Lineage A');
+    const otherChannelId = await makeChannel('Lineage B');
+    const original = await createCompletedDocStorageObject({ workspaceId, fileName: 'Pasted text.txt', content: 'original\r\nbytes' });
+    const insertMessage = async (chan: string, attachments: unknown[]) => {
+      const [message] = await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,metadata,created_by_actor_id,updated_by_actor_id)
+        VALUES(${workspaceId},${scope!.id},${chan},'',${sql.json({ attachments } as any)},${ownerId},${ownerId}) RETURNING id`;
+      return message!.id as string;
+    };
+    const messageId = await insertMessage(channelId, [{ kind: 'file', storage_object_id: original.id, filename: 'Pasted text.txt' }]);
+    const path = (chan: string) => `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${chan}/files`;
+    const lineage = (extra: Record<string, unknown> = {}) => ({
+      text_attachment_lineage: { v: 1, origin_message_id: messageId, origin_storage_object_id: original.id, origin_filename: 'Pasted text.txt', ...extra },
+    });
+    const edit = (content: string) => createCompletedDocStorageObject({ workspaceId, fileName: 'Pasted text.txt', content });
+
+    // Invalid origins are rejected without creating a file.
+    const wrongChannel = await requestJson(path(otherChannelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: (await edit('a')).id, metadata: lineage() });
+    expect(wrongChannel.res.status).toBe(400);
+    expect(wrongChannel.json.code).toBe('lineage_origin_invalid');
+    const foreignObject = await edit('foreign');
+    const wrongObject = await requestJson(path(channelId), 'POST', ownerSecret, {
+      display_name: 'x', storage_object_id: (await edit('b')).id,
+      metadata: lineage({ origin_storage_object_id: foreignObject.id }),
+    });
+    expect(wrongObject.json.code).toBe('lineage_origin_invalid');
+    const badShape = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: (await edit('c')).id, metadata: lineage({ v: 2, origin_message_id: 'nope' }) });
+    expect(badShape.res.status).toBe(400);
+
+    // Concurrent first edits: exactly one 201, the rest 409 with the canonical file.
+    const candidates = await Promise.all(['one', 'two', 'three', 'four'].map((text) => edit(text)));
+    const results = await Promise.all(candidates.map((object, index) => requestJson(path(channelId), 'POST', ownerSecret, {
+      display_name: `Pasted text ${index}.txt`, storage_object_id: object.id, metadata: lineage(),
+    })));
+    const created = results.filter((result) => result.res.status === 201);
+    const conflicts = results.filter((result) => result.res.status === 409);
+    expect(created).toHaveLength(1);
+    expect(conflicts).toHaveLength(3);
+    const canonicalId = created[0]!.json.file.id as string;
+    for (const conflict of conflicts) {
+      expect(conflict.json.code).toBe('lineage_file_exists');
+      expect(conflict.json.file.id).toBe(canonicalId);
+      expect(conflict.json.current_version.id).toBe(created[0]!.json.file.current_version_id);
+      expect(conflict.json.lineage).toEqual({ origin_message_id: messageId, origin_storage_object_id: original.id });
+    }
+    const listed = await requestJson(path(channelId), 'GET', ownerSecret);
+    expect(listed.json.files.filter((file: any) => file.metadata?.text_attachment_lineage)).toHaveLength(1);
+
+    // A lost-response retry with the creator's own object replays instead of conflicting.
+    const winnerObjectId = created[0]!.json.file.storage_object_id as string;
+    const replay = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'again', storage_object_id: winnerObjectId, metadata: lineage() });
+    expect(replay.res.status).toBe(200);
+    expect(replay.json.idempotent_replay).toBe(true);
+    expect(replay.json.file.id).toBe(canonicalId);
+
+    // The loser rebases onto the canonical version with the normal version route.
+    const loserObject = conflicts[0] ? await edit('rebased') : null;
+    const version = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/files/${canonicalId}/versions`, 'POST', ownerSecret, {
+      base_version_id: conflicts[0]!.json.current_version.id, storage_object_id: loserObject!.id, client_mutation_id: randomUUID(),
+    });
+    expect(version.res.status).toBe(201);
+
+    // Ordinary files and deleted lineage files keep existing behavior.
+    const ordinary = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'plain', storage_object_id: (await edit('plain')).id });
+    expect(ordinary.res.status).toBe(201);
+    await sql`UPDATE flightdeck_pg_files SET deleted_at = now() WHERE id = ${canonicalId}`;
+    const afterDelete = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'fresh', storage_object_id: (await edit('fresh')).id, metadata: lineage() });
+    expect(afterDelete.res.status).toBe(201);
+    expect(afterDelete.json.file.id).not.toBe(canonicalId);
+  });
+
   test('message reference lookup routes cold IDs narrowly and hides denied or deleted targets', async () => {
     const { workspaceId, ownerId, groupMemberId } = await seedWorkspace('npub1messagelookuptest');
     const [scope] = await sql`INSERT INTO flightdeck_pg_scopes(workspace_id,name,kind)

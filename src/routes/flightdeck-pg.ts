@@ -152,6 +152,8 @@ import {
   createFlightDeckPgDailyNoteOutboxEvent,
   createFlightDeckPgPersonalWappOutboxEvent,
   createFlightDeckPgFile,
+  lockAndFindTextLineageFile,
+  resolveFlightDeckPgFileVersion,
   createFlightDeckPgFileFolder,
   createFlightDeckPgFileFolderOutboxEvent,
   createFlightDeckPgFileOutboxEvent,
@@ -1178,6 +1180,27 @@ function optionalObject(value: unknown) {
   if (value === undefined) return undefined;
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   return null;
+}
+
+/** Validates metadata.text_attachment_lineage; shape only, origin existence is checked against the channel. */
+function parseTextAttachmentLineage(value: unknown, fields: { path: string; code: string; message: string }[]) {
+  const path = 'metadata.text_attachment_lineage';
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fields.push({ path, code: 'invalid', message: 'text_attachment_lineage must be an object' });
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const originMessageId = String(record.origin_message_id || '').trim();
+  const originStorageObjectId = String(record.origin_storage_object_id || '').trim();
+  if (record.v !== 1) fields.push({ path: `${path}.v`, code: 'invalid', message: 'v must be 1' });
+  if (!isUuid(originMessageId)) fields.push({ path: `${path}.origin_message_id`, code: 'invalid', message: 'origin_message_id must be a UUID' });
+  if (!isUuid(originStorageObjectId)) fields.push({ path: `${path}.origin_storage_object_id`, code: 'invalid', message: 'origin_storage_object_id must be a UUID' });
+  if (record.origin_filename !== undefined && typeof record.origin_filename !== 'string') {
+    fields.push({ path: `${path}.origin_filename`, code: 'invalid', message: 'origin_filename must be a string when provided' });
+  }
+  return fields.some((field) => field.path.startsWith(path))
+    ? null
+    : { origin_message_id: originMessageId, origin_storage_object_id: originStorageObjectId };
 }
 
 const FILE_VERSION_SUMMARY_MAX_CHARS = 280;
@@ -7973,6 +7996,8 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
   }
   if (metadata === null) fields.push({ path: 'metadata', code: 'invalid', message: 'metadata must be an object when provided' });
   const versionSummary = fileVersionSummaryField(body, fields);
+  const rawLineage = metadata?.text_attachment_lineage;
+  const lineage = rawLineage === undefined ? null : parseTextAttachmentLineage(rawLineage, fields);
   if (fields.length) return validationError(c, identity, fields);
 
   const access = await authorizeFlightDeckPgStorageAttach({
@@ -7986,6 +8011,15 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
 
   const channel = await resolveFlightDeckPgChannel(context.workspace.id, channelId);
   if (!channel) return jsonError(c, 404, 'channel_not_found', 'Flight Deck PG channel not found', identity);
+  if (lineage) {
+    // The origin must be an attachment of an undeleted message in this channel.
+    const origin = await resolveFlightDeckPgMessage(context.workspace.id, lineage.origin_message_id);
+    const originAttachments = Array.isArray(origin?.metadata?.attachments) ? origin!.metadata.attachments as Array<Record<string, unknown>> : [];
+    if (!origin || origin.channel_id !== channel.id
+      || !originAttachments.some((attachment) => String(attachment?.storage_object_id || '') === lineage.origin_storage_object_id)) {
+      return jsonError(c, 400, 'lineage_origin_invalid', 'Lineage origin message attachment was not found in this channel', identity);
+    }
+  }
   const folderPlacement = await resolveFileFolderPlacement({
     workspaceId: context.workspace.id,
     scopeId: channel.scope_id,
@@ -7997,6 +8031,21 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
+      if (lineage) {
+        const canonical = await lockAndFindTextLineageFile({
+          workspaceId: context.workspace.id,
+          channelId: channel.id,
+          originMessageId: lineage.origin_message_id,
+          originStorageObjectId: lineage.origin_storage_object_id,
+        }, sql);
+        if (canonical) {
+          const [held] = await sql<{ id: string }[]>`
+            SELECT id FROM flightdeck_pg_file_versions
+            WHERE workspace_id = ${context.workspace.id} AND file_id = ${canonical.id} AND storage_object_id = ${storageObjectId}
+            LIMIT 1`;
+          return { lineageCanonical: canonical, replay: Boolean(held) };
+        }
+      }
       const file = await createFlightDeckPgFile({
         workspaceId: context.workspace.id,
         channel,
@@ -8038,6 +8087,28 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
       }, sql);
       return { file, link, auditId, outbox };
     });
+
+    if ('lineageCanonical' in payload) {
+      // Another creator already owns this lineage: hand back the canonical file
+      // so the client adopts it and rebases with a normal version POST.
+      const canonical = payload.lineageCanonical;
+      const currentVersion = canonical.current_version_id
+        ? await resolveFlightDeckPgFileVersion({ workspaceId: context.workspace.id, versionId: canonical.current_version_id })
+        : null;
+      const currentObject = currentVersion ? await getStorageObject(currentVersion.storage_object_id) : null;
+      const serialized = serializeFlightDeckPgFile(canonical, {
+        storageObject: currentObject ? serializeFlightDeckPgStorageObjectMetadata(currentObject) : null,
+        currentVersion,
+        currentVersionStorageObject: currentObject,
+      });
+      const lineageBody = {
+        file: serialized,
+        current_version: currentVersion ? serializeFlightDeckPgFileVersion(currentVersion, { storageObject: currentObject }) : null,
+        lineage: lineage ? { origin_message_id: lineage.origin_message_id, origin_storage_object_id: lineage.origin_storage_object_id } : null,
+      };
+      if (payload.replay) return c.json({ identity, ...lineageBody, idempotent_replay: true }, 200);
+      return jsonError(c, 409, 'lineage_file_exists', 'A file already exists for this text attachment lineage', identity, lineageBody);
+    }
 
     return c.json({
       identity,

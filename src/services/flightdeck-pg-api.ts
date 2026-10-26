@@ -4886,6 +4886,32 @@ export async function listFlightDeckPgFileVersions(
   `;
 }
 
+/**
+ * Serialize first-edit creation per (message, original attachment object) and
+ * return the canonical lineage File, if one already exists. Archived files
+ * still own the lineage; deleted files do not. The advisory lock lasts until
+ * the surrounding transaction ends, so concurrent first creators queue here.
+ */
+export async function lockAndFindTextLineageFile(
+  input: { workspaceId: string; channelId: string; originMessageId: string; originStorageObjectId: string },
+  sql: DbClient = getDb(),
+): Promise<FlightDeckPgFileRow | null> {
+  const lockKey = `${input.workspaceId}:text-lineage:${input.originMessageId}:${input.originStorageObjectId}`;
+  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  const [file] = await sql<FlightDeckPgFileRow[]>`
+    SELECT *
+    FROM flightdeck_pg_files
+    WHERE workspace_id = ${input.workspaceId}
+      AND channel_id = ${input.channelId}
+      AND deleted_at IS NULL
+      AND metadata -> 'text_attachment_lineage' ->> 'origin_message_id' = ${input.originMessageId}
+      AND metadata -> 'text_attachment_lineage' ->> 'origin_storage_object_id' = ${input.originStorageObjectId}
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  `;
+  return file ?? null;
+}
+
 export async function createFlightDeckPgFile(
   input: {
     workspaceId: string;
