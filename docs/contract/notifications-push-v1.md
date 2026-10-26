@@ -36,7 +36,7 @@ Compatibility alias (the path shipped Apple clients call; installation is create
 ```
 
 `client_app_id` slug `^[a-z][a-z0-9_.-]{0,63}$` (required); `platform` ∈ `web|ios|ipados|macos|android` (required);
-`permission_state` ∈ `granted|denied|unknown` (default `unknown`; `denied` suppresses alerts); `app_version`, `device_label` optional ≤ 64 chars.
+`permission_state` ∈ `granted|denied|unknown` (default `unknown`). **Alerts are sent only when `granted`**; `unknown` and `denied` suppress (registration still succeeds and the lease persists, with `delivery.ready=false`, `reason:"permission_not_granted"`); `app_version`, `device_label` optional ≤ 64 chars.
 Unknown keys → `400 validation_error`.
 
 ### APNs transport body (`PUT .../transports/apns` and the alias)
@@ -73,7 +73,7 @@ Unknown keys → `400 validation_error`.
 
 * `device.lease_expires_at` is ISO-8601 with milliseconds (`ISO8601DateFormatter` + fractional seconds). The full token never appears anywhere in a response.
 * `delivery.ready=false` + `reason` is the **truthful** state: the registry works without a provider, but no alert is queued while it is false.
-  Reasons: `provider_not_configured`, `environment_not_enabled`, `permission_denied`. Clients should show this state rather than "notifications on".
+  Reasons: `provider_not_configured`, `environment_not_enabled`, `permission_not_granted`, `bundle_not_allowed`. Clients should show this state rather than "notifications on".
 * `DELETE` returns `{ identity, revoked: true, remaining_workspace_ids: [...] }` (installation route) or the same shape (alias).
 
 ### Ownership and errors
@@ -107,12 +107,12 @@ subscription routes and is not in this registry). `alerts` and `transport_status
 
 ## 3. Push envelope (APNs, `apns-push-type: alert`)
 
-Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`, `apns-collapse-id` (≤ 64 bytes, derived from the item group),
+Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`, `apns-collapse-id` (`n-` + 40 hex),
 `apns-expiration: <unix deadline>`, `authorization: bearer <ES256 JWT>`.
 
 ```json
 {
-  "aps": { "alert": { "title": "New activity", "body": "" }, "sound": "default", "thread-id": "<group key or source>", "badge": 3 },
+  "aps": { "alert": { "title": "New activity", "body": "" }, "sound": "default", "thread-id": "t-<32 hex>", "badge": 3 },
   "fd": {
     "v": 1,
     "origin": "https://tower.example",
@@ -129,6 +129,7 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 
 * `fd` is the Apple `PushPayload` v1: `v`, `origin` (https), `workspace_id` required; id keys are UUIDs or **absent** (never null, never malformed);
   `category` string. `tower_service_npub` (the workspace's stable Tower service identity) lets a client match the alert to a stored connection when the https `origin` differs from its pinned/FIPS origin; it is a matching hint, never a new network authority. `notification_id`, `change_seq`, `source_app_id` are additive. Only the ids relevant to the item are present.
+* `aps.thread-id` and `apns-collapse-id` are **opaque HMAC-SHA256** values (Tower-held secret) of the item group; the raw group key (core or producer-supplied) never leaves Tower, and neither value can be reversed or correlated outside Tower.
 * Not a silent push: no `content-available`; `aps.alert` + `sound` always present.
 * `badge` is the recipient's badge count for the installation's `client_app_id` in this workspace (`getCounts().badge`), only when the installation is
   enrolled in exactly one workspace; otherwise omitted (no cross-workspace aggregation).
@@ -164,4 +165,4 @@ PUT /api/v4/flightdeck-pg/workspaces/6f0c1c0e-7a43-4c37-9a52-0a1d3b6f0c11/notifi
 → `200` as in §1; repeat PUT = renewal (same row, new `lease_expires_at`). Other actor same token → `409 {"code":"transport_owned"}`.
 `DELETE` same path → `200 {"revoked":true,...}`; a second `DELETE` → `404 installation_not_found`.
 
-APNs request body for a mention (generic): `{"aps":{"alert":{"title":"New activity","body":""},"sound":"default","thread-id":"mention:thread:…"},"fd":{"v":1,"origin":"https://tower.example","workspace_id":"6f0c1c0e-…","category":"mention","thread_id":"…","notification_id":"…","change_seq":12,"source_app_id":"flightdeck.core"}}`.
+APNs request body for a mention (generic): `{"aps":{"alert":{"title":"New activity","body":""},"sound":"default","thread-id":"t-0f3a…"},"fd":{"v":1,"origin":"https://tower.example","workspace_id":"6f0c1c0e-…","category":"mention","thread_id":"…","notification_id":"…","change_seq":12,"source_app_id":"flightdeck.core"}}`.

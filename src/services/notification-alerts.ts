@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../db';
 import {
-  CORE_SOURCE, categoryDef, isUuid, plainText, type RuleMode, type Sql,
+  CORE_SOURCE, categoryDef, cursorSecret, isUuid, plainText, type RuleMode, type Sql,
 } from './notification-core';
 import {
-  buildApnsPayload, classifyApnsResult, collapseIdFor, loadApnsConfig, resetApnsJwtCache, sendApns,
+  buildApnsPayload, classifyApnsResult, opaqueIds, loadApnsConfig, resetApnsJwtCache, sendApns,
   type ApnsConfig, type ApnsSender,
 } from './notification-apns';
 import { getCounts, loadAccessKeys, sweepRecipient } from './notification-inbox';
@@ -82,7 +82,7 @@ export async function enqueueAlerts(tx: Sql, itemId: string, refold: boolean): P
     FROM flightdeck_pg_notification_transports t
     JOIN flightdeck_pg_notification_installations i ON i.id = t.installation_id
     WHERE t.kind = 'apns' AND t.status = 'active' AND t.lease_expires_at > NOW() AND t.actor_id = ${item.recipient_actor_id}
-      AND i.actor_id = ${item.recipient_actor_id} AND i.status = 'active' AND i.permission_state <> 'denied'
+      AND i.actor_id = ${item.recipient_actor_id} AND i.status = 'active' AND i.permission_state = 'granted'
       AND ${item.workspace_id}::uuid = ANY(i.enrolled_workspace_ids)`;
   if (!candidates.length) return 0;
 
@@ -180,7 +180,7 @@ async function gate(sql: Sql, alert: Claimed, config: ApnsConfig): Promise<Gate>
   if (new Date(row.lease_expires_at).getTime() <= Date.now()) return { ok: false, reason: 'lease_expired' };
   if (row.t_actor !== alert.recipient_actor_id || row.i_actor !== alert.recipient_actor_id) return { ok: false, reason: 'transport_owner_changed' };
   if (row.i_status !== 'active' || !row.enrolled_workspace_ids.includes(alert.workspace_id)) return { ok: false, reason: 'not_enrolled' };
-  if (row.permission_state === 'denied') return { ok: false, reason: 'permission_denied' };
+  if (row.permission_state !== 'granted') return { ok: false, reason: 'permission_not_granted' };
   if (!config.environments.has(row.environment)) return { ok: false, reason: 'environment_not_enabled' };
   if (!config.topics.has(row.bundle_id)) return { ok: false, reason: 'bundle_not_allowed' };
   if (new Date(alert.deadline_at).getTime() <= Date.now()) return { ok: false, reason: 'deadline_passed' };
@@ -226,11 +226,12 @@ async function buildContent(sql: Sql, alert: Claimed, g: Extract<Gate, { ok: tru
     badge = (await getCounts(sql, { workspaceId: alert.workspace_id, actorId: alert.recipient_actor_id }, { clientAppId: installation.client_app_id })).badge;
   }
   const presentation = item.presentation as { title?: string; body?: string };
+  const opaque = opaqueIds(await cursorSecret(sql), alert.workspace_id, item.id, item.group_key);
   const [ws] = await sql<{ tower_service_npub: string | null }[]>`SELECT tower_service_npub FROM flightdeck_pg_workspaces WHERE id = ${alert.workspace_id}`;
   return {
     towerServiceNpub: ws?.tower_service_npub ?? null,
     workspaceId: alert.workspace_id, itemId: item.id, changeSeq: Number(item.change_seq), sourceAppId: item.source_app_id, category: item.category,
-    groupKey: item.group_key, coreSource: core, ids, badge, origin,
+    ...opaque, coreSource: core, ids, badge, origin,
     preview: g.preview === 'full' ? { title: plainText(presentation.title, 120), body: plainText(presentation.body, 120) } : null,
   };
 }
@@ -251,7 +252,7 @@ async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: Apns
   const attemptNo = alert.attempt_count + 1;
   const started = Date.now();
   const marked = await sql`
-    UPDATE flightdeck_pg_notification_alerts SET attempt_count = ${attemptNo}, collapse_key = ${collapseIdFor(alert.workspace_id, alert.item_id, content.groupKey)}
+    UPDATE flightdeck_pg_notification_alerts SET attempt_count = ${attemptNo}, collapse_key = ${content.collapseId}
     WHERE id = ${alert.id} AND lease_owner = ${owner} AND state = 'leased' RETURNING collapse_key`;
   if (!marked.length) { stats.skipped += 1; return; }
   await sql`INSERT INTO flightdeck_pg_notification_alert_attempts (alert_id, attempt_no) VALUES (${alert.id}, ${attemptNo}) ON CONFLICT DO NOTHING`;

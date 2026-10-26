@@ -56,7 +56,8 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
   const grant = (actor: string, channel: string, permission: string) =>
     db`INSERT INTO flightdeck_pg_permission_grants(workspace_id,principal_type,principal_actor_id,resource_type,resource_channel_id,permission) VALUES(${w1},'actor',${actor},'channel',${channel},${permission})`;
   const token = () => randomBytes(32).toString('hex');
-  const apnsBody = (tok: string, extra: Record<string, unknown> = {}) => ({ device_token: tok, environment: 'sandbox', bundle_id: TOPIC, preview: 'generic', lease_seconds: 604800, ...extra });
+  const apnsBody = (tok: string, extra: Record<string, unknown> = {}) => ({ device_token: tok, environment: 'sandbox', bundle_id: TOPIC, preview: 'generic', lease_seconds: 604800, permission_state: 'granted', ...extra });
+  const transportBody = (tok: string) => { const { permission_state: _p, ...rest } = apnsBody(tok); return rest; };
   const register = (actor: number, installation: string, tok: string, extra: Record<string, unknown> = {}) =>
     n(`/apns-devices/${installation}`, 'PUT', actor, apnsBody(tok, extra));
 
@@ -167,6 +168,12 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect(Date.parse(res.body.device.lease_expires_at) - Date.now()).toBeGreaterThan(6.9 * 86400_000);
     expect(res.body.installation).toMatchObject({ client_app_id: 'ambulando', platform: 'ios', status: 'active', enrolled_workspace_ids: [w1] });
     expect(res.body.delivery).toEqual({ ready: true });
+    // permission not granted (or never reported): registered with a lease, honestly not ready, never queued
+    const unknown = await n(`/apns-devices/${randomUUID()}`, 'PUT', 2, { device_token: token(), environment: 'sandbox', bundle_id: TOPIC });
+    expect(unknown.status).toBe(200);
+    expect(unknown.body.installation.permission_state).toBe('unknown');
+    expect(unknown.body.delivery).toEqual({ ready: false, reason: 'permission_not_granted' });
+    expect(unknown.body.device.lease_expires_at).toBeTruthy();
 
     // renewal: same row, new lease
     const renew = await register(2, installation, tok, { lease_seconds: 3600 });
@@ -188,7 +195,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect((await register(2, installation, token(), { bundle_id: 'com.other.app' })).body.code).toBe('bundle_not_allowed');
     expect((await register(2, installation, token(), { lease_seconds: 99999999 })).status).toBe(400);
     expect((await n(`/apns-devices/${installation}`, 'PUT', 2, { ...apnsBody(token()), extra: 1 })).status).toBe(400);
-    expect((await n(`/installations/${installation}/transports/fcm`, 'PUT', 2, apnsBody(token()))).body.code).toBe('transport_not_implemented');
+    expect((await n(`/installations/${installation}/transports/fcm`, 'PUT', 2, transportBody(token()))).body.code).toBe('transport_not_implemented');
 
     // revoke, then the released token may be claimed by someone else
     const del = await call(`${base()}/notifications/apns-devices/${installation}`, 'DELETE', 2);
@@ -210,12 +217,12 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
   test('canonical routes: installation first, enrollment is per workspace, transport needs enrollment', async () => {
     await freshBob();
     const id = randomUUID();
-    const early = await n(`/installations/${id}/transports/apns`, 'PUT', 2, apnsBody(token()));
+    const early = await n(`/installations/${id}/transports/apns`, 'PUT', 2, transportBody(token()));
     expect(early.status).toBe(404);
     const inst = await n(`/installations/${id}`, 'PUT', 2, { client_app_id: 'ambulando', platform: 'ipados', permission_state: 'granted' });
     expect(inst.status).toBe(200);
     expect(inst.body.installation.enrolled_workspace_ids).toEqual([w1]);
-    expect((await n(`/installations/${id}/transports/apns`, 'PUT', 2, apnsBody(token()))).status).toBe(200);
+    expect((await n(`/installations/${id}/transports/apns`, 'PUT', 2, transportBody(token()))).status).toBe(200);
     expect((await n(`/installations/${id}`, 'PUT', 3, { client_app_id: 'ambulando', platform: 'ios' })).body.code).toBe('installation_owned');
     // a second workspace enrollment keeps the token alive when the first is removed
     const w2 = (await db`INSERT INTO flightdeck_pg_workspaces(tower_service_npub,workspace_service_npub,workspace_owner_npub,app_npub,name) VALUES('t2','s2',${npubs[0]!},'app','Two') RETURNING id`)[0]!.id;
@@ -248,6 +255,13 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect(typeof payload.aps.badge).toBe('number');
     expect(payload.fd).toMatchObject({ v: 1, origin: 'https://tower.example', tower_service_npub: 'tower-push', workspace_id: w1, category: 'mention', thread_id: thread, channel_id: ch1, notification_id: item!.id, change_seq: Number(item!.change_seq), source_app_id: 'flightdeck.core' });
     expect(payload.fd.task_id).toBeUndefined();
+    // opaque ids: no raw group key anywhere, stable per group
+    const [grp] = await db`SELECT group_key FROM flightdeck_pg_notification_items WHERE id = ${item!.id}`;
+    expect(grp!.group_key).toBeTruthy();
+    expect(call0.body).not.toContain(grp!.group_key);
+    expect(payload.aps['thread-id']).toMatch(/^t-[0-9a-f]{32}$/);
+    expect(call0.collapseId).toMatch(/^n-[0-9a-f]{40}$/);
+    expect(call0.collapseId).not.toContain(grp!.group_key);
     for (const secret of ['secret body text', 'Alice', 'Private roadmap title', 'mentioned you', tok]) expect(call0.body).not.toContain(secret);
     expect((await alertsFor())[0]).toMatchObject({ state: 'sent', attempt_count: 1, provider_status: 200 });
     const attempts = await db`SELECT outcome, provider_status FROM flightdeck_pg_notification_alert_attempts WHERE alert_id = ${alert!.id}`;
@@ -295,7 +309,8 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
       ['read before send', async ({ thread }) => { await db`UPDATE flightdeck_pg_notification_items SET read_at = NOW() WHERE recipient_actor_id = ${actors[2]!} AND subject->>'thread_id' = ${thread}`; }, ['read_before_send']],
       ['transport revoked', async ({ installation }) => { await call(`${base()}/notifications/apns-devices/${installation}`, 'DELETE', 2); }, ['transport_revoked']],
       ['lease expired', async ({ tok }) => { await db`UPDATE flightdeck_pg_notification_transports SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE address = ${tok}`; }, ['lease_expired']],
-      ['permission denied', async ({ installation }) => { await db`UPDATE flightdeck_pg_notification_installations SET permission_state = 'denied' WHERE id = ${installation}`; }, ['permission_denied']],
+      ['permission denied', async ({ installation }) => { await db`UPDATE flightdeck_pg_notification_installations SET permission_state = 'denied' WHERE id = ${installation}`; }, ['permission_not_granted']],
+      ['permission unknown', async ({ installation }) => { await db`UPDATE flightdeck_pg_notification_installations SET permission_state = 'unknown' WHERE id = ${installation}`; }, ['permission_not_granted']],
       ['alert rule turned off', async () => { await n('/rules', 'PUT', 2, { mutation_id: randomUUID(), rules: [{ category: 'mention', source_app_id: 'flightdeck.core', channel: 'alert', mode: 'off', expected_row_version: 0 }] }); }, ['alert_rule_off']],
       ['transport owner changed', async ({ tok }) => { await db`UPDATE flightdeck_pg_notification_transports SET actor_id = ${actors[3]!} WHERE address = ${tok}`; }, ['transport_owner_changed']],
       ['enrollment removed in the database', async ({ installation }) => { await db`UPDATE flightdeck_pg_notification_installations SET enrolled_workspace_ids = '{}' WHERE id = ${installation}`; }, ['not_enrolled']],

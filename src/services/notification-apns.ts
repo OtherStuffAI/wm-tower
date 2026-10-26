@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, sign, type KeyObject } from 'node:crypto';
+import { createHmac, createPrivateKey, sign, type KeyObject } from 'node:crypto';
 import http2 from 'node:http2';
 import { secretEnv } from '../secret-env';
 
@@ -100,7 +100,8 @@ export function providerToken(config: ApnsConfig, now = Date.now()): string {
 // --- Payload ----------------------------------------------------------------------------------------------------------
 export type AlertContent = {
   workspaceId: string; itemId: string; changeSeq: number; sourceAppId: string; category: string;
-  groupKey: string | null; coreSource: boolean; ids: { channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string };
+  /** Opaque HMAC of the group (see opaqueIds); the raw group key never leaves Tower. */
+  threadId: string; coreSource: boolean; ids: { channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string };
   badge: number | null; origin: string;
   /** Stable service identity so a client can match the alert to a stored connection when the https origin differs (FIPS-pinned). */
   towerServiceNpub: string | null;
@@ -120,16 +121,19 @@ export function buildApnsPayload(content: AlertContent) {
   const aps: Record<string, unknown> = {
     alert: { title: content.preview?.title || GENERIC_TITLE, body: content.preview?.body || '' },
     sound: 'default',
-    // Core group keys are made of category + record ids; producer-chosen keys may be private, so they never leave Tower.
-    'thread-id': content.coreSource && content.groupKey ? content.groupKey : content.sourceAppId,
+    'thread-id': content.threadId,
   };
   if (content.badge !== null) aps.badge = content.badge;
   return { aps, fd };
 }
 
-/** apns-collapse-id must be <= 64 bytes; a hash keeps it opaque and stable per item group. */
-export function collapseIdFor(workspaceId: string, itemId: string, groupKey: string | null) {
-  return `n-${createHash('sha256').update(`${workspaceId}\u0000${groupKey ?? itemId}`).digest('hex').slice(0, 40)}`;
+/**
+ * Opaque, stable per item group: HMAC-SHA256 under a Tower-held secret, so neither the OS, Apple nor a device can recover or
+ * correlate the raw group key (which for external producers may be private). collapse-id is <= 64 bytes.
+ */
+export function opaqueIds(secret: string, workspaceId: string, itemId: string, groupKey: string | null) {
+  const mac = (purpose: string) => createHmac('sha256', secret).update(`${purpose}\u0000${workspaceId}\u0000${groupKey ?? itemId}`).digest('hex');
+  return { threadId: `t-${mac('thread').slice(0, 32)}`, collapseId: `n-${mac('collapse').slice(0, 40)}` };
 }
 
 // --- Transport --------------------------------------------------------------------------------------------------------

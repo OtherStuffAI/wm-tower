@@ -38,7 +38,7 @@ const pushSchemas = {
     properties: {
       installation: { type: 'object', properties: { installation_id: uuid, client_app_id: { type: 'string' }, platform: { type: 'string' }, permission_state: { type: 'string' }, status: { enum: ['active', 'revoked'] }, enrolled_workspace_ids: { type: 'array', items: uuid } } },
       device: { type: 'object', properties: { installation_id: uuid, kind: { const: 'apns' }, environment: { enum: ['sandbox', 'production'] }, bundle_id: { type: 'string' }, preview: { enum: ['generic', 'full'] }, status: { enum: ['active', 'stale', 'revoked'] }, token_suffix: { type: 'string' }, lease_expires_at: { type: 'string', format: 'date-time' } } },
-      delivery: { type: 'object', required: ['ready'], properties: { ready: { type: 'boolean' }, reason: { enum: ['provider_not_configured', 'provider_key_invalid', 'environment_not_enabled', 'bundle_not_allowed', 'permission_denied'] } } },
+      delivery: { type: 'object', required: ['ready'], properties: { ready: { type: 'boolean' }, reason: { enum: ['provider_not_configured', 'provider_key_invalid', 'environment_not_enabled', 'bundle_not_allowed', 'permission_not_granted'] } } },
     },
   },
   NotificationPushRevocation: { type: 'object', required: ['revoked', 'remaining_workspace_ids'], properties: { revoked: { const: true }, remaining_workspace_ids: { type: 'array', items: uuid } } },

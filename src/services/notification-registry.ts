@@ -69,7 +69,7 @@ export function deliveryState(installation: Pick<InstallationRow, 'permission_st
   if (!readiness.ready) return { ready: false as const, reason: readiness.reason };
   if (transport?.environment && !readiness.config.environments.has(transport.environment)) return { ready: false as const, reason: 'environment_not_enabled' };
   if (transport?.bundle_id && !readiness.config.topics.has(transport.bundle_id)) return { ready: false as const, reason: 'bundle_not_allowed' };
-  if (installation.permission_state === 'denied') return { ready: false as const, reason: 'permission_denied' };
+  if (installation.permission_state !== 'granted') return { ready: false as const, reason: 'permission_not_granted' };
   return { ready: true as const };
 }
 
