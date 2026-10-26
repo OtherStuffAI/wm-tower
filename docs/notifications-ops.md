@@ -89,6 +89,8 @@ Docker (local compose): `docker-compose.prod.yml` forwards all of these to the `
 `/run/tower-apns-secrets`. A directory mount is valid and empty when no key exists, so an unconfigured Tower starts healthy. To enable (operator, not tooling):
 put the key at `.runtime/tower-apns-secrets/apns-auth-key.p8` (`chmod 600`), then in `.env.prod` set `APNS_KEY_ID`, `APNS_TEAM_ID`,
 `APNS_TOPIC`, `APNS_AUTH_KEY_FILE=/run/tower-apns-secrets/apns-auth-key.p8` (and `NOTIF_PUBLIC_ORIGIN`), and run `./rebuild_deploy_docker.sh`.
+Recommended for a real key: keep it in a directory **outside the repo** (e.g. `TOWER_APNS_SECRETS_DIR=/path/to/private/tower-apns`, mode 700, key `chmod 600`) so it is never near the build context.
+`.dockerignore` also excludes `.runtime/`, `*.p8`, `*.pem` and `*.key` so `COPY . .` can never bake key material into the image.
 Never set the raw key inline in compose or the env file. Startup logs `APNs provider ready` or `not ready: <reason>` (no values).
 
 Missing key/id/team/topic ⇒ the provider is **not ready**: descriptor shows `alerts:false`, registration answers `delivery.ready=false`, and no alert is queued.

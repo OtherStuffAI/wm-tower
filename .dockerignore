@@ -21,3 +21,11 @@ dist
 .git
 .DS_Store
 tests
+
+# Runtime secret mounts (APNs/git keys) and private key material must never enter the image build context
+.runtime
+.runtime/
+**/.runtime
+**/*.p8
+**/*.pem
+**/*.key
