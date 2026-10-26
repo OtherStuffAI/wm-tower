@@ -335,14 +335,14 @@ async function seedWorkspace(workspaceServiceNpub = 'npub1workspaceflightdeckpga
   return { workspaceId: workspace.id, ownerId: owner.id, groupMemberId: groupMember.id, groupId: group.id };
 }
 
-async function createCompletedDocStorageObject(input: { workspaceId: string; fileName: string; content: string }) {
+async function createCompletedDocStorageObject(input: { workspaceId: string; fileName: string; content: string; contentType?: string }) {
   const [workspace] = await sql<{ workspace_owner_npub: string }[]>`
     SELECT workspace_owner_npub FROM flightdeck_pg_workspaces WHERE id = ${input.workspaceId}
   `;
   const bytes = Buffer.from(input.content, 'utf8');
   const [object] = await sql<{ id: string }[]>`
     INSERT INTO v4_storage_objects (owner_npub, created_by_npub, file_name, content_type, size_bytes, storage_path)
-    VALUES (${workspace.workspace_owner_npub}, ${OWNER_NPUB}, ${input.fileName}, 'text/markdown', ${bytes.byteLength}, ${`v4/flightdeck-pg/api/${input.fileName}-${randomUUID()}`})
+    VALUES (${workspace.workspace_owner_npub}, ${OWNER_NPUB}, ${input.fileName}, ${input.contentType ?? 'text/markdown'}, ${bytes.byteLength}, ${`v4/flightdeck-pg/api/${input.fileName}-${randomUUID()}`})
     RETURNING id
   `;
   expect(await writeStorageObject(object.id, bytes, OWNER_NPUB)).not.toBeNull();
@@ -431,18 +431,24 @@ describe('Flight Deck PG API routes', () => {
     };
     const channelId = await makeChannel('Lineage A');
     const otherChannelId = await makeChannel('Lineage B');
-    const original = await createCompletedDocStorageObject({ workspaceId, fileName: 'Pasted text.txt', content: 'original\r\nbytes' });
-    const insertMessage = async (chan: string, attachments: unknown[]) => {
-      const [message] = await sql`INSERT INTO flightdeck_pg_messages(workspace_id,scope_id,channel_id,body,metadata,created_by_actor_id,updated_by_actor_id)
-        VALUES(${workspaceId},${scope!.id},${chan},'',${sql.json({ attachments } as any)},${ownerId},${ownerId}) RETURNING id`;
-      return message!.id as string;
+    const textObject = (fileName: string, content: string, contentType = 'text/plain; charset=utf-8') =>
+      createCompletedDocStorageObject({ workspaceId, fileName, content, contentType });
+    const original = await textObject('Pasted text.txt', 'original\r\nbytes');
+    // Send through the real message route so the attachment is stored exactly as clients send it.
+    const sendMessage = async (chan: string, attachments: unknown[]) => {
+      const body = 'See attached';
+      const sent = await requestJson(`/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${chan}/messages`, 'POST', ownerSecret, {
+        body, metadata: { attachments }, message_signature: messageSignature({ body, secret: ownerSecret, workspaceId, channelId: chan }),
+      });
+      expect(sent.res.status).toBe(201);
+      return sent.json.message.id as string;
     };
-    const messageId = await insertMessage(channelId, [{ kind: 'file', storage_object_id: original.id, filename: 'Pasted text.txt' }]);
+    const messageId = await sendMessage(channelId, [{ kind: 'file', storage_object_id: original.id, filename: 'Pasted text.txt', content_type: 'text/plain; charset=utf-8', text_attachment: { v: 1, source: 'paste', chars: 14, lines: 2 } }]);
     const path = (chan: string) => `/api/v4/flightdeck-pg/workspaces/${workspaceId}/channels/${chan}/files`;
     const lineage = (extra: Record<string, unknown> = {}) => ({
       text_attachment_lineage: { v: 1, origin_message_id: messageId, origin_storage_object_id: original.id, origin_filename: 'Pasted text.txt', ...extra },
     });
-    const edit = (content: string) => createCompletedDocStorageObject({ workspaceId, fileName: 'Pasted text.txt', content });
+    const edit = (content: string) => textObject('Pasted text.txt', content);
 
     // Invalid origins are rejected without creating a file.
     const wrongChannel = await requestJson(path(otherChannelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: (await edit('a')).id, metadata: lineage() });
@@ -456,6 +462,22 @@ describe('Flight Deck PG API routes', () => {
     expect(wrongObject.json.code).toBe('lineage_origin_invalid');
     const badShape = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: (await edit('c')).id, metadata: lineage({ v: 2, origin_message_id: 'nope' }) });
     expect(badShape.res.status).toBe(400);
+
+    // Non-text objects cannot join a text lineage (new object or origin attachment).
+    const binary = await textObject('image.png', 'png', 'image/png');
+    const binaryNew = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: binary.id, metadata: lineage() });
+    expect(binaryNew.res.status).toBe(400);
+    expect(binaryNew.json.code).toBe('lineage_content_type_invalid');
+    const binaryMessageId = await sendMessage(channelId, [{ kind: 'file', storage_object_id: binary.id, filename: 'image.png' }]);
+    const binaryOrigin = await requestJson(path(channelId), 'POST', ownerSecret, {
+      display_name: 'x', storage_object_id: (await edit('d')).id,
+      metadata: lineage({ origin_message_id: binaryMessageId, origin_storage_object_id: binary.id }),
+    });
+    expect(binaryOrigin.json.code).toBe('lineage_content_type_invalid');
+
+    // Same origin ids cannot be replayed from a different channel.
+    const sibling = await requestJson(path(otherChannelId), 'POST', ownerSecret, { display_name: 'x', storage_object_id: (await edit('e')).id, metadata: lineage() });
+    expect(sibling.json.code).toBe('lineage_origin_invalid');
 
     // Concurrent first edits: exactly one 201, the rest 409 with the canonical file.
     const candidates = await Promise.all(['one', 'two', 'three', 'four'].map((text) => edit(text)));

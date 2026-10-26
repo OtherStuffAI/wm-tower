@@ -8019,6 +8019,11 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/channels/:channelId/files', as
       || !originAttachments.some((attachment) => String(attachment?.storage_object_id || '') === lineage.origin_storage_object_id)) {
       return jsonError(c, 400, 'lineage_origin_invalid', 'Lineage origin message attachment was not found in this channel', identity);
     }
+    // Text lineage only: both the new bytes and the pinned original must be text/plain.
+    const isPlainText = async (objectId: string) => String((await getStorageObject(objectId))?.content_type || '').toLowerCase().startsWith('text/plain');
+    if (!(await isPlainText(storageObjectId)) || !(await isPlainText(lineage.origin_storage_object_id))) {
+      return jsonError(c, 400, 'lineage_content_type_invalid', 'Text attachment lineage requires text/plain storage objects', identity);
+    }
   }
   const folderPlacement = await resolveFileFolderPlacement({
     workspaceId: context.workspace.id,
