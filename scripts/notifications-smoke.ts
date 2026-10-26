@@ -63,63 +63,85 @@ const queue = await call('GET', '/admin/notifications/queue').catch((e) => ({ er
 console.log('queue (workspace.manage only):', JSON.stringify(queue.queue ?? queue));
 if (queue.queue) check('worker is running inside the server', queue.queue.worker?.running === true && queue.queue.worker?.enabled === true, queue.queue.worker);
 
-// 3. Optional end-to-end probe through the real worker.
+// 3. Optional end-to-end probe through the real worker (no manual drain: proves the boot worker). Rick-only temporary source.
 if (probe) {
   const me = await call('GET', '/me');
   const sourceId = `smoke-probe-${Date.now().toString(36)}`;
+  const category = 'smoke_probe';
   const source = {
     kind: 'app', display_name: 'Notification smoke probe', producer_signer_npub: me.actor.npub, allowed_recipient_mode: 'actor_list',
-    allowed_recipient_actor_ids: [me.actor.actor_id], max_severity: 'normal', rate_per_minute: 30,
-    allowed_categories: [{ category: 'smoke_probe', label: 'Smoke probe' }],
+    allowed_recipient_actor_ids: [me.actor.actor_id], max_severity: 'normal', rate_per_minute: 60,
+    allowed_categories: [{ category, label: 'Smoke probe' }], allowed_client_apps: ['*'],
   };
-  let ackReplay: { itemId: string; body: unknown } | undefined;
+  const publish = (key: string, apps: string[]) => call('POST', '/notification-events', {
+    schema: 'org.wingman.notification.event', version: 1, event_key: key, category, severity: 'normal',
+    subject: { kind: 'app_object', app_id: sourceId, object_type: 'probe', object_id: key }, group_key: `smoke:${key}`,
+    audience: { client_apps: apps }, recipients: { mode: 'actors', actor_ids: [me.actor.actor_id] },
+  });
+  const items = async (query = '') => (await call('GET', `/notifications/items?source_app_id=${sourceId}${query}`)).items as any[];
+  const waitFor = async (n: number, query = '') => { let r: any[] = []; for (let i = 0; i < 30 && r.length < n; i += 1) { r = await items(query); if (r.length < n) await Bun.sleep(500); } return r; };
+  const unreadCount = async (clientApp?: string) => {
+    const c = await call('GET', `/notifications/counts${clientApp ? `?client_app_id=${clientApp}` : ''}`);
+    return { total: c.unread_total as number, source: (c.by_source_app?.[sourceId] ?? 0) as number };
+  };
+  // list == count: the unread list and the counts endpoint use one predicate.
+  const parity = async (clientApp?: string) => (await items(`&view=unread${clientApp ? `&client_app_id=${clientApp}` : ''}`)).length === (await unreadCount(clientApp)).source;
+  let ack: { itemId: string; body: unknown } | undefined;
+  const head0 = page.head_seq;
   try {
-    const registered = await call('PUT', `/notification-sources/${sourceId}`, source);
-    check('source registered', registered.source?.source_app_id === sourceId);
-    const eventKey = `smoke:${randomUUID()}`;
-    const published = await call('POST', '/notification-events', {
-      schema: 'org.wingman.notification.event', version: 1, event_key: eventKey, category: 'smoke_probe', severity: 'normal',
-      subject: { kind: 'app_object', app_id: sourceId, object_type: 'probe', object_id: 'p1' }, group_key: 'smoke:p1',
-      recipients: { mode: 'actors', actor_ids: [me.actor.actor_id] },
-    });
+    check('source registered', (await call('PUT', `/notification-sources/${sourceId}`, source)).source?.source_app_id === sourceId);
+    const keyA = `a:${randomUUID()}`; const keyB = `b:${randomUUID()}`;
+    const published = await publish(keyA, ['smoke-a']);
     check('event accepted', published.event?.state === 'accepted' && published.replayed === false);
-    const replayed = await call('POST', '/notification-events', {
-      schema: 'org.wingman.notification.event', version: 1, event_key: eventKey, category: 'smoke_probe', severity: 'normal',
-      subject: { kind: 'app_object', app_id: sourceId, object_type: 'probe', object_id: 'p1' }, group_key: 'smoke:p1',
-      recipients: { mode: 'actors', actor_ids: [me.actor.actor_id] },
-    });
-    check('replayed event is idempotent', replayed.replayed === true && replayed.event.id === published.event.id);
-    let item: any;
-    for (let i = 0; i < 30 && !item; i += 1) {
-      item = (await call('GET', `/notifications/items?source_app_id=${sourceId}`)).items[0];
-      if (!item) await Bun.sleep(500);
-    }
-    check('worker projected the event into the inbox within 15s', !!item, null);
-    if (item) {
-      check('metadata-only presentation', item.presentation.title === 'Notification smoke probe' && item.presentation.body === 'Smoke probe', item.presentation);
-      const mutationId = randomUUID();
-      const read = await call('PATCH', `/notifications/items/${item.id}`, { mutation_id: mutationId, expected_row_version: item.row_version, patch: { read: true } });
-      check('mark read (CAS)', read.item.state.read === true && read.item.row_version === item.row_version + 1);
-      check('stale CAS conflicts', await expectError('PATCH', `/notifications/items/${item.id}`, { mutation_id: randomUUID(), expected_row_version: item.row_version, patch: { read: false } }, '409'));
-      const after = await call('GET', `/notifications/changes?after_seq=${page.head_seq}`);
-      check('changes carries the item', after.changes.some((c: any) => c.id === item.id));
-      ackReplay = { itemId: item.id, body: { mutation_id: mutationId, expected_row_version: item.row_version, patch: { read: true } } };
-      const replay = await call('PATCH', `/notifications/items/${item.id}`, ackReplay.body);
-      check('exact mutation replay returns the stored acknowledgement', replay.item.row_version === read.item.row_version);
-      // Rules CAS + per-app view: an app-scoped "off" rule hides the item from that app only.
-      const appRule = { source_app_id: sourceId, category: 'smoke_probe', client_app_id: 'smoke-client', channel: 'inbox' };
-      const put = await call('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...appRule, mode: 'off', preview: false, expected_row_version: 0 }] });
-      const stored = put.rules.find((r: any) => r.source_app_id === sourceId && r.client_app_id === 'smoke-client');
-      check('rules PUT bumps rules_revision', put.rules_revision > rules.rules_revision && !!stored, put.rules_revision);
-      check('stale rules CAS -> 409', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...appRule, mode: 'on', preview: false, expected_row_version: 0 }] }, '409'));
-      check('app view hides the item', (await call('GET', `/notifications/items?source_app_id=${sourceId}&client_app_id=smoke-client`)).items.length === 0);
-      check('other views still see the shared item', (await call('GET', `/notifications/items?source_app_id=${sourceId}`)).items.length === 1);
-      await call('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...appRule, mode: 'default', preview: false, expected_row_version: stored.row_version }] });
-    }
+    check('replayed event is idempotent', (await publish(keyA, ['smoke-a'])).replayed === true);
+    await publish(keyB, ['smoke-b']);
+    const all = await waitFor(2);
+    check('boot worker projected both events within 15s', all.length === 2, all.length);
+    const forA = await items('&client_app_id=smoke-a'); const forB = await items('&client_app_id=smoke-b');
+    const itemA = all.find((i: any) => i.subject?.object_id === keyA); const itemB = all.find((i: any) => i.subject?.object_id === keyB);
+    check('app audience: each client sees only its item, shared view sees both', forA.length === 1 && forA[0].id === itemA?.id && forB.length === 1 && forB[0].id === itemB?.id);
+    check('metadata-only presentation', itemA?.presentation?.title === 'Notification smoke probe' && itemA?.presentation?.body === 'Smoke probe', itemA?.presentation);
+    check('list == count (shared and per app)', (await unreadCount()).source === 2 && await parity() && await parity('smoke-a') && await parity('smoke-b'));
+
+    // CAS read + identical replay.
+    const mutationId = randomUUID();
+    const body = { mutation_id: mutationId, expected_row_version: itemA.row_version, patch: { read: true } };
+    const read = await call('PATCH', `/notifications/items/${itemA.id}`, body);
+    check('mark read (CAS)', read.item.state.read === true && read.item.row_version === itemA.row_version + 1);
+    const replay = await call('PATCH', `/notifications/items/${itemA.id}`, body);
+    check('identical replay returns the stored acknowledgement', replay.item.row_version === read.item.row_version);
+    check('stale CAS conflicts', await expectError('PATCH', `/notifications/items/${itemA.id}`, { mutation_id: randomUUID(), expected_row_version: itemA.row_version, patch: { read: false } }, '409'));
+    check('mutation_id reuse with another body -> 409', await expectError('PATCH', `/notifications/items/${itemA.id}`, { ...body, patch: { read: false } }, '409'));
+    ack = { itemId: itemA.id, body };
+    check('list == count after read', (await unreadCount()).source === 1 && (await unreadCount('smoke-a')).source === 0 && await parity() && await parity('smoke-a') && await parity('smoke-b'));
+
+    // Rules CAS: app-scoped off hides B from smoke-b only; revision change forces reset; default is durable.
+    const before = await call('GET', '/notifications/rules');
+    const key = { source_app_id: sourceId, category, client_app_id: 'smoke-b', channel: 'inbox' };
+    const rulesPut = (mode: string, expected: number) => call('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode, preview: false, expected_row_version: expected }] });
+    const mid = await call('GET', `/notifications/counts`);
+    const off = await rulesPut('off', 0);
+    const offRule = off.rules.find((r: any) => r.source_app_id === sourceId && r.client_app_id === 'smoke-b');
+    check('rules PUT bumps rules_revision', off.rules_revision > before.rules_revision && !!offRule, [before.rules_revision, off.rules_revision]);
+    check('stale rules CAS -> 409', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'on', preview: false, expected_row_version: 0 }] }, '409'));
+    check('old rules_revision on changes -> 410 rules_changed', await expectError('GET', `/notifications/changes?after_seq=${mid.head_seq}&rules_revision=${mid.rules_revision}`, undefined, '410'));
+    check('off rule hides the item from smoke-b only', (await items('&client_app_id=smoke-b')).length === 0 && (await items()).length === 2 && (await items('&client_app_id=smoke-a')).length === 1);
+    check('list == count with rule applied', (await unreadCount('smoke-b')).source === 0 && (await unreadCount()).source === 1 && await parity('smoke-b') && await parity());
+    const dflt = await rulesPut('default', offRule.row_version);
+    const dfltRule = dflt.rules.find((r: any) => r.source_app_id === sourceId && r.client_app_id === 'smoke-b');
+    check('default is durable (row kept, version bumped, mode default)', dfltRule?.mode === 'default' && dfltRule.row_version > offRule.row_version, dfltRule);
+    check('expected_row_version 0 cannot resurrect after default', await expectError('PUT', '/notifications/rules', { mutation_id: randomUUID(), rules: [{ ...key, mode: 'off', preview: false, expected_row_version: 0 }] }, '409'));
+    check('item visible to smoke-b again after default', (await items('&client_app_id=smoke-b')).length === 1);
   } finally {
+    const head = head0;
     const revoked = await call('POST', `/notification-sources/${sourceId}/revoke`, {}).catch((e) => ({ error: String(e) }));
-    check('temporary source revoked and its items tombstoned', !!revoked.source && revoked.source.grant_status === 'revoked', revoked);
-    if (ackReplay) check('replaying a prior acknowledgement after revoke -> 404, no content', await expectError('PATCH', `/notifications/items/${ackReplay.itemId}`, ackReplay.body, '404'));
+    check('temporary source revoked', revoked.source?.grant_status === 'revoked', revoked);
+    if (ack) check('replay of a prior acknowledgement after revoke -> 404 (no receipt content)', await expectError('PATCH', `/notifications/items/${ack.itemId}`, ack.body, '404'));
+    const delta = (await call('GET', `/notifications/changes?after_seq=${head}&limit=200`).catch(() => ({ changes: [] }))).changes as any[];
+    const tombs = delta.filter((c: any) => c.removal_reason === 'source_revoked');
+    check('tombstones are content-free', tombs.length >= 1 && tombs.every((t: any) => Object.keys(t).sort().join() === ['change_seq', 'change_type', 'id', 'removal_reason', 'schema', 'version', 'workspace_id'].sort().join()), tombs[0]);
+    if (ack) check('item read returns a tombstone, not content', (await call('GET', `/notifications/items/${ack.itemId}`).catch(() => ({}))).item?.change_type === 'remove');
+    check('revoked source leaves no items and no count', (await items()).length === 0 && (await call('GET', '/notifications/counts')).by_source_app?.[sourceId] === undefined);
   }
 }
 
