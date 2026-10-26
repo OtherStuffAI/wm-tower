@@ -78,6 +78,10 @@ type NotificationCandidate = {
   target: Record<string, unknown>;
 };
 
+export class FlightDeckPgTransportOwnedError extends Error {
+  constructor() { super('Push endpoint is registered to another actor'); }
+}
+
 export function getFlightDeckPgVapidPublicKey() {
   return (Bun.env.FLIGHTDECK_WEB_PUSH_VAPID_PUBLIC_KEY || Bun.env.WEB_PUSH_VAPID_PUBLIC_KEY || '').trim() || null;
 }
@@ -177,6 +181,13 @@ export async function upsertFlightDeckPgPushSubscription(
   },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgPushSubscriptionRow> {
+  // An address owned by another actor is never re-bound by a caller who merely knows the endpoint.
+  // Previously revoked/stale/failed registrations may be claimed by a new owner.
+  const [owner] = await sql<{ actor_id: string; status: string }[]>`
+    SELECT actor_id, status FROM flightdeck_pg_push_subscriptions WHERE endpoint = ${input.endpoint}`;
+  if (owner && owner.actor_id !== input.actorId && owner.status === 'active') {
+    throw new FlightDeckPgTransportOwnedError();
+  }
   const [row] = await sql<FlightDeckPgPushSubscriptionRow[]>`
     INSERT INTO flightdeck_pg_push_subscriptions (
       actor_id, endpoint, p256dh, auth, device_label, platform, user_agent, app_version, last_seen_workspace_id, status, revoked_at, stale_at
@@ -274,7 +285,7 @@ async function canReadChannel(workspaceId: string, channelId: string, actorId: s
   return Boolean(row?.ok);
 }
 
-async function listChannelRecipients(workspaceId: string, channelId: string, sql: DbClient): Promise<ActorRow[]> {
+export async function listChannelRecipients(workspaceId: string, channelId: string, sql: DbClient): Promise<ActorRow[]> {
   return sql<ActorRow[]>`
     WITH RECURSIVE granted_groups(group_id) AS (
       SELECT pg.principal_group_id
@@ -656,11 +667,14 @@ async function updateSubscriptionAfterPush(
 export async function evaluateFlightDeckPgNotificationOutboxEvent(
   outboxEventId: string,
   sql: DbClient = getDb(),
+  /** Manual/API evaluation must bind the event to the authorised workspace; in-process post-write callers omit it. */
+  workspaceId: string | null = null,
 ) {
   const [event] = await sql<OutboxEventRow[]>`
     SELECT *
     FROM flightdeck_pg_outbox_events
     WHERE id = ${outboxEventId}
+      AND (${workspaceId}::uuid IS NULL OR workspace_id = ${workspaceId})
     LIMIT 1
   `;
   if (!event) return { evaluated: false, reason: 'event_not_found', candidates: 0, deliveries: 0 };

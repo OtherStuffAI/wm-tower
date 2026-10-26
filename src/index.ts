@@ -3,12 +3,13 @@ import { startFipsIngress } from './fips-ingress';
 
 const identity = await ensureServiceIdentity();
 
-const [{ createApp }, { config }, { getDb }, { ensureRuntimeSchema }, { startHostingBillingRunner }] = await Promise.all([
+const [{ createApp }, { config }, { getDb }, { ensureRuntimeSchema }, { startHostingBillingRunner }, { startNotificationWorker }] = await Promise.all([
   import('./server'),
   import('./config'),
   import('./db'),
   import('./schema/ensure-runtime-schema'),
   import('./services/hosting-billing'),
+  import('./services/notification-worker'),
 ]);
 
 const app = createApp();
@@ -25,6 +26,8 @@ try {
 }
 
 startHostingBillingRunner();
+// Durable notification projection runs in this process (NOTIF_PROJECTOR=off disables it).
+startNotificationWorker();
 
 console.log(`[coworker-be] listening on :${config.port}`);
 console.log(`[coworker-be] service npub: ${identity.npub}`);

@@ -260,6 +260,8 @@ async function runMigrations() {
   for (const stmt of statements) {
     await sql.unsafe(stmt);
   }
+  // Legacy preference PATCH now mirrors into notification rules atomically (no swallowed errors), so the notification schema must exist.
+  await sql.unsafe(readFileSync(join(__dirname, '../src/schema/notifications-v1.sql'), 'utf-8'));
 }
 
 async function seedWorkspace(workspaceServiceNpub = 'npub1workspaceflightdeckpgapi') {

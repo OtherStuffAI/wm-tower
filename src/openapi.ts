@@ -2,6 +2,7 @@ import { buildNstackConsoleHtml } from './nstack-console';
 import { hostingPaths, hostingSchemas } from './hosting-openapi';
 import { orgDataPaths, orgDataSchemas } from './org-data-openapi';
 import { contextTreePaths, contextTreeSchemas } from './context-tree-openapi';
+import { notificationPaths, notificationSchemas } from './notifications-openapi';
 import { feedReaderPaths, feedReaderSchemas, FEED_READER_SOURCE_BUILD } from './feed-reader-openapi';
 import { drivePaths } from './drive-openapi';
 import { learningPaths, learningSchemas } from './learning/openapi';
@@ -2489,6 +2490,7 @@ export function buildOpenApiDocument(origin: string) {
         ...hostingSchemas,
         ...feedReaderSchemas,
         ...contextTreeSchemas,
+        ...notificationSchemas,
         ...orgDataSchemas,
         ...learningSchemas,
         WappPublishingDestination: {
@@ -4398,6 +4400,7 @@ export function buildOpenApiDocument(origin: string) {
         put: { tags: ['Flight Deck PG'], summary: 'Save personal order with CAS and idempotent mutation', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['scope_ids','expected_row_version','mutation_id'], properties: { scope_ids: { type: 'array', maxItems: 1000, uniqueItems: true, items: { type: 'string', format: 'uuid' } }, expected_row_version: { type: 'integer', minimum: 0 }, mutation_id: { type: 'string', format: 'uuid' } } } } } }, responses: { '200': { description: 'Personal scope_order; no shared positions or authority epoch change' }, '400': { description: 'Invalid, archived or protected target' }, '403': { description: 'Membership or target read permission required' }, '409': { description: 'Revision conflict or mutation ID reuse' } } },
       },
       ...contextTreePaths,
+      ...notificationPaths,
       ...orgDataPaths,
       ...drivePaths,
       ...learningPaths,

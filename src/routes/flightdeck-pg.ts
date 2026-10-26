@@ -1,3 +1,6 @@
+import { applyLegacyPreferencePatch } from '../services/notification-inbox';
+import { registerNotificationRoutes } from './notifications';
+import { inboxApiEnabled } from '../services/notification-core';
 import { taskRequestIdentity, taskRequestHash, hasTaskRelationships, validateTaskRelationships } from '../services/task-relationships';
 import { movePersonalPin } from '../services/personal-pin-order';
 import { readPrivatePreference, writePrivatePreference, PrivatePreferenceError } from '../services/private-preferences';
@@ -128,6 +131,7 @@ import {
   revokeFlightDeckPgPushSubscription,
   updateFlightDeckPgNotificationPreferences,
   upsertFlightDeckPgPushSubscription,
+  FlightDeckPgTransportOwnedError,
 } from '../services/flightdeck-pg-notifications';
 import {
   type FlightDeckPgChannelRow,
@@ -411,6 +415,7 @@ import type {
 export const flightDeckPgRouter = new Hono();
 registerOrgDataRoutes(flightDeckPgRouter);
 registerFeedReaderRoutes(flightDeckPgRouter);
+registerNotificationRoutes(flightDeckPgRouter);
 registerContextTreeRoutes(flightDeckPgRouter);
 registerScopeAccessRoutes(flightDeckPgRouter);
 
@@ -1655,7 +1660,7 @@ flightDeckPgRouter.get('/service', async (c) => {
       version: getTowerBuildInfo().version,
       schema_version: 1,
     },
-    capabilities: flightDeckPgCapabilities,
+    capabilities: inboxApiEnabled() ? [...flightDeckPgCapabilities, 'notifications_inbox_v1'] : flightDeckPgCapabilities,
     record_sync: {...recordSyncDiscovery,...prioritySyncDiscovery,cache_adoption:recordAdoptionDiscovery},
     links: {
       workspace_descriptor_template: '/api/v4/flightdeck-pg/workspaces/{workspaceId}/descriptor',
@@ -3420,7 +3425,8 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/notifications/preferences', a
     }
   }
   if (fields.length) return validationError(c, identity, fields);
-  const preferences = await updateFlightDeckPgNotificationPreferences({ workspaceId: context.workspace.id, actorId: context.actor.id, patch });
+  // One transaction: legacy booleans + alert-rule mirror (row_version bumps) + rules_revision. A failed mirror fails the write.
+  const preferences = await applyLegacyPreferencePatch(getDb(), { workspaceId: context.workspace.id, actorId: context.actor.id }, patch);
   return c.json({ identity, preferences: serializeFlightDeckPgNotificationPreferences(preferences) });
 });
 
@@ -3453,7 +3459,9 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/notifications/subscriptions', 
   if (!p256dh) fields.push({ path: 'keys.p256dh', code: 'required', message: 'p256dh key is required' });
   if (!authKey) fields.push({ path: 'keys.auth', code: 'required', message: 'auth key is required' });
   if (fields.length) return validationError(c, identity, fields);
-  const subscription = await upsertFlightDeckPgPushSubscription({
+  let subscription;
+  try {
+    subscription = await upsertFlightDeckPgPushSubscription({
     workspaceId: context.workspace.id,
     actorId: context.actor.id,
     endpoint,
@@ -3463,7 +3471,11 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/notifications/subscriptions', 
     platform: typeof body.platform === 'string' ? body.platform : null,
     userAgent: c.req.header('user-agent') || null,
     appVersion: typeof body.app_version === 'string' ? body.app_version : null,
-  });
+    });
+  } catch (error) {
+    if (error instanceof FlightDeckPgTransportOwnedError) return jsonError(c, 409, 'transport_owned', 'This push endpoint is registered to another actor', identity);
+    throw error;
+  }
   const preferences = await getFlightDeckPgNotificationPreferences(context.workspace.id, context.actor.id);
   const subscriptions = await listFlightDeckPgPushSubscriptionsForActor(context.actor.id);
   return c.json({
@@ -3504,18 +3516,21 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/notifications/evaluate', async
   const result = await requireFlightDeckPgContext(c, auth.userNpub);
   if ('response' in result) return result.response;
   const { context, identity } = result;
-  const decision = await authorizeFlightDeckPgOperation({
+  // Manual evaluation can trigger sends: effective workspace.manage only (not role-only admin), and only for events of THIS workspace.
+  const manage = await authorizeFlightDeckPgOperation({
     actorNpub: auth.userNpub,
     appNpub: context.workspace.app_npub,
     workspaceId: context.workspace.id,
-    permission: 'workspace.read',
+    permission: 'workspace.manage',
     resource: { type: 'workspace' },
   });
-  if (!decision.allowed) return authorizationError(c, decision, identity, 'workspace.read');
+  if (!manage.allowed) return authorizationError(c, manage, identity, 'workspace.manage');
   const body = await readJsonBody(c);
   const outboxEventId = body ? String(body.outbox_event_id || '').trim() : '';
   if (!outboxEventId) return validationError(c, identity, [{ path: 'outbox_event_id', code: 'required', message: 'outbox_event_id is required' }]);
-  const evaluation = await evaluateFlightDeckPgNotificationOutboxEvent(outboxEventId);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(outboxEventId)) return validationError(c, identity, [{ path: 'outbox_event_id', code: 'invalid', message: 'outbox_event_id must be a UUID' }]);
+  const evaluation = await evaluateFlightDeckPgNotificationOutboxEvent(outboxEventId, undefined, context.workspace.id);
+  if (!evaluation.evaluated) return jsonError(c, 404, 'event_not_found', 'Outbox event not found in this workspace', identity);
   return c.json({ identity, evaluation });
 });
 
@@ -11979,7 +11994,7 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/tasks/:taskId', async (c) => 
       entityId: task.id,
       operation: 'updated',
       entityRowVersion: task.row_version,
-      payload: { task_id: task.id, task: serializeFlightDeckPgTask(task), mentions: { previous: previousMentions, current: canonicalMentions.mentions }, activity_version: Number(task.activity_version), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
+      payload: { task_id: task.id, task: serializeFlightDeckPgTask(task), mentions: { previous: previousMentions, current: canonicalMentions.mentions }, assignment: { previous_npub: current.metadata?.assigned_to_npub ?? null, current_npub: task.metadata?.assigned_to_npub ?? null }, activity_version: Number(task.activity_version), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
     }, sql);
     return { task, auditId, outbox, viewStateOutbox };
   });

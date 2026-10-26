@@ -1,3 +1,4 @@
+import { inboxApiEnabled } from './notification-core';
 import { createHash, randomUUID } from 'crypto';
 import { getDb } from '../db';
 
@@ -1960,6 +1961,21 @@ export function serializeFlightDeckPgWorkspaceSummary(
   };
 }
 
+/** Descriptor flag for the shared notification inbox. Alerts/transports are not part of v1 (transports: []). */
+export function notificationsDescriptor(workspaceId: string) {
+  const enabled = inboxApiEnabled();
+  const base = `/api/v4/flightdeck-pg/workspaces/${encodeURIComponent(workspaceId)}/notifications`;
+  return {
+    inbox_v1: enabled,
+    capability: 'notifications.inbox.v1',
+    schema: 'org.wingman.notification.item',
+    schema_version: 1,
+    transports: [] as string[],
+    alerts: false,
+    links: enabled ? { items: `${base}/items`, changes: `${base}/changes`, counts: `${base}/counts`, bulk: `${base}/bulk`, categories: `${base}/categories`, rules: `${base}/rules` } : {},
+  };
+}
+
 export function serializeFlightDeckPgWorkspaceDescriptor(
   workspace: FlightDeckPgWorkspace,
   input: { towerBaseUrl: string },
@@ -1974,7 +1990,8 @@ export function serializeFlightDeckPgWorkspaceDescriptor(
     description: workspace.description ?? `${workspace.name} Flight Deck workspace`,
     avatar_url: workspace.avatar_url,
     metadata: workspace.metadata ?? {},
-    capabilities: flightDeckPgWorkspaceCapabilities,
+    capabilities: inboxApiEnabled() ? [...flightDeckPgWorkspaceCapabilities, 'notifications_inbox_v1'] : flightDeckPgWorkspaceCapabilities,
+    notifications: notificationsDescriptor(workspace.id),
     links: buildFlightDeckPgWorkspaceLinks(workspace.id),
     created_at: workspace.created_at,
   };
@@ -7033,6 +7050,10 @@ export async function listVisibleFlightDeckPgEvents(
           e.entity_type = 'resource_view_state'
           AND e.payload->>'viewer_actor_id' = ${input.actorId}
         )
+        OR (
+          e.entity_type = 'notification_item'
+          AND e.payload->>'recipient_actor_id' = ${input.actorId}::text
+        )
         OR
         (
           e.channel_id IS NOT NULL
@@ -7203,7 +7224,7 @@ export async function listVisibleFlightDeckPgEvents(
         )
         OR (
           e.channel_id IS NULL
-          AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','private_preference','org_data','feed_subscription','feed_item_state','context_component','context_reference')
+          AND e.entity_type NOT IN ('scope','scope_order','thread_pin','personal_pin','private_preference','org_data','feed_subscription','feed_item_state','context_component','context_reference','notification_item')
           AND ${includeWorkspaceEvents}
           AND e.entity_type NOT IN ('canvas', 'canvas_naplet', 'canvas_element', 'canvas_order', 'canvas_comment')
         )
@@ -7310,7 +7331,7 @@ export async function listVisibleFlightDeckPgEventsForAudience(
     }, sql);
     for (const event of events) {
       // Managed audiences never delegate personal navigation or feed preferences.
-      if (['scope_order', 'thread_pin', 'personal_pin', 'private_preference', 'feed_subscription', 'feed_item_state'].includes(event.entity_type)) continue;
+      if (['scope_order', 'thread_pin', 'personal_pin', 'private_preference', 'feed_subscription', 'feed_item_state', 'notification_item'].includes(event.entity_type)) continue;
       const existing = visibleByEvent.get(event.id) ?? { event, npubs: new Set<string>() };
       existing.npubs.add(member.npub);
       visibleByEvent.set(event.id, existing);

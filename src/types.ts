@@ -3337,3 +3337,84 @@ export interface NamespaceInventory {
   truncated: boolean;
   coverage: string;
 }
+
+// --- Shared notification inbox (docs/contract/notifications-v1.md) ----------------------------------------------
+export type NotificationSeverity = 'low' | 'normal' | 'high' | 'critical';
+export type NotificationReadReason = 'user' | 'bulk' | 'subject_viewed' | 'already_viewed' | 'resolved';
+export type NotificationRemovalReason = 'access_lost' | 'subject_deleted' | 'withdrawn' | 'source_revoked' | 'expired';
+
+export interface NotificationItemV1 {
+  schema: 'org.wingman.notification.item';
+  version: 1;
+  id: string;
+  workspace_id: string;
+  recipient_actor_id: string;
+  change_seq: number;
+  row_version: number;
+  source: { app_id: string; label: string; kind: string };
+  category: string;
+  reasons: string[];
+  severity: NotificationSeverity;
+  status: 'active' | 'resolved';
+  origin: 'live' | 'baseline';
+  group: { key: string | null; event_count: number };
+  actor: { actor_id: string | null; display_name: string | null; kind: string | null };
+  subject: { kind: string | null; activity_version: number | null; [key: string]: unknown };
+  presentation: { title: string; body: string; icon?: string; push_preview?: string };
+  action: { type: 'open'; target: Record<string, unknown> } | null;
+  audience: { client_apps: string[] };
+  occurred_at: string;
+  updated_at: string;
+  expires_at: string | null;
+  state: { read: boolean; read_at: string | null; read_reason: NotificationReadReason | null; dismissed: boolean; archived: boolean };
+  access: 'ok' | 'unavailable';
+}
+
+export interface NotificationTombstoneV1 {
+  schema: 'org.wingman.notification.tombstone';
+  version: 1;
+  id: string;
+  workspace_id: string;
+  change_seq: number;
+  change_type: 'remove';
+  removal_reason: NotificationRemovalReason;
+}
+
+export interface NotificationChangesResponse {
+  changes: Array<NotificationItemV1 | NotificationTombstoneV1>;
+  /** Last returned row when has_more, else head_seq from the same snapshot. */
+  through_seq: number;
+  head_seq: number;
+  rules_revision: number;
+  has_more: boolean;
+}
+
+/** `client_app_id` (items/counts/changes query, bulk selector) is a presentation filter, never access authority. */
+export type NotificationRuleMode = 'on' | 'off' | 'default';
+export interface NotificationRuleV1 {
+  source_app_id: string;
+  category: string;
+  client_app_id: string;
+  channel: 'inbox' | 'alert';
+  mode: NotificationRuleMode;
+  preview: 'generic' | 'sender' | 'full' | null;
+  row_version: number;
+}
+export interface NotificationRulesState {
+  rules: NotificationRuleV1[];
+  rules_revision: number;
+}
+/** PUT rules entry: per-key CAS. expected_row_version is 0 when the key was absent; >= 1 for mode 'default'. */
+export interface NotificationRuleInputV1 extends Omit<NotificationRuleV1, 'row_version'> {
+  expected_row_version: number;
+}
+export interface NotificationRulesConflict extends NotificationRulesState {
+  code: 'rules_conflict';
+  conflicts: Array<Pick<NotificationRuleV1, 'source_app_id' | 'category' | 'client_app_id' | 'channel'> & { expected_row_version: number; current: NotificationRuleV1 | null }>;
+}
+export interface NotificationResetRequired {
+  code: 'reset_required';
+  reason: 'rules_changed' | 'tombstone_floor' | 'ahead';
+  head_seq: number;
+  rules_revision: number;
+}
