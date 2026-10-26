@@ -7963,9 +7963,20 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/channels/:channelId/files', asy
   });
   if (!access.allowed) return storageAuthorizationError(c, access, identity, 'file.read or channel.read');
 
+  const originMessageQuery = c.req.query('origin_message_id');
+  const originStorageQuery = c.req.query('origin_storage_object_id');
+  const lineageRequested = originMessageQuery !== undefined || originStorageQuery !== undefined;
+  const originMessageId = originMessageQuery?.trim().toLowerCase();
+  const originStorageObjectId = originStorageQuery?.trim().toLowerCase();
+  if (lineageRequested && (!originMessageId || !isUuid(originMessageId) || !originStorageObjectId || !isUuid(originStorageObjectId))) {
+    return validationError(c, identity, [{ path: 'query', code: 'invalid', message: 'origin_message_id and origin_storage_object_id must be supplied together as UUIDs' }]);
+  }
+
   const files = await listFlightDeckPgChannelFiles({
     workspaceId: context.workspace.id,
     channelId,
+    originMessageId,
+    originStorageObjectId,
     limit: parseLimit(c),
     archived: c.req.query('archived') === 'true',
   });

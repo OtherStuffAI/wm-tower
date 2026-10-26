@@ -6454,6 +6454,20 @@ export function buildOpenApiDocument(origin: string) {
         delete: { tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Unpublish your selected version reference', description: 'Requires file.write or channel.write. Idempotently revokes only the calling actor’s reference. Independent publications and existing public objects stay public. External copies cannot be recalled.', parameters: [{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'fileId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'versionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Publication status, versions and verified public URLs; changed indicates an actual reference mutation' }, '400': { description: 'Invalid UUID or missing version' }, '401': { description: 'Invalid NIP-98 authentication' }, '403': { description: 'Workspace membership and file/channel permission required' }, '404': { description: 'Missing, deleted or inaccessible file/version/storage object' }, '409': { description: 'Incomplete, unavailable bytes or publication hash changed' } } },
       },
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/channels/{channelId}/files': {
+        get: {
+          tags: ['Flight Deck PG'], security: [{ nip98: [] }],
+          summary: 'List readable channel Files, optionally by exact text attachment lineage',
+          description: 'Requires file.read or channel.read. The optional origin UUID parameters must be supplied together and are canonicalized to lowercase. Both metadata.text_attachment_lineage fields are matched in the database before the limit, within this workspace and channel. Existing archived filtering applies. Returns next_cursor:null; this is not a paginated listing.',
+          parameters: [
+            { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'channelId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'origin_message_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Requires origin_storage_object_id.' },
+            { name: 'origin_storage_object_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Requires origin_message_id.' },
+            { name: 'archived', in: 'query', schema: { type: 'boolean', default: false } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
+          ],
+          responses: { '200': { description: 'Authorized Files with identity, channel_id, files and next_cursor:null' }, '400': { description: 'Invalid or unpaired origin UUIDs' }, '403': { description: 'Storage read access denied' } },
+        },
         post: {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],

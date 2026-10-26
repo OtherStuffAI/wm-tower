@@ -498,6 +498,33 @@ describe('Flight Deck PG API routes', () => {
     const listed = await requestJson(path(channelId), 'GET', ownerSecret);
     expect(listed.json.files.filter((file: any) => file.metadata?.text_attachment_lineage)).toHaveLength(1);
 
+    // Exact lineage lookup searches before the normal list window, not within it.
+    await sql`UPDATE flightdeck_pg_files SET updated_at = NOW() - INTERVAL '1 day' WHERE id = ${canonicalId}`;
+    for (let n = 0; n < 205; n++) {
+      const unrelated = await textObject(`Unrelated ${n}.txt`, `Unrelated ${n}`);
+      await sql`INSERT INTO flightdeck_pg_files(workspace_id,scope_id,channel_id,storage_object_id,display_name,created_by_actor_id,updated_by_actor_id)
+        VALUES(${workspaceId},${scope!.id},${channelId},${unrelated.id},${`Unrelated ${n}`},${ownerId},${ownerId})`;
+    }
+    const ordinaryWindow = await requestJson(path(channelId) + '?limit=200', 'GET', ownerSecret);
+    expect(ordinaryWindow.json.files).toHaveLength(200);
+    expect(ordinaryWindow.json.files.some((file: any) => file.id === canonicalId)).toBe(false);
+    const query = `?origin_message_id=${messageId.toUpperCase()}&origin_storage_object_id=${original.id.toUpperCase()}`;
+    const exact = await requestJson(path(channelId) + query, 'GET', ownerSecret);
+    expect(exact.res.status).toBe(200);
+    expect(exact.json.files.map((file: any) => file.id)).toEqual([canonicalId]);
+    expect(exact.json.next_cursor).toBeNull();
+    expect((await requestJson(path(otherChannelId) + query, 'GET', ownerSecret)).json.files).toEqual([]);
+    expect((await requestJson(path(channelId) + query.replace(original.id.toUpperCase(), randomUUID()), 'GET', ownerSecret)).json.files).toEqual([]);
+    expect((await requestJson(path(channelId) + query.replace(messageId.toUpperCase(), randomUUID()), 'GET', ownerSecret)).json.files).toEqual([]);
+    expect((await requestJson(path(channelId) + query, 'GET', groupMemberSecret)).res.status).toBe(403);
+    for (const invalid of [`?origin_message_id=${messageId}`, `?origin_storage_object_id=${original.id}`, '?origin_message_id=bad&origin_storage_object_id=bad', `?origin_message_id=&origin_storage_object_id=${original.id}`]) {
+      expect((await requestJson(path(channelId) + invalid, 'GET', ownerSecret)).res.status).toBe(400);
+    }
+    await sql`UPDATE flightdeck_pg_files SET archived_at = NOW() WHERE id = ${canonicalId}`;
+    expect((await requestJson(path(channelId) + query, 'GET', ownerSecret)).json.files).toEqual([]);
+    expect((await requestJson(path(channelId) + query + '&archived=true', 'GET', ownerSecret)).json.files.map((file: any) => file.id)).toEqual([canonicalId]);
+    await sql`UPDATE flightdeck_pg_files SET archived_at = NULL WHERE id = ${canonicalId}`;
+
     // A lost-response retry with the creator's own object replays instead of conflicting.
     const winnerObjectId = created[0]!.json.file.storage_object_id as string;
     const replay = await requestJson(path(channelId), 'POST', ownerSecret, { display_name: 'again', storage_object_id: winnerObjectId, metadata: lineage() });

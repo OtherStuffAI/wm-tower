@@ -4531,7 +4531,7 @@ export async function deleteFlightDeckPgDoc(
 }
 
 export async function listFlightDeckPgChannelFiles(
-  input: { workspaceId: string; channelId: string; limit: number; archived?: boolean },
+  input: { workspaceId: string; channelId: string; limit: number; archived?: boolean; originMessageId?: string; originStorageObjectId?: string },
   sql: DbClient = getDb(),
 ): Promise<FlightDeckPgFileRow[]> {
   return sql<FlightDeckPgFileRow[]>`
@@ -4541,6 +4541,10 @@ export async function listFlightDeckPgChannelFiles(
       AND channel_id = ${input.channelId}
       AND deleted_at IS NULL
       AND (${input.archived === true} = (archived_at IS NOT NULL))
+      AND (${input.originMessageId ?? null}::text IS NULL OR (
+        metadata -> 'text_attachment_lineage' ->> 'origin_message_id' = ${input.originMessageId ?? null}
+        AND metadata -> 'text_attachment_lineage' ->> 'origin_storage_object_id' = ${input.originStorageObjectId ?? null}
+      ))
     ORDER BY updated_at DESC, id ASC
     LIMIT ${input.limit}
   `;
