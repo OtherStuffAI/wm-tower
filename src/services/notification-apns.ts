@@ -161,25 +161,31 @@ function sessionFor(host: string): http2.ClientHttp2Session {
   return session;
 }
 
-/** Raised when a stream closes without an HTTP response (reset, dropped connection, runtime fault). Always transient. */
+/** Raised when a stream ends without a complete HTTP response (reset, dropped connection, runtime fault). Always transient. */
 export const APNS_NO_RESPONSE = 'apns_no_response';
-/** In-sender retries on a fresh connection for a missing response; further failures surface to the worker's backoff. */
-const NO_RESPONSE_RETRIES = 2;
 
-function dropSession(host: string) {
-  const session = sessions.get(host);
-  sessions.delete(host);
-  try { session?.destroy(); } catch { /* already gone */ }
+/**
+ * Evicts exactly the session a request used. A concurrent request may already have replaced it in the map, so a newer session is never
+ * touched; close() is graceful, so streams other requests still have in flight on the old session finish normally.
+ */
+function evictSession(host: string, session: http2.ClientHttp2Session) {
+  if (sessions.get(host) === session) sessions.delete(host);
+  try { session.close(); } catch { /* already gone */ }
 }
+
+const MAX_BODY_BYTES = 16 * 1024;
 
 function sendOnce(config: ApnsConfig, input: ApnsSendInput): Promise<ApnsResult> {
   return new Promise<ApnsResult>((resolve, reject) => {
     const timeoutMs = input.timeoutMs ?? 10_000;
+    const host = config.hosts[input.environment];
     let settled = false;
     const finish = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    let session: http2.ClientHttp2Session | null = null;
     let req: http2.ClientHttp2Stream;
     try {
-      req = sessionFor(config.hosts[input.environment]).request({
+      session = sessionFor(host);
+      req = session.request({
         ':method': 'POST',
         ':path': `/3/device/${input.deviceToken}`,
         authorization: `bearer ${providerToken(config)}`,
@@ -191,47 +197,58 @@ function sendOnce(config: ApnsConfig, input: ApnsSendInput): Promise<ApnsResult>
         'content-type': 'application/json',
       });
     } catch (error) {
+      if (session) evictSession(host, session);
       return reject(error);
     }
-    const timer = setTimeout(() => { req.close(http2.constants.NGHTTP2_CANCEL); finish(() => reject(new Error('apns_timeout'))); }, timeoutMs);
+    const fail = (error: Error, evict: boolean) => {
+      clearTimeout(timer);
+      if (evict && session) evictSession(host, session);
+      finish(() => reject(error));
+    };
+    const timer = setTimeout(() => { req.close(http2.constants.NGHTTP2_CANCEL); fail(new Error('apns_timeout'), false); }, timeoutMs);
     let status = 0;
+    let ended = false;
     let apnsId: string | null = null;
     let retryAfter: number | null = null;
+    let declaredLength: number | null = null;
+    let received = 0;
     const chunks: Buffer[] = [];
     req.on('response', (headers) => {
       status = Number(headers[':status'] ?? 0);
       apnsId = (headers['apns-id'] as string | undefined) ?? null;
       const ra = Number(headers['retry-after']);
       retryAfter = Number.isFinite(ra) && ra > 0 ? ra * 1000 : null;
+      const cl = headers['content-length'];
+      declaredLength = cl === undefined ? null : Number(cl);
     });
-    req.on('data', (chunk: Buffer) => { if (chunks.length < 8) chunks.push(chunk); });
-    // 'close' is the single completion point: Bun 1.2.x can end a stream without ever emitting 'response', which must never read as a result.
+    req.on('data', (chunk: Buffer) => { received += chunk.length; if (received <= MAX_BODY_BYTES) chunks.push(chunk); });
+    req.on('end', () => { ended = true; });
+    // 'close' is the single completion point. Bun 1.2.x can end a stream without ever emitting 'response', and a stream can be reset after
+    // headers but before the body completes: only a valid status, a fully received body (end) and a clean close (NO_ERROR) is a result.
+    // Some runtimes report a mid-body RST_STREAM as end + NO_ERROR, so the body must also match content-length and parse when non-empty.
     req.on('close', () => {
-      clearTimeout(timer);
-      if (!status) return finish(() => reject(new Error(APNS_NO_RESPONSE)));
+      const clean = ended && req.rstCode === http2.constants.NGHTTP2_NO_ERROR;
+      if (!clean || !Number.isInteger(status) || status <= 0) return fail(new Error(APNS_NO_RESPONSE), true);
+      if (declaredLength !== null && Number.isFinite(declaredLength) && declaredLength !== received) return fail(new Error(APNS_NO_RESPONSE), true);
+      const text = Buffer.concat(chunks).toString('utf8');
       let reason: string | null = null;
-      try { reason = String(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}').reason ?? '') || null; } catch { reason = null; }
+      if (text) {
+        try { reason = String(JSON.parse(text).reason ?? '') || null; } catch { return fail(new Error(APNS_NO_RESPONSE), true); }
+      }
+      clearTimeout(timer);
       finish(() => resolve({ status, reason, apnsId, retryAfterMs: retryAfter }));
     });
-    req.on('error', (error) => { clearTimeout(timer); finish(() => reject(error)); });
+    req.on('error', (error) => fail(error, true));
     req.end(input.body);
   });
 }
 
 /**
- * Real HTTP/2 sender. Rejects on connection, timeout or stream errors and on a stream that closes without a response (the worker treats
- * all of those as transient). A missing response is retried here on a fresh connection; APNs collapses a duplicate by apns-collapse-id.
+ * Real HTTP/2 sender. Rejects on connection, timeout or stream errors and on a stream that does not complete with a valid response (the
+ * worker treats all of those as transient). There is deliberately no retry here: the worker's write-ahead attempt, lease and backoff are
+ * the single durable retry path, so one alert never hides extra provider sends.
  */
-export const sendApns: ApnsSender = async (config, input) => {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await sendOnce(config, input);
-    } catch (error) {
-      if (!(error instanceof Error) || error.message !== APNS_NO_RESPONSE || attempt >= NO_RESPONSE_RETRIES) throw error;
-      dropSession(config.hosts[input.environment]);
-    }
-  }
-};
+export const sendApns: ApnsSender = (config, input) => sendOnce(config, input);
 
 /** Classifies a provider result for the worker. Reason strings are Apple's documented identifiers, never payload text. */
 export type ApnsOutcome = 'sent' | 'transient' | 'stale_token' | 'credential' | 'permanent';

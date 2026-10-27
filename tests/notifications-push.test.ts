@@ -618,36 +618,51 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     }
   });
 
-  test('a stream that closes without an HTTP response is transient: recovered in the sender, retried by the worker, never dead', async () => {
-    expect(classifyApnsResult({ status: 0, reason: null, apnsId: null, retryAfterMs: null })).toBe('transient');
-    await freshBob();
-    let drop = 0; // number of requests to reset without any response before answering normally
+  test('a stream that closes without a complete HTTP response is transient: no hidden sender retry, retried only by the worker, never dead', async () => {
+    let drop = 0;
     let requests = 0;
+    let mode: 'cancel' | 'headers_then_reset' = 'cancel';
     const server = http2.createServer((req, res) => {
       requests += 1;
       req.resume();
       req.on('end', () => {
-        if (drop > 0) { drop -= 1; req.stream.close(http2.constants.NGHTTP2_CANCEL); return; }
+        if (drop > 0) {
+          drop -= 1;
+          if (mode === 'cancel') { req.stream.close(http2.constants.NGHTTP2_CANCEL); return; }
+          res.writeHead(200, { 'apns-id': 'fake-id' }); res.write('{"reason":"Partial');
+          setTimeout(() => req.stream.close(http2.constants.NGHTTP2_CANCEL), 20);
+          return;
+        }
         res.writeHead(200, { 'apns-id': 'fake-id' }); res.end('');
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       process.env.APNS_HOST_SANDBOX = `http://127.0.0.1:${(server.address() as any).port}`;
-      // two resets in a row are absorbed by the sender's fresh-connection retries: delivered on the third request
-      drop = 2;
-      await ping();
-      expect(await processAlertBatch({ sql: db, sender: sendApns })).toMatchObject({ claimed: 1, sent: 1, dead: 0 });
-      expect(requests).toBe(3);
-      // a persistently resetting provider surfaces as a retryable failure with a distinct error class, not provider_rejected
-      drop = 99; requests = 0;
-      await ping();
-      expect(await processAlertBatch({ sql: db, sender: sendApns })).toMatchObject({ claimed: 1, sent: 0, dead: 0, retried: 1 });
-      expect(requests).toBe(3);
-      const last = (await alertsFor()).at(-1)!;
-      expect([last.state, last.reason, last.error_class]).toEqual(['failed', 'transient', 'no_response']);
-      const attempt = (await db`SELECT outcome, provider_status FROM flightdeck_pg_notification_alert_attempts WHERE alert_id = ${last.id}`)[0]!;
-      expect(attempt.outcome).toBe('transient');
+      // each provider request is exactly one worker attempt: a reset surfaces as a retryable failure, not provider_rejected or dead
+      for (const m of ['cancel', 'headers_then_reset'] as const) {
+        mode = m; drop = 1; requests = 0;
+        await freshBob();
+        await ping();
+        expect(await processAlertBatch({ sql: db, sender: sendApns })).toMatchObject({ claimed: 1, sent: 0, dead: 0, retried: 1 });
+        expect(requests).toBe(1);
+        const last = (await alertsFor()).at(-1)!;
+        expect([last.state, last.reason]).toEqual(['failed', 'transient']);
+        expect(['no_response', 'network_error']).toContain(last.error_class);
+        const attempt = (await db`SELECT outcome, provider_status FROM flightdeck_pg_notification_alert_attempts WHERE alert_id = ${last.id}`)[0]!;
+        expect(attempt.outcome).toBe('transient');
+        expect(attempt.provider_status).toBeNull();
+      }
+      // headers followed by a premature reset must reject at the sender, never resolve with the partial status
+      mode = 'headers_then_reset'; drop = 1;
+      const loaded = loadApnsConfig(); if (!loaded.ready) throw new Error(loaded.reason); const cfg = loaded.config;
+      const input = { environment: 'sandbox', deviceToken: 'a'.repeat(64), topic: 'studio.test', collapseId: 'n-x', expiration: 0, body: '{}' } as ApnsSendInput;
+      await expect(sendApns(cfg, input)).rejects.toThrow();
+      // a failed request evicts only its own session: a concurrent request on the shared session still completes, and the next send works
+      mode = 'cancel'; drop = 1;
+      const settled = await Promise.allSettled([sendApns(cfg, input), sendApns(cfg, input)]);
+      expect(settled.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect((await sendApns(cfg, input)).status).toBe(200);
     } finally {
       server.close();
       delete process.env.APNS_HOST_SANDBOX;
