@@ -102,6 +102,8 @@ export function providerToken(config: ApnsConfig, now = Date.now()): string {
 
 // --- Payload ----------------------------------------------------------------------------------------------------------
 export type AlertContent = {
+  /** Recipient app, distinct from the notification producer. Only Ambulando requests cache refresh. */
+  clientAppId?: string;
   workspaceId: string; itemId: string; changeSeq: number; sourceAppId: string; category: string;
   /** Opaque HMAC of the group (see opaqueIds); the raw group key never leaves Tower. */
   threadId: string; coreSource: boolean; ids: { channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string };
@@ -142,6 +144,7 @@ export function buildApnsPayload(content: AlertContent) {
     alert: { title: content.preview?.title || genericAlertTitle(content.category, content.coreSource), body: content.preview?.body || '' },
     sound: 'default',
     'thread-id': content.threadId,
+    ...(content.clientAppId === 'ambulando' ? { 'content-available': 1 } : {}),
   };
   if (content.badge !== null) aps.badge = content.badge;
   return { aps, fd };

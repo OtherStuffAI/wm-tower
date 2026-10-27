@@ -112,7 +112,7 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 
 ```json
 {
-  "aps": { "alert": { "title": "You were mentioned", "body": "" }, "sound": "default", "thread-id": "t-<32 hex>", "badge": 3 },
+  "aps": { "alert": { "title": "You were mentioned", "body": "" }, "sound": "default", "content-available": 1, "thread-id": "t-<32 hex>", "badge": 3 },
   "fd": {
     "v": 1,
     "origin": "https://tower.example",
@@ -130,7 +130,15 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 * `fd` is the Apple `PushPayload` v1: `v`, `origin` (https), `workspace_id` required; id keys are UUIDs or **absent** (never null, never malformed);
   `category` string. `tower_service_npub` (the workspace's stable Tower service identity) lets a client match the alert to a stored connection when the https `origin` differs from its pinned/FIPS origin; it is a matching hint, never a new network authority. `notification_id`, `change_seq`, `source_app_id` are additive. Only the ids relevant to the item are present.
 * `aps.thread-id` and `apns-collapse-id` are **opaque HMAC-SHA256** values (Tower-held secret) of the item group; the raw group key (core or producer-supplied) never leaves Tower, and neither value can be reversed or correlated outside Tower.
-* Not a silent push: no `content-available`; `aps.alert` + `sound` always present.
+* Visible alerts retain `aps.alert` + `sound`. For a recipient installation with `client_app_id=ambulando`, Tower adds
+  `aps["content-available"]=1` to request opportunistic iOS cache refresh alongside presentation. The recipient app selects
+  this flag independently of `source_app_id`; other clients keep their existing envelope. Headers remain `alert` / `10`
+  because these notifications display alerts (a silent-only background push would instead use `background` / `5`).
+  iOS may defer or suppress execution and does not automatically relaunch a force-quit app. Clients must complete their
+  fetch callback within the OS allowance and catch up on foreground/reconnect. The routing envelope and read state are
+  unchanged; delivery does not acknowledge or mark an item read.
+  Apple: [payload keys](https://developer.apple.com/library/archive/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/CreatingtheNotificationPayload.html),
+  [fetch callback](https://developer.apple.com/documentation/uikit/uiapplicationdelegate/application(_:didreceiveremotenotification:fetchcompletionhandler:)).
 * `badge` is the recipient's badge count for the installation's `client_app_id` in this workspace (`getCounts().badge`), only when the installation is
   enrolled in exactly one workspace; otherwise omitted (no cross-workspace aggregation).
 * Default visible text is **purpose-only**, chosen from the item's canonical `flightdeck.core` category, with an empty body. No actor names, titles, message text or producer group keys leave Tower unless §4 allows:

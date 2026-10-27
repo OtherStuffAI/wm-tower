@@ -227,6 +227,7 @@ async function buildContent(sql: Sql, alert: Claimed, g: Extract<Gate, { ok: tru
   const opaque = opaqueIds(await cursorSecret(sql), alert.workspace_id, item.id, item.group_key);
   const [ws] = await sql<{ tower_service_npub: string | null }[]>`SELECT tower_service_npub FROM flightdeck_pg_workspaces WHERE id = ${alert.workspace_id}`;
   return {
+    clientAppId: installation.client_app_id,
     towerServiceNpub: ws?.tower_service_npub ?? null,
     workspaceId: alert.workspace_id, itemId: item.id, changeSeq: Number(item.change_seq), sourceAppId: item.source_app_id, category: item.category,
     ...opaque, coreSource: core, ids, badge, origin,

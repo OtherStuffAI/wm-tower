@@ -298,7 +298,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     const payload = JSON.parse(call0.body);
     const [item] = await db`SELECT id, change_seq FROM flightdeck_pg_notification_items WHERE recipient_actor_id = ${actors[2]!} AND subject->>'thread_id' = ${thread}`;
     expect(payload.aps).toMatchObject({ alert: { title: 'You were mentioned', body: '' }, sound: 'default' });
-    expect(payload.aps['content-available']).toBeUndefined();
+    expect(payload.aps['content-available']).toBe(1);
     expect(typeof payload.aps.badge).toBe('number');
     expect(payload.fd).toMatchObject({ v: 1, origin: 'https://tower.example', tower_service_npub: 'tower-push', workspace_id: w1, category: 'mention', thread_id: thread, channel_id: ch1, notification_id: item!.id, change_seq: Number(item!.change_seq), source_app_id: 'flightdeck.core' });
     expect(payload.fd.task_id).toBeUndefined();
