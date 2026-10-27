@@ -272,7 +272,8 @@ async function dispatchOne(sql: Sql, alert: Claimed, owner: string, config: Apns
     errorClass = result.reason ?? (outcome === 'sent' ? null : `http_${result.status}`);
     retryAfterMs = result.retryAfterMs;
   } catch (error) {
-    errorClass = /timeout/i.test(error instanceof Error ? error.message : '') ? 'timeout' : 'network_error';
+    const message = error instanceof Error ? error.message : '';
+    errorClass = /timeout/i.test(message) ? 'timeout' : message === 'apns_no_response' ? 'no_response' : 'network_error';
   }
   const latency = Date.now() - started;
   await sql`

@@ -11,7 +11,7 @@ import { splitSqlStatements } from '../src/schema/sql-statements';
 import { ensureRuntimeSchema } from '../src/schema/ensure-runtime-schema';
 import { processIntakeBatch } from '../src/services/notification-projector';
 import { alertStatus, processAlertBatch } from '../src/services/notification-alerts';
-import { loadApnsConfig, providerToken, resetApnsJwtCache, sendApns, type ApnsResult, type ApnsSender, type ApnsSendInput } from '../src/services/notification-apns';
+import { classifyApnsResult, loadApnsConfig, providerToken, resetApnsJwtCache, sendApns, type ApnsResult, type ApnsSender, type ApnsSendInput } from '../src/services/notification-apns';
 import { transportAdvertisement } from '../src/services/notification-registry';
 
 // Push delivery v1. Runs against a disposable Postgres with generated fixtures only (no owner keys, no real provider):
@@ -615,6 +615,42 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     } finally {
       for (const s of servers) s.close();
       delete process.env.APNS_HOST_SANDBOX; delete process.env.APNS_HOST_PRODUCTION;
+    }
+  });
+
+  test('a stream that closes without an HTTP response is transient: recovered in the sender, retried by the worker, never dead', async () => {
+    expect(classifyApnsResult({ status: 0, reason: null, apnsId: null, retryAfterMs: null })).toBe('transient');
+    await freshBob();
+    let drop = 0; // number of requests to reset without any response before answering normally
+    let requests = 0;
+    const server = http2.createServer((req, res) => {
+      requests += 1;
+      req.resume();
+      req.on('end', () => {
+        if (drop > 0) { drop -= 1; req.stream.close(http2.constants.NGHTTP2_CANCEL); return; }
+        res.writeHead(200, { 'apns-id': 'fake-id' }); res.end('');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      process.env.APNS_HOST_SANDBOX = `http://127.0.0.1:${(server.address() as any).port}`;
+      // two resets in a row are absorbed by the sender's fresh-connection retries: delivered on the third request
+      drop = 2;
+      await ping();
+      expect(await processAlertBatch({ sql: db, sender: sendApns })).toMatchObject({ claimed: 1, sent: 1, dead: 0 });
+      expect(requests).toBe(3);
+      // a persistently resetting provider surfaces as a retryable failure with a distinct error class, not provider_rejected
+      drop = 99; requests = 0;
+      await ping();
+      expect(await processAlertBatch({ sql: db, sender: sendApns })).toMatchObject({ claimed: 1, sent: 0, dead: 0, retried: 1 });
+      expect(requests).toBe(3);
+      const last = (await alertsFor()).at(-1)!;
+      expect([last.state, last.reason, last.error_class]).toEqual(['failed', 'transient', 'no_response']);
+      const attempt = (await db`SELECT outcome, provider_status FROM flightdeck_pg_notification_alert_attempts WHERE alert_id = ${last.id}`)[0]!;
+      expect(attempt.outcome).toBe('transient');
+    } finally {
+      server.close();
+      delete process.env.APNS_HOST_SANDBOX;
     }
   });
 

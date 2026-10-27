@@ -161,48 +161,77 @@ function sessionFor(host: string): http2.ClientHttp2Session {
   return session;
 }
 
-/** Real HTTP/2 sender. Rejects on connection, timeout or stream errors (the worker treats those as transient). */
-export const sendApns: ApnsSender = (config, input) => new Promise<ApnsResult>((resolve, reject) => {
-  const timeoutMs = input.timeoutMs ?? 10_000;
-  let settled = false;
-  const finish = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
-  let req: http2.ClientHttp2Stream;
-  try {
-    req = sessionFor(config.hosts[input.environment]).request({
-      ':method': 'POST',
-      ':path': `/3/device/${input.deviceToken}`,
-      authorization: `bearer ${providerToken(config)}`,
-      'apns-push-type': 'alert',
-      'apns-priority': '10',
-      'apns-topic': input.topic,
-      'apns-collapse-id': input.collapseId,
-      'apns-expiration': String(input.expiration),
-      'content-type': 'application/json',
+/** Raised when a stream closes without an HTTP response (reset, dropped connection, runtime fault). Always transient. */
+export const APNS_NO_RESPONSE = 'apns_no_response';
+/** In-sender retries on a fresh connection for a missing response; further failures surface to the worker's backoff. */
+const NO_RESPONSE_RETRIES = 2;
+
+function dropSession(host: string) {
+  const session = sessions.get(host);
+  sessions.delete(host);
+  try { session?.destroy(); } catch { /* already gone */ }
+}
+
+function sendOnce(config: ApnsConfig, input: ApnsSendInput): Promise<ApnsResult> {
+  return new Promise<ApnsResult>((resolve, reject) => {
+    const timeoutMs = input.timeoutMs ?? 10_000;
+    let settled = false;
+    const finish = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    let req: http2.ClientHttp2Stream;
+    try {
+      req = sessionFor(config.hosts[input.environment]).request({
+        ':method': 'POST',
+        ':path': `/3/device/${input.deviceToken}`,
+        authorization: `bearer ${providerToken(config)}`,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        'apns-topic': input.topic,
+        'apns-collapse-id': input.collapseId,
+        'apns-expiration': String(input.expiration),
+        'content-type': 'application/json',
+      });
+    } catch (error) {
+      return reject(error);
+    }
+    const timer = setTimeout(() => { req.close(http2.constants.NGHTTP2_CANCEL); finish(() => reject(new Error('apns_timeout'))); }, timeoutMs);
+    let status = 0;
+    let apnsId: string | null = null;
+    let retryAfter: number | null = null;
+    const chunks: Buffer[] = [];
+    req.on('response', (headers) => {
+      status = Number(headers[':status'] ?? 0);
+      apnsId = (headers['apns-id'] as string | undefined) ?? null;
+      const ra = Number(headers['retry-after']);
+      retryAfter = Number.isFinite(ra) && ra > 0 ? ra * 1000 : null;
     });
-  } catch (error) {
-    return reject(error);
+    req.on('data', (chunk: Buffer) => { if (chunks.length < 8) chunks.push(chunk); });
+    // 'close' is the single completion point: Bun 1.2.x can end a stream without ever emitting 'response', which must never read as a result.
+    req.on('close', () => {
+      clearTimeout(timer);
+      if (!status) return finish(() => reject(new Error(APNS_NO_RESPONSE)));
+      let reason: string | null = null;
+      try { reason = String(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}').reason ?? '') || null; } catch { reason = null; }
+      finish(() => resolve({ status, reason, apnsId, retryAfterMs: retryAfter }));
+    });
+    req.on('error', (error) => { clearTimeout(timer); finish(() => reject(error)); });
+    req.end(input.body);
+  });
+}
+
+/**
+ * Real HTTP/2 sender. Rejects on connection, timeout or stream errors and on a stream that closes without a response (the worker treats
+ * all of those as transient). A missing response is retried here on a fresh connection; APNs collapses a duplicate by apns-collapse-id.
+ */
+export const sendApns: ApnsSender = async (config, input) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await sendOnce(config, input);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== APNS_NO_RESPONSE || attempt >= NO_RESPONSE_RETRIES) throw error;
+      dropSession(config.hosts[input.environment]);
+    }
   }
-  const timer = setTimeout(() => { req.close(http2.constants.NGHTTP2_CANCEL); finish(() => reject(new Error('apns_timeout'))); }, timeoutMs);
-  let status = 0;
-  let apnsId: string | null = null;
-  let retryAfter: number | null = null;
-  const chunks: Buffer[] = [];
-  req.on('response', (headers) => {
-    status = Number(headers[':status'] ?? 0);
-    apnsId = (headers['apns-id'] as string | undefined) ?? null;
-    const ra = Number(headers['retry-after']);
-    retryAfter = Number.isFinite(ra) && ra > 0 ? ra * 1000 : null;
-  });
-  req.on('data', (chunk: Buffer) => { if (chunks.length < 8) chunks.push(chunk); });
-  req.on('end', () => {
-    clearTimeout(timer);
-    let reason: string | null = null;
-    try { reason = String(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}').reason ?? '') || null; } catch { reason = null; }
-    finish(() => resolve({ status, reason, apnsId, retryAfterMs: retryAfter }));
-  });
-  req.on('error', (error) => { clearTimeout(timer); finish(() => reject(error)); });
-  req.end(input.body);
-});
+};
 
 /** Classifies a provider result for the worker. Reason strings are Apple's documented identifiers, never payload text. */
 export type ApnsOutcome = 'sent' | 'transient' | 'stale_token' | 'credential' | 'permanent';
@@ -211,6 +240,7 @@ export function classifyApnsResult(result: ApnsResult): ApnsOutcome {
   const reason = result.reason ?? '';
   if (result.status === 410 || ['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic'].includes(reason)) return 'stale_token';
   if (result.status === 403 || result.status === 401 || ['InvalidProviderToken', 'ExpiredProviderToken'].includes(reason)) return 'credential';
-  if (result.status === 429 || result.status >= 500 || ['TooManyProviderTokenUpdates', 'ServiceUnavailable', 'InternalServerError', 'Shutdown'].includes(reason)) return 'transient';
+  // status 0 = no HTTP response was observed; Apple never answered, so the alert was not judged and must be retried.
+  if (result.status === 0 || result.status === 429 || result.status >= 500 || ['TooManyProviderTokenUpdates', 'ServiceUnavailable', 'InternalServerError', 'Shutdown'].includes(reason)) return 'transient';
   return 'permanent';
 }
