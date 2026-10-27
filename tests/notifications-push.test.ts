@@ -297,7 +297,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     expect(call0.expiration * 1000 - Date.now()).toBeGreaterThan(23 * 3600_000);
     const payload = JSON.parse(call0.body);
     const [item] = await db`SELECT id, change_seq FROM flightdeck_pg_notification_items WHERE recipient_actor_id = ${actors[2]!} AND subject->>'thread_id' = ${thread}`;
-    expect(payload.aps).toMatchObject({ alert: { title: 'New activity', body: '' }, sound: 'default' });
+    expect(payload.aps).toMatchObject({ alert: { title: 'You were mentioned', body: '' }, sound: 'default' });
     expect(payload.aps['content-available']).toBeUndefined();
     expect(typeof payload.aps.badge).toBe('number');
     expect(payload.fd).toMatchObject({ v: 1, origin: 'https://tower.example', tower_service_npub: 'tower-push', workspace_id: w1, category: 'mention', thread_id: thread, channel_id: ch1, notification_id: item!.id, change_seq: Number(item!.change_seq), source_app_id: 'flightdeck.core' });
@@ -322,7 +322,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     await ping();
     const first = recorder();
     await processAlertBatch({ sql: db, sender: first.sender });
-    expect(JSON.parse(first.calls[0]!.body).aps.alert.title).toBe('New activity'); // rule did not opt in
+    expect(JSON.parse(first.calls[0]!.body).aps.alert.title).toBe('You were mentioned'); // rule did not opt in
     const put = await n('/rules', 'PUT', 2, { mutation_id: randomUUID(), rules: [{ source_app_id: 'flightdeck.core', category: 'mention', client_app_id: '*', channel: 'alert', mode: 'on', preview: 'full', expected_row_version: 0 }] });
     expect(put.status).toBe(200);
     await ping();
@@ -334,7 +334,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
     await ping();
     const third = recorder();
     await processAlertBatch({ sql: db, sender: third.sender });
-    expect(JSON.parse(third.calls[0]!.body).aps.alert.title).toBe('New activity');
+    expect(JSON.parse(third.calls[0]!.body).aps.alert.title).toBe('You were mentioned');
   });
 
   test('per-app alert preference and audience: only the opted-in client app gets an alert', async () => {
@@ -363,6 +363,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
       ['enrollment removed in the database', async ({ installation }) => { await db`UPDATE flightdeck_pg_notification_installations SET enrolled_workspace_ids = '{}' WHERE id = ${installation}`; }, ['not_enrolled']],
       ['stale token status', async ({ tok }) => { await db`UPDATE flightdeck_pg_notification_transports SET status = 'stale' WHERE address = ${tok}`; }, ['transport_revoked']],
       ['record access revoked', async () => { await db`UPDATE flightdeck_pg_permission_grants SET revoked_at = NOW() WHERE principal_actor_id = ${actors[2]!} AND resource_channel_id = ${ch1}`; }, ['no_access', 'item_removed']],
+      ['item tombstoned (removed)', async ({ thread }) => { await db`UPDATE flightdeck_pg_notification_items SET removed_at = NOW(), removal_reason = 'source_revoked' WHERE recipient_actor_id = ${actors[2]!} AND subject->>'thread_id' = ${thread}`; }, ['item_removed']],
       ['membership removed', async () => { await db`DELETE FROM flightdeck_pg_workspace_memberships WHERE workspace_id = ${w1} AND actor_id = ${actors[2]!}`; }, ['membership_revoked']],
     ];
     for (const [name, mutate, reasons] of scenarios) {
@@ -593,7 +594,7 @@ describe.skipIf(!port || port === 5432)('notification push delivery against disp
         expect(JSON.parse(Buffer.from(jwt[0]!, 'base64url').toString())).toEqual({ alg: 'ES256', kid: 'TESTKEYID1' });
         expect(JSON.parse(Buffer.from(jwt[1]!, 'base64url').toString()).iss).toBe('TESTTEAM12');
         expect(verify('sha256', Buffer.from(`${jwt[0]}.${jwt[1]}`), { key: ec.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(jwt[2]!, 'base64url'))).toBe(true);
-        expect(JSON.parse(seen[env][0]!.body).aps.alert.title).toBe('New activity');
+        expect(JSON.parse(seen[env][0]!.body).aps.alert.title).toBe('You were mentioned');
       }
       // the provider token is cached across sends
       const before = seen.sandbox[0]!.headers.authorization;

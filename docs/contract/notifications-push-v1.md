@@ -112,7 +112,7 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 
 ```json
 {
-  "aps": { "alert": { "title": "New activity", "body": "" }, "sound": "default", "thread-id": "t-<32 hex>", "badge": 3 },
+  "aps": { "alert": { "title": "You were mentioned", "body": "" }, "sound": "default", "thread-id": "t-<32 hex>", "badge": 3 },
   "fd": {
     "v": 1,
     "origin": "https://tower.example",
@@ -133,13 +133,25 @@ Headers: `apns-push-type: alert`, `apns-priority: 10`, `apns-topic: <bundle_id>`
 * Not a silent push: no `content-available`; `aps.alert` + `sound` always present.
 * `badge` is the recipient's badge count for the installation's `client_app_id` in this workspace (`getCounts().badge`), only when the installation is
   enrolled in exactly one workspace; otherwise omitted (no cross-workspace aggregation).
-* Default visible text is generic (`"New activity"`, empty body). No actor names, titles, message text or producer group keys leave Tower unless §4 allows.
+* Default visible text is **purpose-only**, chosen from the item's canonical `flightdeck.core` category, with an empty body. No actor names, titles, message text or producer group keys leave Tower unless §4 allows:
+
+  | `category` (core source) | `aps.alert.title` |
+  |---|---|
+  | `mention` | You were mentioned |
+  | `dm` | New direct message |
+  | `comment_tag` | You were mentioned in a comment |
+  | `task_assignment` | A task was assigned to you |
+  | `chat_thread` | New thread activity |
+  | anything else (unknown future category, any producer source) | New activity |
+
+  Producer-supplied labels are never put on a lock screen. `fd.category` already carries the category, so clients need no new field.
+* Routing ids (`channel_id`, `thread_id`, `task_id`, `doc_id`) are present only for `flightdeck.core` items. Producer (`app_object`) items carry `notification_id` + `source_app_id` + `category` only; the client opens them by fetching the item (`action.target`). If the item has since been tombstoned (source revoked, access lost, expired) that fetch returns `404`/`access:"unavailable"`, so there is nothing to open: clients should land on the inbox rather than fail.
 
 ## 4. Preferences and previews
 
 * Per-app alert preference reuses `PUT /notifications/rules` with `channel:"alert"`. A rule with `client_app_id:"<app>"` beats `"*"` (most specific
   wins; `off` wins within a level). Defaults come from the category registry (`default_alert`).
-* Content preview: the alert shows item text only when the transport has `preview:"full"` **and** the resolved alert rule has `preview:"full"`. Body is bounded
+* Content preview: the alert shows item title/body (the bell text) only when the transport has `preview:"full"` **and** the resolved alert rule has `preview:"full"`. Body is bounded
   to 120 characters. `sender` is treated as `generic` for APNs in v1.
 
 ## 5. Delivery semantics
@@ -165,4 +177,4 @@ PUT /api/v4/flightdeck-pg/workspaces/6f0c1c0e-7a43-4c37-9a52-0a1d3b6f0c11/notifi
 → `200` as in §1; repeat PUT = renewal (same row, new `lease_expires_at`). Other actor same token → `409 {"code":"transport_owned"}`.
 `DELETE` same path → `200 {"revoked":true,...}`; a second `DELETE` → `404 installation_not_found`.
 
-APNs request body for a mention (generic): `{"aps":{"alert":{"title":"New activity","body":""},"sound":"default","thread-id":"t-0f3a…"},"fd":{"v":1,"origin":"https://tower.example","workspace_id":"6f0c1c0e-…","category":"mention","thread_id":"…","notification_id":"…","change_seq":12,"source_app_id":"flightdeck.core"}}`.
+APNs request body for a mention (generic): `{"aps":{"alert":{"title":"You were mentioned","body":""},"sound":"default","thread-id":"t-0f3a…"},"fd":{"v":1,"origin":"https://tower.example","workspace_id":"6f0c1c0e-…","category":"mention","thread_id":"…","notification_id":"…","change_seq":12,"source_app_id":"flightdeck.core"}}`.

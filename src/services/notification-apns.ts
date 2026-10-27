@@ -114,6 +114,23 @@ export type AlertContent = {
 
 const GENERIC_TITLE = 'New activity';
 
+/**
+ * Purpose-only copy per canonical flightdeck.core category, matching the bell's wording but with no actor, title or message text.
+ * Only the fixed Tower-owned categories get a purpose; producer categories and anything unknown fall back to GENERIC_TITLE, because
+ * producer-supplied labels are never trusted into a lock screen.
+ */
+const PURPOSE_TITLES: Record<string, string> = {
+  mention: 'You were mentioned',
+  dm: 'New direct message',
+  comment_tag: 'You were mentioned in a comment',
+  task_assignment: 'A task was assigned to you',
+  chat_thread: 'New thread activity',
+};
+
+export function genericAlertTitle(category: string, coreSource: boolean) {
+  return (coreSource && Object.hasOwn(PURPOSE_TITLES, category) ? PURPOSE_TITLES[category] : undefined) ?? GENERIC_TITLE;
+}
+
 /** Visible alert (never silent). Routing ids only unless an explicit full preview was allowed. */
 export function buildApnsPayload(content: AlertContent) {
   const fd: Record<string, unknown> = {
@@ -122,7 +139,7 @@ export function buildApnsPayload(content: AlertContent) {
     ...content.ids, notification_id: content.itemId, change_seq: content.changeSeq, source_app_id: content.sourceAppId,
   };
   const aps: Record<string, unknown> = {
-    alert: { title: content.preview?.title || GENERIC_TITLE, body: content.preview?.body || '' },
+    alert: { title: content.preview?.title || genericAlertTitle(content.category, content.coreSource), body: content.preview?.body || '' },
     sound: 'default',
     'thread-id': content.threadId,
   };
