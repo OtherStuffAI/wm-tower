@@ -1,3 +1,5 @@
+import { DOCUMENT_EDIT_PROTOCOL } from '../types';
+import { lockDocumentEditAuthority, lockDocumentLeaseAuthority } from '../services/document-edit-session';
 import { applyLegacyPreferencePatch } from '../services/notification-inbox';
 import { registerNotificationRoutes } from './notifications';
 import { inboxApiEnabled } from '../services/notification-core';
@@ -6456,7 +6458,7 @@ flightDeckPgRouter.get('/workspaces/:workspaceId/edit-leases', async (c) => {
     entityType: entityType!,
     entityId,
   });
-  return c.json({ identity, lease: lease ? serializeFlightDeckPgEditLease(lease) : null });
+  return c.json({ identity, ...(entityType === 'document' ? { document_edit_protocol: DOCUMENT_EDIT_PROTOCOL } : {}), lease: lease ? serializeFlightDeckPgEditLease(lease) : null });
 });
 
 flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/acquire', async (c) => {
@@ -6477,6 +6479,14 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/acquire', async (c
   if (!entityId) fields.push({ path: 'entity_id', code: 'required', message: 'entity_id is required' });
   if (!Number.isFinite(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 600) {
     fields.push({ path: 'ttl_seconds', code: 'invalid', message: 'ttl_seconds must be between 30 and 600' });
+  }
+  if (entityType === 'document') {
+    if (body.document_edit_protocol !== undefined && body.document_edit_protocol !== DOCUMENT_EDIT_PROTOCOL) fields.push({path:'document_edit_protocol',code:'unsupported',message:'Unsupported document edit protocol'});
+    if (body.editor_session_id !== undefined && (!isUuid(String(body.editor_session_id)) || !body.document_edit_protocol)) fields.push({path:'editor_session_id',code:'invalid',message:'A protocol and UUID editor session are required together'});
+    if (body.document_edit_protocol && !isUuid(String(body.editor_session_id || ''))) fields.push({path:'editor_session_id',code:'required',message:'editor_session_id must be a UUID'});
+    if (body.takeover !== undefined && typeof body.takeover !== 'boolean') fields.push({path:'takeover',code:'invalid',message:'takeover must be boolean'});
+    if (body.takeover === true && (!body.document_edit_protocol || !isUuid(String(body.expected_lease_id || '')))) fields.push({path:'expected_lease_id',code:'required',message:'Explicit takeover requires protocol and expected_lease_id UUID'});
+    if (body.field_path != null) fields.push({path:'field_path',code:'unsupported',message:'Document edit authority covers the whole document'});
   }
   if (fields.length) return validationError(c, identity, fields);
 
@@ -6515,18 +6525,27 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/acquire', async (c
     actorId: context.actor.id,
     actorNpub: auth.userNpub,
     leaseSeconds: ttlSeconds,
+    ...(entityType === 'document' ? {
+      document_edit_protocol: body.document_edit_protocol === DOCUMENT_EDIT_PROTOCOL ? DOCUMENT_EDIT_PROTOCOL : undefined,
+      editor_session_id: body.editor_session_id === undefined ? undefined : String(body.editor_session_id),
+      takeover: body.takeover === true,
+      expected_lease_id: body.expected_lease_id === undefined ? undefined : String(body.expected_lease_id),
+    } : {}),
   }, asDbClient(tx)));
 
   if (!acquire.ok) {
-    return jsonError(c, 409, 'edit_lease_held', 'edit lease is held', identity, {
-      holder_actor_npub: acquire.lease.holder_actor_npub,
-      expires_at: acquire.lease.expires_at,
-    });
+    const held = acquire.lease;
+    return jsonError(c, acquire.reason === 'doc_not_found' ? 404 : 409,
+      acquire.reason === 'lease_conflict' ? 'edit_lease_held' : (acquire.reason || 'edit_lease_held'),
+      entityType === 'document' ? 'Document edit authority could not be acquired' : 'edit lease is held', identity, held ? {
+        lease: held, lease_id: held.id, holder_actor_npub: held.holder_actor_npub, expires_at: held.expires_at,
+        details: {lease: held, lease_id: held.id, holder_actor_npub: held.holder_actor_npub, expires_at: held.expires_at},
+      } : undefined);
   }
 
-  return c.json({
-    identity,
-    lease: acquire.lease,
+  return c.json({ identity, lease: acquire.lease,
+    ...('document_edit_protocol' in acquire ? { document_edit_protocol: acquire.document_edit_protocol } : {}),
+    ...('doc' in acquire ? { doc: serializeFlightDeckPgDoc(acquire.doc), canonical_version: serializeFlightDeckPgDocVersionIdentity(acquire.canonical_version), taken_over: acquire.taken_over } : {}),
   }, 201);
 });
 
@@ -6548,15 +6567,19 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/:leaseId/renew', a
   }
   if (fields.length) return validationError(c, identity, fields);
 
-  const lease = await renewFlightDeckPgEditLease({
+  const lease = await getDb().begin(async tx => {
+    const sql = asDbClient(tx);
+    await lockDocumentLeaseAuthority(context.workspace.id, c.req.param('leaseId'), sql);
+    return renewFlightDeckPgEditLease({
     workspaceId: context.workspace.id,
     leaseId: c.req.param('leaseId'),
     actorId: context.actor.id,
     leaseToken,
     leaseSeconds: ttlSeconds,
+    }, sql);
   });
   if (!lease.ok) return jsonError(c, 409, lease.reason, 'PG edit lease is invalid or expired', identity);
-  return c.json({ identity, lease: lease.lease });
+  return c.json({ identity, ...(lease.lease.entity_type === 'document' && lease.lease.editor_session_id ? {document_edit_protocol:DOCUMENT_EDIT_PROTOCOL} : {}), lease: lease.lease });
 });
 
 flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/:leaseId/release', async (c) => {
@@ -6568,11 +6591,15 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/edit-leases/:leaseId/release',
   const { context, identity } = result;
   const body = await readJsonBody(c).catch(() => null);
   const leaseToken = body ? requiredLeaseToken(body) : '';
-  const lease = await releaseFlightDeckPgEditLease({
+  const lease = await getDb().begin(async tx => {
+    const sql = asDbClient(tx);
+    await lockDocumentLeaseAuthority(context.workspace.id, c.req.param('leaseId'), sql);
+    return releaseFlightDeckPgEditLease({
     workspaceId: context.workspace.id,
     leaseId: c.req.param('leaseId'),
     actorId: context.actor.id,
     leaseToken,
+    }, sql);
   });
   return c.json({
     identity,
@@ -6779,11 +6806,11 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/recoveries/:recove
   if (body.base_version_id !== undefined && !expectedHeadVersionId) fields.push({ path: 'base_version_id', code: 'invalid', message: 'base_version_id must be non-empty when provided' });
   if (!leaseToken) fields.push({ path: 'lease_token', code: 'required', message: 'lease_token is required to promote a recovery version' });
   if (fields.length) return validationError(c, identity, fields);
-  const leaseError = await requireValidFlightDeckPgEditLeaseForSave(c, { identity, workspaceId: context.workspace.id, actorId: context.actor.id, entityType: 'document', entityId: docId, rowVersion: expectedHeadRowVersion, leaseToken });
-  if (leaseError) return leaseError;
-
   const payload = await getDb().begin(async (tx) => {
     const sql = asDbClient(tx);
+    if (!await lockDocumentEditAuthority(context.workspace.id,docId,sql)) return null;
+    const lease = await validateFlightDeckPgEditLease({workspaceId:context.workspace.id,entityType:'document',entityId:docId,actorId:context.actor.id,leaseToken},sql);
+    if (!lease.ok) return {outcome:'lease_error' as const,reason:lease.reason};
     const promotion = await promoteFlightDeckPgDocRecoveryVersion({
       workspaceId: context.workspace.id,
       docId,
@@ -6817,6 +6844,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/recoveries/:recove
       : null;
     return { ...promotion, auditId, outbox, mentionOutbox, viewStateOutbox, promotedBody };
   });
+  if (payload?.outcome === 'lease_error') return jsonError(c,409,payload.reason,'A valid edit lease is required to promote this recovery',identity);
   if (!payload) return jsonError(c, 404, 'doc_recovery_not_found', 'Document recovery version not found', identity);
   if (payload.outcome === 'head_conflict') return c.json({ identity, code: 'recovery_promotion_conflict', message: 'Canonical document head changed; refresh before promoting this recovery version', recovery: serializeFlightDeckPgDocRecoveryVersion(payload.recovery), current_head: serializeFlightDeckPgDocVersionIdentity(payload.headIdentity) }, 409);
   if (payload.outcome === 'resolved') {
@@ -6954,22 +6982,20 @@ flightDeckPgRouter.patch('/workspaces/:workspaceId/docs/:docId', async (c) => {
         documentBodyVersionInfo(existing.storage_object_id),
       ]);
 
-  const archiveOnly = archived !== undefined && title === undefined && channelId === undefined && storageObjectId === undefined && body.summary === undefined && body.metadata === undefined;
+  const archiveOnly = archived !== undefined && title === undefined && channelId === undefined && storageObjectId === undefined && body.summary === undefined && body.metadata === undefined && body.mentions === undefined;
   const qualifyingDocUpdate = title !== undefined || storageObjectId !== undefined || body.summary !== undefined || body.mentions !== undefined || metadata?.mentions !== undefined;
-  const leaseError = archiveOnly || bodySave ? null : await requireValidFlightDeckPgEditLeaseForSave(c, {
-    identity,
-    workspaceId: context.workspace.id,
-    actorId: context.actor.id,
-    entityType: 'document',
-    entityId: docId,
-    rowVersion,
-    leaseToken,
-  });
-  if (leaseError) return leaseError;
+  if (!bodySave && (!rowVersion || (!archiveOnly && !leaseToken))) return validationError(c, identity, [
+    {path: !rowVersion ? 'row_version' : 'lease_token',code:'required',message:'row_version and lease_token are required for PG edit saves'},
+  ]);
 
   try {
     const payload = await getDb().begin(async (tx) => {
       const sql = asDbClient(tx);
+      if (!await lockDocumentEditAuthority(context.workspace.id, docId, sql)) return {kind:'not_found' as const};
+      if (!archiveOnly && !bodySave) {
+        const lease = await validateFlightDeckPgEditLease({workspaceId:context.workspace.id,entityType:'document',entityId:docId,actorId:context.actor.id,leaseToken},sql);
+        if (!lease.ok) return {kind:'lease_error' as const,reason:lease.reason};
+      }
       const submittedPatch = {
         ...(title !== undefined ? { title } : {}),
         ...(body.summary !== undefined ? { summary: body.summary === null ? null : String(body.summary) } : {}),

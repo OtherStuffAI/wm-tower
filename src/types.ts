@@ -3452,3 +3452,12 @@ export interface NotificationPushEnvelopeV1 {
     channel_id?: string; thread_id?: string; task_id?: string; doc_id?: string;
   };
 }
+
+/** Additive document editing authority; legacy ordinary saves retain their base/version contract. */
+export const DOCUMENT_EDIT_PROTOCOL = 'document_edit_session_v1' as const;
+export interface DocumentEditSessionRequest {
+  document_edit_protocol?: typeof DOCUMENT_EDIT_PROTOCOL;
+  editor_session_id?: string;
+  takeover?: boolean;
+  expected_lease_id?: string;
+}

@@ -2895,6 +2895,8 @@ export async function ensureRuntimeSchema(sql: DbClient = getDb()) {
   `);
 
   await sql.unsafe(`
+    ALTER TABLE flightdeck_pg_edit_leases ADD COLUMN IF NOT EXISTS editor_session_id UUID;
+    ALTER TABLE flightdeck_pg_edit_leases ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ;
     ALTER TABLE flightdeck_pg_edit_leases DROP CONSTRAINT IF EXISTS flightdeck_pg_edit_leases_entity_type_check;
     ALTER TABLE flightdeck_pg_edit_leases ADD CONSTRAINT flightdeck_pg_edit_leases_entity_type_check CHECK (entity_type IN ('task', 'document', 'scope'));
   `);

@@ -1,3 +1,5 @@
+import { acquireDocumentEditSession } from './document-edit-session';
+import { DOCUMENT_EDIT_PROTOCOL, type DocumentEditSessionRequest } from '../types';
 import { inboxApiEnabled } from './notification-core';
 import { transportAdvertisement } from './notification-registry';
 import { createHash, randomUUID } from 'crypto';
@@ -234,6 +236,7 @@ export const flightDeckPgCapabilities = [
   'pg_invocations',
   'pg_workrooms',
   'pg_workspace_sync',
+  DOCUMENT_EDIT_PROTOCOL,
   'realtime_events',
 ] as const;
 
@@ -254,6 +257,7 @@ export const flightDeckPgWorkspaceCapabilities = [
   'pg_invocations',
   'pg_workrooms',
   'pg_workspace_sync',
+  DOCUMENT_EDIT_PROTOCOL,
   'realtime_events',
 ] as const;
 
@@ -540,6 +544,8 @@ export type FlightDeckPgEditLeaseRow = {
   entity_id: string;
   field_path: string | null;
   lease_token_hash: string;
+  editor_session_id: string | null;
+  superseded_at: Date | null;
   holder_actor_id: string;
   holder_actor_npub: string;
   expires_at: Date;
@@ -554,6 +560,7 @@ export type FlightDeckPgSerializedEditLease = {
   entity_id: string;
   field_path: string | null;
   lease_token?: string;
+  editor_session_id?: string;
   holder_actor_npub: string;
   expires_at: Date;
 };
@@ -566,7 +573,7 @@ export type FlightDeckPgEditLeaseConflict = {
 
 export type FlightDeckPgEditLeaseInvalid = {
   ok: false;
-  reason: 'lease_missing' | 'lease_invalid' | 'lease_expired';
+  reason: 'lease_missing' | 'lease_invalid' | 'lease_expired' | 'document_edit_session_superseded';
 };
 
 export type FlightDeckPgEventCursor = {
@@ -2051,14 +2058,14 @@ export function serializeFlightDeckPgEditLease(
     entity_type: lease.entity_type,
     entity_id: lease.entity_id,
     field_path: lease.field_path,
-    ...(options.leaseToken ? { lease_token: options.leaseToken } : {}),
+    ...(options.leaseToken ? { lease_token: options.leaseToken, ...(lease.editor_session_id ? { editor_session_id: lease.editor_session_id } : {}) } : {}),
     holder_actor_npub: lease.holder_actor_npub,
     expires_at: lease.expires_at,
   };
 }
 
 export async function acquireFlightDeckPgEditLease(
-  input: {
+  input: DocumentEditSessionRequest & {
     workspaceId: string;
     entityType: FlightDeckPgEditLeaseEntityType;
     entityId: string;
@@ -2068,7 +2075,11 @@ export async function acquireFlightDeckPgEditLease(
     leaseSeconds?: number | null;
   },
   sql: DbClient = getDb(),
-): Promise<{ ok: true; lease: FlightDeckPgSerializedEditLease } | FlightDeckPgEditLeaseConflict> {
+) {
+  if (input.entityType === 'document') {
+    if (typeof sql.begin === 'function') return sql.begin(tx => acquireDocumentEditSession(input, tx as unknown as DbClient));
+    return acquireDocumentEditSession(input, sql);
+  }
   const fieldPath = input.fieldPath?.trim() || null;
   const leaseSeconds = Math.max(30, Math.min(3600, Math.floor(input.leaseSeconds || 900)));
   const [active] = await sql<FlightDeckPgEditLeaseRow[]>`
@@ -2159,6 +2170,13 @@ export async function renewFlightDeckPgEditLease(
 ): Promise<{ ok: true; lease: FlightDeckPgSerializedEditLease } | FlightDeckPgEditLeaseInvalid> {
   const tokenHash = hashFlightDeckPgEditLeaseToken(input.leaseToken);
   const leaseSeconds = Math.max(30, Math.min(3600, Math.floor(input.leaseSeconds || 900)));
+  const [current] = await sql<FlightDeckPgEditLeaseRow[]>`SELECT * FROM flightdeck_pg_edit_leases
+    WHERE id=${input.leaseId} AND workspace_id=${input.workspaceId} AND holder_actor_id=${input.actorId} AND lease_token_hash=${tokenHash} LIMIT 1`;
+  if (current?.entity_type === 'document') {
+    if (current.superseded_at) return {ok:false,reason:'document_edit_session_superseded'};
+    if (current.released_at) return {ok:false,reason:'lease_invalid'};
+    if (current.expires_at <= new Date()) return {ok:false,reason:'lease_expired'};
+  }
   const [lease] = await sql<FlightDeckPgEditLeaseRow[]>`
     UPDATE flightdeck_pg_edit_leases
     SET expires_at = NOW() + (${leaseSeconds}::integer * INTERVAL '1 second'),
@@ -2168,6 +2186,7 @@ export async function renewFlightDeckPgEditLease(
       AND holder_actor_id = ${input.actorId}
       AND lease_token_hash = ${tokenHash}
       AND released_at IS NULL
+      AND superseded_at IS NULL
       AND expires_at > NOW()
     RETURNING *
   `;
@@ -2213,11 +2232,13 @@ export async function validateFlightDeckPgEditLease(
       AND entity_id = ${input.entityId}
       AND holder_actor_id = ${input.actorId}
       AND lease_token_hash = ${hashFlightDeckPgEditLeaseToken(leaseToken)}
-      AND released_at IS NULL
+
     ORDER BY expires_at DESC, updated_at DESC
     LIMIT 1
   `;
   if (!lease) return { ok: false, reason: 'lease_invalid' };
+  if (lease.entity_type === 'document' && lease.superseded_at) return { ok: false, reason: 'document_edit_session_superseded' };
+  if (lease.released_at) return { ok: false, reason: 'lease_invalid' };
   if (lease.expires_at <= new Date()) return { ok: false, reason: 'lease_expired' };
   return { ok: true, lease };
 }
