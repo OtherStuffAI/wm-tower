@@ -771,6 +771,13 @@ export interface FlightDeckPgAgentChatConfig {
   activation: 'mention_then_continue';
 }
 
+export interface FlightDeckPgCommentMention {
+  type: 'agent' | 'person';
+  actor_id: string;
+  npub: string;
+  label?: string;
+}
+
 export interface FlightDeckPgAgentMention {
   type: 'agent';
   actor_id: string;

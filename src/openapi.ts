@@ -6980,7 +6980,7 @@ export function buildOpenApiDocument(origin: string) {
       '/api/v4/flightdeck-pg/workspaces/{workspaceId}/docs/{docId}/comments': {
         post: {
           tags: ['Flight Deck PG'], security: [{ nip98: [] }], summary: 'Create a document comment or inline reply',
-          description: 'Creates a comment while preserving parent_comment_id. Structured mentions are canonicalized and doc.read access-checked; a non-empty canonical set emits flightdeck_pg.document_comment_mention_added with comment linkage, document body version/hash, logical author, signer provenance, stable event ID, and cursor.',
+          description: 'Creates a comment while preserving parent_comment_id. Explicit person and agent mentions retain their type and are canonicalized to actor_id/npub after doc.read access checks. Only agent mentions emit flightdeck_pg.document_comment_mention_added with comment linkage, document body version/hash, logical author, signer provenance, stable event ID, and cursor.',
           parameters: [
             { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Opaque keyset cursor for this endpoint and filter' },
             { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } },{ name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { name: 'docId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
@@ -7065,7 +7065,7 @@ export function buildOpenApiDocument(origin: string) {
           tags: ['Flight Deck PG'],
           security: [{ nip98: [] }],
           summary: 'Add a task comment',
-          description: 'Creates a task comment transactionally. Canonical agent mentions may be supplied as top-level mentions or metadata.mentions and are stored with actor_id and npub after task.read validation. The event includes the serialized comment, mentions, linkage, entity version, logical author, signer provenance, stable event ID, and cursor.',
+          description: 'Creates a task comment transactionally. Explicit person and agent mentions may be supplied as top-level mentions or metadata.mentions; their type is preserved and they are stored with resolved actor_id and npub after task.read validation. Visible body tags alone never create routing mentions. The event includes the serialized comment, mentions, linkage, entity version, logical author, signer provenance, stable event ID, and cursor.',
           parameters: [
             { name: 'workspaceId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },

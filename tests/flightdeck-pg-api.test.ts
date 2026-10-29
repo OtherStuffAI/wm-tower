@@ -392,6 +392,63 @@ afterAll(async () => {
 });
 
 describe('Flight Deck PG API routes', () => {
+  test('comment mentions preserve actor types, permissions, routing payloads and reloads', async () => {
+    const { workspaceId } = await seedWorkspace('npub1workspacecommentmentions');
+    const root = `/api/v4/flightdeck-pg/workspaces/${workspaceId}`;
+    const members = [];
+    for (const [npub, kind] of [[MEMBER_NPUB, 'human'], [AGENT_NPUB, 'agent'], [INACCESSIBLE_AGENT_NPUB, 'agent']]) {
+      const member = await requestJson(`${root}/members`, 'POST', ownerSecret, { member_npub: npub, kind, role: 'member' });
+      expect(member.res.status).toBe(201);
+      members.push(member.json.actor.actor_id);
+    }
+    const scope = await requestJson(`${root}/scopes`, 'POST', ownerSecret, { name: 'Comment mentions', kind: 'project' });
+    const channel = await requestJson(`${root}/scopes/${scope.json.scope.id}/channels`, 'POST', ownerSecret, { name: 'Comments', type: 'tasks' });
+    const channelId = channel.json.channel.id;
+    for (const actorId of members.slice(0, 2)) {
+      expect((await requestJson(`${root}/channels/${channelId}/grants`, 'POST', ownerSecret, { principal_type: 'actor', principal_id: actorId, access_level: 'contribute' })).res.status).toBe(201);
+    }
+    const task = await requestJson(`${root}/channels/${channelId}/tasks`, 'POST', ownerSecret, { title: 'Comment fixture' });
+    expect(task.res.status).toBe(201);
+    const [workspace] = await sql`SELECT workspace_owner_npub FROM flightdeck_pg_workspaces WHERE id=${workspaceId}`;
+    const [storage] = await sql`INSERT INTO v4_storage_objects(owner_npub,created_by_npub,file_name,content_type,size_bytes,storage_path)
+      VALUES(${workspace.workspace_owner_npub},${OWNER_NPUB},'comment-fixture.md','text/markdown',64,'v4/flightdeck-pg/comment-mentions/fixture.md') RETURNING id`;
+    const doc = await requestJson(`${root}/channels/${channelId}/docs`, 'POST', ownerSecret, { title: 'Comment fixture', storage_object_id: storage.id });
+    expect(doc.res.status).toBe(201);
+    const mentions = [{ type: 'person', npub: MEMBER_NPUB, label: 'Member' }, { type: 'agent', npub: AGENT_NPUB, label: 'Agent' }];
+    const canonical = mentions.map((mention, index) => ({ ...mention, actor_id: members[index] }));
+    const body = `Before @[Member](mention:person:${MEMBER_NPUB}) and @[Agent](mention:agent:${AGENT_NPUB}) after.\n\n![attachment](storage://fixture)`;
+    for (const commentsPath of [`${root}/tasks/${task.json.task.id}/comments`, `${root}/docs/${doc.json.doc.id}/comments`]) {
+      const created = await requestJson(commentsPath, 'POST', ownerSecret, { body, metadata: { mentions, source: 'test' } });
+      expect(created.res.status).toBe(201);
+      expect(created.json.comment.body).toBe(body);
+      expect(created.json.comment.metadata).toMatchObject({ mentions: canonical, source: 'test' });
+      const [event] = await sql`SELECT payload FROM flightdeck_pg_outbox_events WHERE id=${created.json.outbox.id}`;
+      expect(event.payload.mentions).toEqual(canonical);
+      const listed = await requestJson(commentsPath, 'GET', memberSecret);
+      expect(listed.res.status).toBe(200);
+      expect(listed.json.comments.find((item: any) => item.id === created.json.comment.id)).toMatchObject({ body, metadata: { mentions: canonical } });
+      for (const invalidMentions of [[{ type: 'person', npub: INACCESSIBLE_AGENT_NPUB }], [{ type: 'agent', npub: UNKNOWN_AGENT_NPUB }], [{ type: 'task', npub: AGENT_NPUB }]]) {
+        const rejected = await requestJson(commentsPath, 'POST', ownerSecret, { body: 'Rejected', mentions: invalidMentions });
+        expect(rejected.res.status).toBe(400);
+      }
+      const bodyOnly = await requestJson(commentsPath, 'POST', ownerSecret, { body });
+      expect(bodyOnly.res.status).toBe(201);
+      expect(bodyOnly.json.comment.metadata.mentions).toBeUndefined();
+      if (commentsPath.includes('/docs/')) {
+        const [instruction] = await sql`SELECT payload FROM flightdeck_pg_outbox_events WHERE id=${created.json.mention_outbox.id}`;
+        expect(instruction.payload.added_mentions).toEqual([canonical[1]]);
+        expect(bodyOnly.json.mention_outbox).toBeNull();
+        const reply = await requestJson(commentsPath, 'POST', ownerSecret, { body: 'Person reply', parent_comment_id: created.json.comment.id, mentions: [mentions[0]] });
+        expect(reply.res.status).toBe(201);
+        expect(reply.json.comment).toMatchObject({ parent_comment_id: created.json.comment.id, metadata: { mentions: [canonical[0]] } });
+        expect(reply.json.mention_outbox).toBeNull();
+        const resolved = await requestJson(`${commentsPath}/${created.json.comment.id}`, 'PATCH', ownerSecret, { comment_status: 'resolved', row_version: created.json.comment.row_version });
+        expect(resolved.res.status).toBe(200);
+        expect(resolved.json.comment.metadata.mentions).toEqual(canonical);
+      }
+    }
+  });
+
   test('message activity authenticates workspace/app and rejects invalid ranges', async () => {
     const { workspaceId, ownerId } = await seedWorkspace('npub1messageactivityapi');
     const base = `/api/v4/flightdeck-pg/workspaces/${workspaceId}/message-activity`;

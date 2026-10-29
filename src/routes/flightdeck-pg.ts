@@ -372,11 +372,13 @@ import {
 import {
   MESSAGE_CLIENT_REQUEST_ID_MAX_LENGTH,
   parseAgentMentionInputs,
+  parseActorMentionInputs,
   validateFlightDeckPgChannelMetadata,
 } from '../services/flightdeck-pg-agent-direct';
 import type {
   CreateWorkspaceAppRowInput,
   FlightDeckPgActorKind,
+  FlightDeckPgCommentMention,
   FlightDeckPgApprovalStatus,
   FlightDeckPgChannelKind,
   FlightDeckPgCanvasSourceType,
@@ -1386,6 +1388,33 @@ async function canonicalDocMentions(input: {
     });
     if (!decision.allowed) return { mentions: [], errors: [{ path: input.path, code: 'inaccessible_actor', message: 'mentioned actor cannot read this document' }] };
     mentions.push({ type: 'agent', actor_id: actor.id, npub: actor.npub, ...(mention.label ? { label: mention.label } : actor.display_name ? { label: actor.display_name } : {}) });
+  }
+  return { mentions, errors: [] };
+}
+
+async function canonicalCommentMentions(input: {
+  value: unknown;
+  path: string;
+  workspaceId: string;
+  appNpub: string;
+  channelId: string;
+  permission: 'task.read' | 'doc.read';
+}) {
+  const parsed = parseActorMentionInputs(input.value, input.path);
+  if (parsed.errors.length) return { mentions: [], errors: parsed.errors };
+  const mentions: FlightDeckPgCommentMention[] = [];
+  for (const mention of parsed.mentions) {
+    const actor = await resolveFlightDeckPgActorByNpub(mention.npub);
+    if (!actor) return { mentions: [], errors: [{ path: input.path, code: 'unknown_actor', message: 'mentioned identity is not a workspace actor' }] };
+    const decision = await authorizeFlightDeckPgOperation({
+      actorNpub: actor.npub,
+      appNpub: input.appNpub,
+      workspaceId: input.workspaceId,
+      permission: input.permission,
+      resource: { type: 'channel', channelId: input.channelId },
+    });
+    if (!decision.allowed) return { mentions: [], errors: [{ path: input.path, code: 'inaccessible_actor', message: 'mentioned actor cannot read this comment target' }] };
+    mentions.push({ type: mention.type, actor_id: actor.id, npub: actor.npub, ...(mention.label ? { label: mention.label } : actor.display_name ? { label: actor.display_name } : {}) });
   }
   return { mentions, errors: [] };
 }
@@ -7437,7 +7466,8 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/comments', async (
   });
   if (!access.allowed) return storageAuthorizationError(c, access, identity, 'doc.write or channel.write');
 
-  const canonicalMentions = await canonicalDocMentions({
+  const canonicalMentions = await canonicalCommentMentions({
+    permission: 'doc.read',
     value: mentionSource,
     path: body.mentions !== undefined ? 'mentions' : 'metadata.mentions',
     workspaceId: context.workspace.id,
@@ -7446,6 +7476,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/comments', async (
   });
   if (canonicalMentions.errors.length) return validationError(c, identity, canonicalMentions.errors);
   const commentMetadata = { ...(metadata ?? {}), ...(mentionSource !== undefined ? { mentions: canonicalMentions.mentions } : {}) };
+  const agentMentions = canonicalMentions.mentions.filter(mention => mention.type === 'agent');
   const bodyVersion = await documentBodyVersionInfo(doc.storage_object_id);
 
   try {
@@ -7481,7 +7512,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/comments', async (
         entityRowVersion: comment.row_version,
         payload: { doc_id: doc.id, comment_id: comment.id, parent_comment_id: parentCommentId, mentions: canonicalMentions.mentions, activity_version: Number(activity.resource.activity_version), author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
       }, sql);
-      const mentionOutbox = canonicalMentions.mentions.length > 0
+      const mentionOutbox = agentMentions.length > 0
         ? await createFlightDeckPgDocOutboxEvent({
             workspaceId: context.workspace.id,
             scopeId: comment.scope_id,
@@ -7492,7 +7523,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/docs/:docId/comments', async (
             entityId: comment.id,
             operation: 'created',
             entityRowVersion: comment.row_version,
-            payload: { trigger: 'document_comment_mention_added', document_id: doc.id, doc_id: doc.id, comment_id: comment.id, parent_comment_id: comment.parent_comment_id, workspace_id: comment.workspace_id, scope_id: comment.scope_id, channel_id: comment.channel_id, document_row_version: doc.row_version, comment_row_version: comment.row_version, body_version: bodyVersion, current_body_hash: bodyVersion.sha256_hex, added_mentions: canonicalMentions.mentions, author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
+            payload: { trigger: 'document_comment_mention_added', document_id: doc.id, doc_id: doc.id, comment_id: comment.id, parent_comment_id: comment.parent_comment_id, workspace_id: comment.workspace_id, scope_id: comment.scope_id, channel_id: comment.channel_id, document_row_version: doc.row_version, comment_row_version: comment.row_version, body_version: bodyVersion, current_body_hash: bodyVersion.sha256_hex, added_mentions: agentMentions, author: { actor_id: context.actor.id, actor_npub: auth.userNpub, signer_npub: auth.signerNpub } },
           }, sql)
         : null;
       return { comment, auditId, outbox, mentionOutbox, activityVersion: Number(activity.resource.activity_version), viewStateOutbox };
@@ -12292,7 +12323,7 @@ flightDeckPgRouter.post('/workspaces/:workspaceId/tasks/:taskId/comments', async
   if (!decision.allowed) return authorizationError(c, decision, identity, 'task.comment');
 
   const mentionSource = body.mentions !== undefined ? body.mentions : metadata?.mentions;
-  const canonicalMentions = await canonicalTaskMentions({ value: mentionSource, path: body.mentions !== undefined ? 'mentions' : 'metadata.mentions', workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, channelId: task.channel_id });
+  const canonicalMentions = await canonicalCommentMentions({ permission: 'task.read', value: mentionSource, path: body.mentions !== undefined ? 'mentions' : 'metadata.mentions', workspaceId: context.workspace.id, appNpub: context.workspace.app_npub, channelId: task.channel_id });
   if (canonicalMentions.errors.length) return validationError(c, identity, canonicalMentions.errors);
   const commentMetadata = { ...(metadata ?? {}), ...(mentionSource !== undefined ? { mentions: canonicalMentions.mentions } : {}) };
 

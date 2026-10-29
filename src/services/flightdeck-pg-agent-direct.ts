@@ -63,15 +63,15 @@ export function validateFlightDeckPgChannelMetadata(
   return { metadata: normalized, errors };
 }
 
-export function parseAgentMentionInputs(value: unknown, path: string): {
-  mentions: Array<{ type: 'agent'; npub: string; label?: string }>;
+export function parseActorMentionInputs(value: unknown, path: string): {
+  mentions: Array<{ type: 'agent' | 'person'; npub: string; label?: string }>;
   errors: AgentDirectFieldError[];
 } {
   if (value === undefined) return { mentions: [], errors: [] };
   if (!Array.isArray(value)) {
     return { mentions: [], errors: [{ path, code: 'invalid', message: `${path} must be an array` }] };
   }
-  const mentions: Array<{ type: 'agent'; npub: string; label?: string }> = [];
+  const mentions: Array<{ type: 'agent' | 'person'; npub: string; label?: string }> = [];
   const errors: AgentDirectFieldError[] = [];
   const seen = new Set<string>();
   value.forEach((item, index) => {
@@ -97,12 +97,16 @@ export function parseAgentMentionInputs(value: unknown, path: string): {
     }
     if ((item.type === 'agent' || item.type === 'person') && npub && !seen.has(npub)) {
       seen.add(npub);
-      // Keep the canonical stored shape as `agent` for wire compatibility.
-      // Identity and dispatch decisions are made from actor_id/npub, not this label.
-      mentions.push({ type: 'agent', npub, ...(label ? { label } : {}) });
+      mentions.push({ type: item.type, npub, ...(label ? { label } : {}) });
     }
   });
   return { mentions, errors };
+}
+
+// Existing chat and record-body contracts retain their legacy wire shape.
+export function parseAgentMentionInputs(value: unknown, path: string) {
+  const parsed = parseActorMentionInputs(value, path);
+  return { ...parsed, mentions: parsed.mentions.map(mention => ({ ...mention, type: 'agent' as const })) };
 }
 
 export function mentionsFromMetadata(metadata: Record<string, unknown> | null | undefined): FlightDeckPgAgentMention[] {
